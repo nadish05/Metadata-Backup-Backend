@@ -8,6 +8,9 @@ const healthRoutes = require('./routes/health.routes');
 const oauthRoutes =
 require('./routes/oauth.routes');
 
+const tokenRoutes =
+    require('./routes/token.routes');
+
 
 
 const app = express();
@@ -17,6 +20,7 @@ app.use(express.json());
 
 app.use('/api', healthRoutes);
 app.use('/api/oauth', oauthRoutes);
+app.use('/api/token', tokenRoutes);
 
 const PORT = process.env.PORT || 3000;
 
