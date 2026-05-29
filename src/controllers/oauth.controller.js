@@ -50,16 +50,11 @@ const idUrl = new URL(response.data.id);
 
 const segments = idUrl.pathname.split('/');
 
-const orgInfo = {
-    orgId: segments[2],
-    userId: segments[3],
-    instanceUrl: response.data.instance_url,
-    refreshToken: response.data.refresh_token
-};
-
 res.json({
     success: true,
-    orgInfo
+    idUrl: response.data.id,
+    pathname: idUrl.pathname,
+    segments: segments
 });
 
     } catch (error) {
