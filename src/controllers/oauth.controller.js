@@ -46,9 +46,13 @@ exports.callbackOAuth = async (req, res) => {
             }
         );
 
-        const orgInfo = {
-    orgId: response.data.id.split('/')[5],
-    userId: response.data.id.split('/')[6],
+const idUrl = new URL(response.data.id);
+
+const segments = idUrl.pathname.split('/');
+
+const orgInfo = {
+    orgId: segments[2],
+    userId: segments[3],
     instanceUrl: response.data.instance_url,
     refreshToken: response.data.refresh_token
 };
