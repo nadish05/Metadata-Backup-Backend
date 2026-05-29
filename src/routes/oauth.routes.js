@@ -7,5 +7,6 @@ const {
 } = require('../controllers/oauth.controller');
 
 router.get('/start', startOAuth);
+router.get('/callback', callbackOAuth);
 
 module.exports = router;
