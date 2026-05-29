@@ -3,7 +3,8 @@ const express = require('express');
 const router = express.Router();
 
 const {
-    startOAuth
+    startOAuth,
+    callbackOAuth
 } = require('../controllers/oauth.controller');
 
 router.get('/start', startOAuth);

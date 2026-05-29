@@ -1,3 +1,5 @@
+const axios = require('axios');
+
 exports.startOAuth = async (req, res) => {
 
     try {
@@ -22,7 +24,7 @@ exports.startOAuth = async (req, res) => {
 
     }
 
-    const axios = require('axios');
+};
 
 exports.callbackOAuth = async (req, res) => {
 
@@ -49,17 +51,13 @@ exports.callbackOAuth = async (req, res) => {
             data: response.data
         });
 
-    } catch(error) {
+    } catch (error) {
 
         res.status(500).json({
             success: false,
-            error:
-                error.response?.data ||
-                error.message
+            error: error.response?.data || error.message
         });
 
     }
-
-};
 
 };
