@@ -2,10 +2,6 @@ exports.startOAuth = async (req, res) => {
 
     try {
 
-        exports.startOAuth = async (req, res) => {
-
-    try {
-
         const authUrl =
             `https://login.salesforce.com/services/oauth2/authorize` +
             `?response_type=code` +
@@ -17,24 +13,7 @@ exports.startOAuth = async (req, res) => {
             authUrl
         });
 
-    } catch(error) {
-
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-
-    }
-
-};
-
-        res.json({
-            success: true,
-            authUrl
-        });
-
-    }
-    catch(error) {
+    } catch (error) {
 
         res.status(500).json({
             success: false,
