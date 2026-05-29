@@ -5,6 +5,11 @@ const cors = require('cors');
 
 const healthRoutes = require('./routes/health.routes');
 
+const oauthRoutes =
+require('./routes/oauth.routes');
+
+app.use('/api/oauth', oauthRoutes);
+
 const app = express();
 
 app.use(cors());
