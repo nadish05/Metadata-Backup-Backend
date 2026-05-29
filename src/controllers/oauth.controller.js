@@ -1,5 +1,10 @@
 const axios = require('axios');
 
+const {
+    setOAuthResult,
+    getOAuthResult
+} = require('../services/oauthStore');
+
 exports.startOAuth = async (req, res) => {
 
     try {
@@ -57,6 +62,8 @@ const orgInfo = {
     refreshToken: response.data.refresh_token
 };
 
+setOAuthResult(orgInfo);
+
 res.json({
     success: true,
     orgInfo
@@ -70,4 +77,11 @@ res.json({
 
     }
 
+};
+
+exports.getLatestOAuth = async (req, res) => {
+    res.json({
+        success: true,
+        data: getOAuthResult()
+    });
 };
