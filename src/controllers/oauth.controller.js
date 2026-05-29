@@ -46,10 +46,17 @@ exports.callbackOAuth = async (req, res) => {
             }
         );
 
-        res.json({
-            success: true,
-            data: response.data
-        });
+        const orgInfo = {
+    orgId: response.data.id.split('/')[5],
+    userId: response.data.id.split('/')[6],
+    instanceUrl: response.data.instance_url,
+    refreshToken: response.data.refresh_token
+};
+
+res.json({
+    success: true,
+    orgInfo
+});
 
     } catch (error) {
 
