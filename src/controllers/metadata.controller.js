@@ -206,12 +206,15 @@ exports.retrieveAllMetadata = async (req, res) => {
 
     try {
 
+        console.log('===== RETRIEVE ALL STARTED =====');
+
         const {
             refreshToken,
             instanceUrl
         } = req.body;
-
+        console.log('Instance URL:', instanceUrl);
         // STEP 1
+        console.log('Generating access token...');
         const tokenResponse =
             await axios.post(
                 'https://login.salesforce.com/services/oauth2/token',
@@ -229,9 +232,13 @@ exports.retrieveAllMetadata = async (req, res) => {
         const accessToken =
             tokenResponse.data.access_token;
 
+        console.log('Access token generated');
+
         // STEP 2
         const workspace =
             `/tmp/workspace-${Date.now()}`;
+
+        console.log('Workspace:', workspace);
 
         fs.mkdirSync(
             workspace,
@@ -239,11 +246,16 @@ exports.retrieveAllMetadata = async (req, res) => {
         );
 
         // STEP 3
+
+        console.log('Generating Salesforce project...');
         await execAsync(
             `cd ${workspace} && sf project generate --name backup-project`
         );
 
+        console.log('Project generated');
+
         // STEP 4
+        console.log('Logging into Salesforce CLI...');
         const loginCommand =
             `export SF_ACCESS_TOKEN="${accessToken}" && ` +
             `sf org login access-token ` +
@@ -253,7 +265,10 @@ exports.retrieveAllMetadata = async (req, res) => {
 
         await execAsync(loginCommand);
 
+        console.log('CLI login successful');
+
         // STEP 5
+        console.log('Retrieving metadata...');
         const metadataTypes =
             [
                 'ApexClass',
@@ -268,6 +283,8 @@ exports.retrieveAllMetadata = async (req, res) => {
                 'Report',
                 'Dashboard'
             ].join(',');
+
+        console.log('Metadata retrieval completed');
 
         const retrieveResult =
             await execAsync(
