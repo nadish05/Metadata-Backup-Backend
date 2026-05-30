@@ -1,5 +1,9 @@
-const { exec } = require('child_process');
+const axios = require('axios');
 const fs = require('fs');
+const { exec } = require('child_process');
+const util = require('util');
+
+const execAsync = util.promisify(exec);
 
 exports.checkSfCli = async (req, res) => {
 
@@ -72,36 +76,95 @@ exports.retrieveMetadata = async (req, res) => {
 
     try {
 
-        const command =
-            'sf project retrieve start -o backuporg -m ApexClass';
+        const {
+            refreshToken,
+            instanceUrl
+        } = req.body;
 
-        exec(
-            command,
-            (error, stdout, stderr) => {
+        /*
+         * STEP 1
+         * Generate Access Token
+         */
 
-                if (error) {
-
-                    return res.status(500).json({
-                        success: false,
-                        error: stderr || error.message
-                    });
-
+        const tokenResponse =
+            await axios.post(
+                'https://login.salesforce.com/services/oauth2/token',
+                null,
+                {
+                    params: {
+                        grant_type: 'refresh_token',
+                        client_id: process.env.SF_CLIENT_ID,
+                        client_secret: process.env.SF_CLIENT_SECRET,
+                        refresh_token: refreshToken
+                    }
                 }
+            );
 
-                res.json({
-                    success: true,
-                    output: stdout,
-                    warning: stderr
-                });
+        const accessToken =
+            tokenResponse.data.access_token;
 
-            }
+        /*
+         * STEP 2
+         * Create Workspace
+         */
+
+        const workspace =
+            `/tmp/workspace-${Date.now()}`;
+
+        fs.mkdirSync(
+            workspace,
+            { recursive: true }
         );
 
-    } catch (err) {
+        /*
+         * STEP 3
+         * Generate Project
+         */
+
+        await execAsync(
+            `cd ${workspace} && sf project generate --name backup-project`
+        );
+
+        /*
+         * STEP 4
+         * CLI Login
+         */
+
+        const loginCommand =
+            `export SF_ACCESS_TOKEN="${accessToken}" && ` +
+            `sf org login access-token ` +
+            `-r ${instanceUrl} ` +
+            `--alias temporg ` +
+            `--no-prompt`;
+
+        await execAsync(loginCommand);
+
+        /*
+         * STEP 5
+         * Retrieve Apex Classes
+         */
+
+        const retrieveResult =
+            await execAsync(
+                `cd ${workspace}/backup-project && ` +
+                `sf project retrieve start ` +
+                `-o temporg ` +
+                `-m ApexClass`
+            );
+
+        res.json({
+            success: true,
+            workspace,
+            output: retrieveResult.stdout
+        });
+
+    } catch (error) {
 
         res.status(500).json({
             success: false,
-            error: err.message
+            error:
+                error.stderr ||
+                error.message
         });
 
     }
