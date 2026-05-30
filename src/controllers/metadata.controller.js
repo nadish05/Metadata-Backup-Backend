@@ -23,37 +23,16 @@ exports.checkSfCli = async (req, res) => {
 
 exports.testSfAuth = async (req, res) => {
 
-    try {
+    exec(
+        'sf org login access-token --help',
+        (error, stdout, stderr) => {
 
-        const { accessToken, instanceUrl } = req.body;
+            res.json({
+                success: true,
+                output: stdout || stderr
+            });
 
-        const tokenFile = '/tmp/access-token.txt';
-
-        fs.writeFileSync(
-            tokenFile,
-            accessToken
-        );
-
-        exec(
-    'sf org login access-token --help',
-    (error, stdout, stderr) => {
-
-        res.json({
-            success: true,
-            output: stdout || stderr
-        });
-
-    }
-);
-
-
-    } catch (err) {
-
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
-
-    }
+        }
+    );
 
 };
