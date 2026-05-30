@@ -68,43 +68,17 @@ exports.testSfAuth = async (req, res) => {
 
 exports.retrieveMetadata = async (req, res) => {
 
-    try {
+    exec(
+        'pwd && ls -la',
+        (error, stdout, stderr) => {
 
-        const command =
-        `cd /app/backup-project &&
-        sf project retrieve start
-        --metadata ApexClass
-        --target-org backuporg`;
+            res.json({
+                success: true,
+                output: stdout,
+                warning: stderr
+            });
 
-        exec(
-            command,
-            (error, stdout, stderr) => {
-
-                if (error) {
-
-                    return res.status(500).json({
-                        success: false,
-                        error: stderr || error.message
-                    });
-
-                }
-
-                res.json({
-                    success: true,
-                    output: stdout,
-                    warning: stderr
-                });
-
-            }
-        );
-
-    } catch (err) {
-
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
-
-    }
+        }
+    );
 
 };
