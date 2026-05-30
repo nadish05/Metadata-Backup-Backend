@@ -71,12 +71,22 @@ exports.retrieveMetadata = async (req, res) => {
     try {
 
         exec(
-            'sf project generate --help',
+            'sf project generate --name backup-project',
             (error, stdout, stderr) => {
+
+                if (error) {
+
+                    return res.status(500).json({
+                        success: false,
+                        error: stderr || error.message
+                    });
+
+                }
 
                 res.json({
                     success: true,
-                    output: stdout || stderr
+                    output: stdout,
+                    warning: stderr
                 });
 
             }
