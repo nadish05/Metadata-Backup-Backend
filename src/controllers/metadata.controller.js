@@ -23,16 +23,45 @@ exports.checkSfCli = async (req, res) => {
 
 exports.testSfAuth = async (req, res) => {
 
-    exec(
-        'sf org login access-token --help',
-        (error, stdout, stderr) => {
+    try {
 
-            res.json({
-                success: true,
-                output: stdout || stderr
-            });
+        const { accessToken, instanceUrl } = req.body;
 
-        }
-    );
+        const command =
+            `export SF_ACCESS_TOKEN="${accessToken}" && ` +
+            `sf org login access-token ` +
+            `--instance-url ${instanceUrl} ` +
+            `--alias backuporg ` +
+            `--no-prompt`;
+
+        exec(
+            command,
+            (error, stdout, stderr) => {
+
+                if (error) {
+
+                    return res.status(500).json({
+                        success: false,
+                        error: stderr || error.message
+                    });
+
+                }
+
+                res.json({
+                    success: true,
+                    output: stdout
+                });
+
+            }
+        );
+
+    } catch (err) {
+
+        res.status(500).json({
+            success: false,
+            error: err.message
+        });
+
+    }
 
 };
