@@ -70,8 +70,14 @@ exports.retrieveMetadata = async (req, res) => {
 
     try {
 
+        const command =
+        `cd /app/backup-project &&
+        sf project retrieve start
+        --metadata ApexClass
+        --target-org backuporg`;
+
         exec(
-            'sf project generate --name backup-project',
+            command,
             (error, stdout, stderr) => {
 
                 if (error) {
