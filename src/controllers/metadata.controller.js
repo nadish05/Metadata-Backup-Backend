@@ -201,3 +201,108 @@ return res.json({
     }
 
 };
+
+exports.retrieveAllMetadata = async (req, res) => {
+
+    try {
+
+        const {
+            refreshToken,
+            instanceUrl
+        } = req.body;
+
+        // STEP 1
+        const tokenResponse =
+            await axios.post(
+                'https://login.salesforce.com/services/oauth2/token',
+                null,
+                {
+                    params: {
+                        grant_type: 'refresh_token',
+                        client_id: process.env.SF_CLIENT_ID,
+                        client_secret: process.env.SF_CLIENT_SECRET,
+                        refresh_token: refreshToken
+                    }
+                }
+            );
+
+        const accessToken =
+            tokenResponse.data.access_token;
+
+        // STEP 2
+        const workspace =
+            `/tmp/workspace-${Date.now()}`;
+
+        fs.mkdirSync(
+            workspace,
+            { recursive: true }
+        );
+
+        // STEP 3
+        await execAsync(
+            `cd ${workspace} && sf project generate --name backup-project`
+        );
+
+        // STEP 4
+        const loginCommand =
+            `export SF_ACCESS_TOKEN="${accessToken}" && ` +
+            `sf org login access-token ` +
+            `-r ${instanceUrl} ` +
+            `--alias temporg ` +
+            `--no-prompt`;
+
+        await execAsync(loginCommand);
+
+        // STEP 5
+        const metadataTypes =
+            [
+                'ApexClass',
+                'ApexTrigger',
+                'LightningComponentBundle',
+                'AuraDefinitionBundle',
+                'CustomObject',
+                'Flow',
+                'PermissionSet',
+                'Profile',
+                'CustomMetadata',
+                'Report',
+                'Dashboard'
+            ].join(',');
+
+        const retrieveResult =
+            await execAsync(
+                `cd ${workspace}/backup-project && ` +
+                `sf project retrieve start ` +
+                `-o temporg ` +
+                `-m "${metadataTypes}" ` +
+                `--json`
+            );
+
+        // STEP 6
+        const filesResult =
+            await execAsync(
+                `find ${workspace}/backup-project -type f | head -200`
+            );
+
+        return res.json({
+            success: true,
+            workspace,
+            files: filesResult.stdout,
+            retrieveOutput: JSON.parse(
+                retrieveResult.stdout
+            )
+        });
+
+    } catch (error) {
+
+        return res.status(500).json({
+            success: false,
+            error:
+                error.stderr ||
+                error.stdout ||
+                error.message
+        });
+
+    }
+
+};

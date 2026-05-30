@@ -5,7 +5,8 @@ const router = express.Router();
 const {
     checkSfCli,
     testSfAuth,
-    retrieveMetadata
+    retrieveMetadata,
+    retrieveAllMetadata
 } = require('../controllers/metadata.controller');
 
 router.get('/check-cli', checkSfCli);
@@ -17,6 +18,11 @@ router.post(
 router.post(
     '/retrieve',
     retrieveMetadata
+);
+
+router.post(
+    '/retrieve-all',
+    retrieveAllMetadata
 );
 
 module.exports = router;
