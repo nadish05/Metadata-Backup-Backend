@@ -66,7 +66,6 @@ exports.testSfAuth = async (req, res) => {
 
 };
 
-const fs = require('fs');
 const path = require('path');
 
 exports.retrieveMetadata = async (req, res) => {
