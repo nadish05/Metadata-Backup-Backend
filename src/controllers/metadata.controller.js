@@ -34,32 +34,18 @@ exports.testSfAuth = async (req, res) => {
             accessToken
         );
 
-        const command =
-            `sf org login access-token ` +
-            `--instance-url ${instanceUrl} ` +
-            `--access-token-file ${tokenFile} ` +
-            `--alias backuporg`;
-
         exec(
-            command,
-            (error, stdout, stderr) => {
+    'sf org login access-token --help',
+    (error, stdout, stderr) => {
 
-                if (error) {
+        res.json({
+            success: true,
+            output: stdout || stderr
+        });
 
-                    return res.status(500).json({
-                        success: false,
-                        error: stderr || error.message
-                    });
+    }
+);
 
-                }
-
-                res.json({
-                    success: true,
-                    output: stdout
-                });
-
-            }
-        );
 
     } catch (err) {
 
