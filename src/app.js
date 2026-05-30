@@ -11,6 +11,11 @@ require('./routes/oauth.routes');
 const tokenRoutes =
     require('./routes/token.routes');
 
+const metadataRoutes =
+    require('./routes/metadata.routes');
+
+
+
 
 
 const app = express();
@@ -21,6 +26,7 @@ app.use(express.json());
 app.use('/api', healthRoutes);
 app.use('/api/oauth', oauthRoutes);
 app.use('/api/token', tokenRoutes);
+app.use('/api/metadata', metadataRoutes);
 
 const PORT = process.env.PORT || 3000;
 
