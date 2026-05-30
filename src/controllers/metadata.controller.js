@@ -70,16 +70,40 @@ const path = require('path');
 
 exports.retrieveMetadata = async (req, res) => {
 
-    exec(
-    'sf project retrieve start --help',
-    (error, stdout, stderr) => {
+    try {
 
-        res.json({
-            success: true,
-            output: stdout || stderr
+        const command =
+            'sf project retrieve start -o backuporg -m ApexClass';
+
+        exec(
+            command,
+            (error, stdout, stderr) => {
+
+                if (error) {
+
+                    return res.status(500).json({
+                        success: false,
+                        error: stderr || error.message
+                    });
+
+                }
+
+                res.json({
+                    success: true,
+                    output: stdout,
+                    warning: stderr
+                });
+
+            }
+        );
+
+    } catch (err) {
+
+        res.status(500).json({
+            success: false,
+            error: err.message
         });
 
     }
-);
 
 };
