@@ -65,3 +65,30 @@ exports.testSfAuth = async (req, res) => {
     }
 
 };
+
+exports.retrieveMetadata = async (req, res) => {
+
+    try {
+
+        exec(
+            'sf project generate --help',
+            (error, stdout, stderr) => {
+
+                res.json({
+                    success: true,
+                    output: stdout || stderr
+                });
+
+            }
+        );
+
+    } catch (err) {
+
+        res.status(500).json({
+            success: false,
+            error: err.message
+        });
+
+    }
+
+};
