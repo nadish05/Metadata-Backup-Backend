@@ -135,32 +135,41 @@ exports.retrieveMetadata = async (req, res) => {
             `sf org login access-token ` +
             `-r ${instanceUrl} ` +
             `--alias temporg ` +
-            `--no-prompt`;
+            `--no-prompt ` +
+            `--json`;
 
-        await execAsync(loginCommand);
+        try {
 
-        /*
-         * STEP 5
-         * Retrieve Apex Classes
-         */
+            const loginResult =
+                await execAsync(loginCommand);
 
-        const retrieveResult =
-            await execAsync(
-                `cd ${workspace}/backup-project && ` +
-                `sf project retrieve start ` +
-                `-o temporg ` +
-                `-m ApexClass`
-            );
+            return res.json({
+                success: true,
+                workspace,
+                instanceUrl,
+                accessTokenLength: accessToken.length,
+                loginOutput: loginResult.stdout,
+                loginError: loginResult.stderr
+            });
 
-        res.json({
-            success: true,
-            workspace,
-            output: retrieveResult.stdout
-        });
+        } catch (loginError) {
+
+            return res.status(500).json({
+                success: false,
+                workspace,
+                instanceUrl,
+                accessTokenLength: accessToken.length,
+                loginError:
+                    loginError.stderr ||
+                    loginError.stdout ||
+                    loginError.message
+            });
+
+        }
 
     } catch (error) {
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             error:
                 error.stderr ||
