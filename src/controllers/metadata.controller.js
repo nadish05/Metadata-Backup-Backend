@@ -157,12 +157,21 @@ const retrieveResult =
         `--json`
     );
 
+/*
+ * Verify files actually exist
+ */
+
+const filesResult =
+    await execAsync(
+        `find ${workspace}/backup-project -type f | head -50`
+    );
+
 return res.json({
     success: true,
     workspace,
+    files: filesResult.stdout,
     loginOutput: JSON.parse(loginResult.stdout),
-    retrieveOutput: retrieveResult.stdout,
-    retrieveError: retrieveResult.stderr
+    retrieveOutput: JSON.parse(retrieveResult.stdout)
 });
 
         } catch (loginError) {
