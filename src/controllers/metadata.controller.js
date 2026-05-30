@@ -70,49 +70,16 @@ const path = require('path');
 
 exports.retrieveMetadata = async (req, res) => {
 
-    try {
+    exec(
+    'sf project retrieve start --help',
+    (error, stdout, stderr) => {
 
-        const workspace =
-            `/tmp/workspace-${Date.now()}`;
-
-        fs.mkdirSync(
-            workspace,
-            { recursive: true }
-        );
-
-        const command =
-            `cd ${workspace} && ` +
-            `sf project generate --name backup-project`;
-
-        exec(
-            command,
-            (error, stdout, stderr) => {
-
-                if (error) {
-
-                    return res.status(500).json({
-                        success: false,
-                        error: stderr || error.message
-                    });
-
-                }
-
-                res.json({
-                    success: true,
-                    workspace,
-                    output: stdout
-                });
-
-            }
-        );
-
-    } catch (err) {
-
-        res.status(500).json({
-            success: false,
-            error: err.message
+        res.json({
+            success: true,
+            output: stdout || stderr
         });
 
     }
+);
 
 };
