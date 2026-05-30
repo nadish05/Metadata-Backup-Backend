@@ -66,19 +66,54 @@ exports.testSfAuth = async (req, res) => {
 
 };
 
+const fs = require('fs');
+const path = require('path');
+
 exports.retrieveMetadata = async (req, res) => {
 
-    exec(
-        'pwd && ls -la',
-        (error, stdout, stderr) => {
+    try {
 
-            res.json({
-                success: true,
-                output: stdout,
-                warning: stderr
-            });
+        const workspace =
+            `/tmp/workspace-${Date.now()}`;
 
-        }
-    );
+        fs.mkdirSync(
+            workspace,
+            { recursive: true }
+        );
+
+        const command =
+            `cd ${workspace} && ` +
+            `sf project generate --name backup-project`;
+
+        exec(
+            command,
+            (error, stdout, stderr) => {
+
+                if (error) {
+
+                    return res.status(500).json({
+                        success: false,
+                        error: stderr || error.message
+                    });
+
+                }
+
+                res.json({
+                    success: true,
+                    workspace,
+                    output: stdout
+                });
+
+            }
+        );
+
+    } catch (err) {
+
+        res.status(500).json({
+            success: false,
+            error: err.message
+        });
+
+    }
 
 };
