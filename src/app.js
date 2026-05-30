@@ -14,6 +14,8 @@ const tokenRoutes =
 const metadataRoutes =
     require('./routes/metadata.routes');
 
+const githubRoutes =
+    require('./routes/github.routes');
 
 
 
@@ -27,6 +29,7 @@ app.use('/api', healthRoutes);
 app.use('/api/oauth', oauthRoutes);
 app.use('/api/token', tokenRoutes);
 app.use('/api/metadata', metadataRoutes);
+app.use('/api/github',githubRoutes);
 
 const PORT = process.env.PORT || 3000;
 
