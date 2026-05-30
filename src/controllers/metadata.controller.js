@@ -143,14 +143,27 @@ exports.retrieveMetadata = async (req, res) => {
             const loginResult =
                 await execAsync(loginCommand);
 
-            return res.json({
-                success: true,
-                workspace,
-                instanceUrl,
-                accessTokenLength: accessToken.length,
-                loginOutput: loginResult.stdout,
-                loginError: loginResult.stderr
-            });
+            /*
+ * STEP 5
+ * Retrieve Apex Classes
+ */
+
+const retrieveResult =
+    await execAsync(
+        `cd ${workspace}/backup-project && ` +
+        `sf project retrieve start ` +
+        `-o temporg ` +
+        `-m ApexClass ` +
+        `--json`
+    );
+
+return res.json({
+    success: true,
+    workspace,
+    loginOutput: JSON.parse(loginResult.stdout),
+    retrieveOutput: retrieveResult.stdout,
+    retrieveError: retrieveResult.stderr
+});
 
         } catch (loginError) {
 
