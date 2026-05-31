@@ -73,7 +73,7 @@ exports.cloneRepo = async (req, res) => {
 
 };
 
-exports.migrateToGithub = async (req, res) => {
+exports.migrateToGitHub = async (req, res) => {
  
     try {
  
