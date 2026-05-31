@@ -319,6 +319,41 @@ await execAsync(
 
 console.log('Commit completed');
 
+const githubToken =
+process.env.GITHUB_TOKEN;
+
+const repoUrl =
+'https://github.com/nadish05/New-salesforce-Backup.git';
+
+const authenticatedRepoUrl =
+repoUrl.replace(
+  'https://',
+  `https://${githubToken}@`
+);
+
+console.log('Adding GitHub remote...');
+
+await execAsync(
+  `cd ${workspace}/backup-project && ` +
+  `git branch -M main`
+);
+
+await execAsync(
+  `cd ${workspace}/backup-project && ` +
+  `git remote add origin ${authenticatedRepoUrl}`
+);
+
+console.log('Pushing to GitHub...');
+
+await execAsync(
+  `cd ${workspace}/backup-project && ` +
+  `git push origin main --force`
+);
+
+console.log('GitHub push completed');
+
+
+
 // STEP 8 - FILE COUNT
 
 const fileCount =
