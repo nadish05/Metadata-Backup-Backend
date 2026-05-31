@@ -5,6 +5,89 @@ const util = require('util');
 
 const execAsync = util.promisify(exec);
 
+async function retrieveMetadataInternal(
+    refreshToken,
+    instanceUrl
+) {
+ 
+    /*
+     * STEP 1
+     * Generate Access Token
+     */
+ 
+    const tokenResponse =
+        await axios.post(
+            'https://login.salesforce.com/services/oauth2/token',
+            null,
+            {
+                params: {
+                    grant_type: 'refresh_token',
+                    client_id: process.env.SF_CLIENT_ID,
+                    client_secret: process.env.SF_CLIENT_SECRET,
+                    refresh_token: refreshToken
+                }
+            }
+        );
+ 
+    const accessToken =
+        tokenResponse.data.access_token;
+ 
+    /*
+     * STEP 2
+     * Create Workspace
+     */
+ 
+    const workspace =
+        `/tmp/workspace-${Date.now()}`;
+ 
+    fs.mkdirSync(
+        workspace,
+        { recursive: true }
+    );
+ 
+    /*
+     * STEP 3
+     * Generate Project
+     */
+ 
+    await execAsync(
+        `cd ${workspace} && sf project generate --name backup-project`
+    );
+ 
+    /*
+     * STEP 4
+     * CLI Login
+     */
+ 
+    const loginCommand =
+        `export SF_ACCESS_TOKEN="${accessToken}" && ` +
+        `sf org login access-token ` +
+        `-r ${instanceUrl} ` +
+        `--alias temporg ` +
+        `--no-prompt`;
+ 
+    await execAsync(loginCommand);
+ 
+    /*
+     * STEP 5
+     * Retrieve Metadata
+     */
+ 
+    await execAsync(
+        `cd ${workspace}/backup-project && ` +
+        `sf project retrieve start ` +
+        `-o temporg ` +
+        `-m ApexClass`
+    );
+ 
+    return {
+        workspace,
+        accessToken
+    };
+ 
+}
+ 
+
 exports.checkSfCli = async (req, res) => {
 
     exec('sf --version', (error, stdout, stderr) => {
