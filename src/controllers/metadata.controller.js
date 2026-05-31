@@ -256,18 +256,28 @@ exports.retrieveAllMetadata = async (req, res) => {
         console.log('CLI login successful');
 
 // STEP 5
-console.log('Generating manifest...');
+// STEP 5
+console.log('Retrieving metadata...');
  
-await execAsync(
-  `cd ${workspace}/backup-project && ` +
-  `sf org generate manifest ` +
-  `--from-org temporg ` +
-  `--output-dir manifest`
-);
- 
-console.log('Manifest generated');
- 
-console.log('Retrieving all metadata from manifest...');
+const metadataTypes = [
+  'ApexClass',
+  'ApexTrigger',
+  'LightningComponentBundle',
+  'AuraDefinitionBundle',
+  'CustomObject',
+  'Flow',
+  'PermissionSet',
+  'Profile',
+  'CustomMetadata',
+  'Report',
+  'Dashboard',
+  'Layout',
+  'CustomApplication',
+  'StaticResource',
+  'EmailTemplate',
+  'RemoteSiteSetting',
+  'NamedCredential'
+].join(',');
  
 console.time('retrieve');
  
@@ -276,13 +286,14 @@ await execAsync(
   `cd ${workspace}/backup-project && ` +
   `sf project retrieve start ` +
   `-o temporg ` +
-  `--manifest manifest/package.xml ` +
+  `-m "${metadataTypes}" ` +
   `--json`
 );
  
 console.timeEnd('retrieve');
  
 console.log('Metadata retrieval completed');
+ 
  
 // STEP 6
  
