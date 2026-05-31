@@ -284,6 +284,10 @@ await execAsync(
 console.timeEnd('retrieve');
  
 console.log('Metadata retrieval completed');
+
+console.log(
+  filesResult.stdout
+);
  
  
 // STEP 6
