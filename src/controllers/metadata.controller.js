@@ -262,23 +262,14 @@ console.log('Retrieving metadata...');
 const metadataTypes = [
   'ApexClass',
   'ApexTrigger',
-  'LightningComponentBundle',
-  'AuraDefinitionBundle',
-  'CustomObject',
-  'Flow',
-  'PermissionSet',
-  'Profile',
-  'CustomMetadata',
-  'Report',
-  'Dashboard',
-  'Layout',
-  'CustomApplication',
-  'StaticResource',
-  'EmailTemplate',
-  'RemoteSiteSetting',
-  'NamedCredential'
-].join(',');
- 
+  'CustomObject'
+];
+
+const metadataArgs =
+metadataTypes
+.map(type => `-m ${type}`)
+.join(' ');
+
 console.time('retrieve');
  
 const retrieveResult =
@@ -286,10 +277,10 @@ await execAsync(
   `cd ${workspace}/backup-project && ` +
   `sf project retrieve start ` +
   `-o temporg ` +
-  `-m "${metadataTypes}" ` +
+  `${metadataArgs} ` +
   `--json`
 );
- 
+
 console.timeEnd('retrieve');
  
 console.log('Metadata retrieval completed');
