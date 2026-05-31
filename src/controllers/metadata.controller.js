@@ -256,32 +256,22 @@ exports.retrieveAllMetadata = async (req, res) => {
         console.log('CLI login successful');
 
         // STEP 5
-        console.log('Retrieving metadata...');
-        const metadataTypes =
-            [
-                'ApexClass',
-                'ApexTrigger',
-                'LightningComponentBundle',
-                'AuraDefinitionBundle',
-                'CustomObject',
-                'Flow',
-                'PermissionSet',
-                'Profile',
-                'CustomMetadata',
-                'Report',
-                'Dashboard'
-            ].join(',');
+console.log('Retrieving metadata...');
+ 
+const metadataTypes ='ApexClass'
 
-        console.log('Metadata retrieval completed');
-
-        const retrieveResult =
-            await execAsync(
-                `cd ${workspace}/backup-project && ` +
-                `sf project retrieve start ` +
-                `-o temporg ` +
-                `-m "${metadataTypes}" ` +
-                `--json`
-            );
+ 
+console.log('Metadata retrieval completed');
+ 
+const retrieveResult =
+await execAsync(
+ `cd ${workspace}/backup-project && ` +
+ `sf project retrieve start ` +
+ `-o temporg ` +
+ `-m "${metadataTypes}" ` +
+ `--json`
+);
+ 
 
         // STEP 6
         const filesResult =
