@@ -97,33 +97,35 @@ exports.migrateToGitHub = async (req, res) => {
          */
 
         console.log('Retrieving metadata...');
-
-        try {
-
-        const metadataResult =
-            await retrieveMetadataInternal(
-                refreshToken,
-                instanceUrl
-            );
-
-        const workspace =
-            metadataResult.workspace;
-
-        const projectPath =
-            `${workspace}/backup-project`;
-
-        console.log('Metadata retrieved');
-        } catch (err) {
-
-            console.error(
-                'METADATA RETRIEVAL ERROR:', 
-                err
-            );
-        
-
-            throw err;
-
-        }
+ 
+let projectPath;
+ 
+try {
+ 
+ const metadataResult =
+ await retrieveMetadataInternal(
+ refreshToken,
+ instanceUrl
+ );
+ 
+ const workspace =
+ metadataResult.workspace;
+ 
+ projectPath =
+ `${workspace}/backup-project`;
+ 
+ console.log('Metadata retrieved');
+ 
+} catch (err) {
+ 
+ console.error(
+ 'METADATA RETRIEVAL ERROR:',
+ err
+ );
+ 
+ throw err;
+}
+ 
 
         /*
          * STEP 2
