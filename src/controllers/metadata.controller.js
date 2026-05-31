@@ -285,9 +285,7 @@ console.timeEnd('retrieve');
  
 console.log('Metadata retrieval completed');
 
-console.log(
-  filesResult.stdout
-);
+
  
  
 // STEP 6
@@ -306,6 +304,8 @@ const filesResult =
 await execAsync(
   `find ${workspace}/backup-project -type f | head -200`
 );
+
+console.log(filesResult.stdout);
  
 
         return res.json({
