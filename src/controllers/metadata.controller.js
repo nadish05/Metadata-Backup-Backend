@@ -255,29 +255,52 @@ exports.retrieveAllMetadata = async (req, res) => {
 
         console.log('CLI login successful');
 
-        // STEP 5
-console.log('Retrieving metadata...');
+// STEP 5
+console.log('Generating manifest...');
  
-const metadataTypes ='ApexClass'
-
+await execAsync(
+  `cd ${workspace}/backup-project && ` +
+  `sf org generate manifest ` +
+  `--from-org temporg ` +
+  `--output-dir manifest`
+);
  
-console.log('Metadata retrieval completed');
+console.log('Manifest generated');
+ 
+console.log('Retrieving all metadata from manifest...');
+ 
+console.time('retrieve');
  
 const retrieveResult =
 await execAsync(
- `cd ${workspace}/backup-project && ` +
- `sf project retrieve start ` +
- `-o temporg ` +
- `-m "${metadataTypes}" ` +
- `--json`
+  `cd ${workspace}/backup-project && ` +
+  `sf project retrieve start ` +
+  `-o temporg ` +
+  `--manifest manifest/package.xml ` +
+  `--json`
 );
  
-
-        // STEP 6
-        const filesResult =
-            await execAsync(
-                `find ${workspace}/backup-project -type f | head -200`
-            );
+console.timeEnd('retrieve');
+ 
+console.log('Metadata retrieval completed');
+ 
+// STEP 6
+ 
+const fileCount =
+await execAsync(
+  `find ${workspace}/backup-project -type f | wc -l`
+);
+ 
+console.log(
+  'Total Files Retrieved:',
+  fileCount.stdout
+);
+ 
+const filesResult =
+await execAsync(
+  `find ${workspace}/backup-project -type f | head -200`
+);
+ 
 
         return res.json({
             success: true,
