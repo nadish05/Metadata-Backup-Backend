@@ -1,5 +1,9 @@
 const { exec } = require('child_process');
 
+const {
+    retrieveMetadataInternal
+} = require('./metadata.controller');
+
 exports.checkGit = async (req, res) => {
 
     exec(
@@ -76,38 +80,115 @@ exports.cloneRepo = async (req, res) => {
 };
 
 exports.migrateToGitHub = async (req, res) => {
- 
+
     try {
- 
+
         const {
             refreshToken,
             instanceUrl,
             repoUrl
         } = req.body;
- 
+
+        console.log('===== MIGRATION STARTED =====');
+
+        /*
+         * STEP 1
+         * Retrieve Metadata
+         */
+
+        console.log('Retrieving metadata...');
+
+        const metadataResult =
+            await retrieveMetadataInternal(
+                refreshToken,
+                instanceUrl
+            );
+
+        const workspace =
+            metadataResult.workspace;
+
+        const projectPath =
+            `${workspace}/backup-project`;
+
+        console.log('Metadata retrieved');
+
+        /*
+         * STEP 2
+         * Initialize Git
+         */
+
+        console.log('Initializing Git...');
+
+        await execAsync(
+            `cd ${projectPath} && git init`
+        );
+
+        /*
+         * STEP 3
+         * Add Files
+         */
+
+        console.log('Adding files...');
+
+        await execAsync(
+            `cd ${projectPath} && git add .`
+        );
+
+        /*
+         * STEP 4
+         * Commit
+         */
+
+        console.log('Creating commit...');
+
+        await execAsync(
+            `cd ${projectPath} && git config user.email "backup@system.com" && ` +
+            `git config user.name "Salesforce Backup Bot" && ` +
+            `git commit -m "Salesforce Metadata Backup"`
+        );
+
+        /*
+         * STEP 5
+         * Push To GitHub
+         */
+
+        console.log('Pushing to GitHub...');
+
+        const githubToken =
+            process.env.GITHUB_TOKEN;
+
+        const authenticatedUrl =
+            repoUrl.replace(
+                'https://',
+                `https://${githubToken}@`
+            );
+
+        await execAsync(
+            `cd ${projectPath} && ` +
+            `git remote add origin ${authenticatedUrl} && ` +
+            `git branch -M main && ` +
+            `git push -u origin main --force`
+        );
+
+        console.log('Push completed');
+
         return res.json({
             success: true,
-            received: {
-                refreshTokenExists:
-                    !!refreshToken,
- 
-                instanceUrl,
- 
-                repoUrl,
- 
-                githubTokenExists:
-                    !!process.env.GITHUB_TOKEN
-            }
+            message:
+                'Metadata migrated successfully'
         });
- 
+
     } catch (error) {
- 
+
         return res.status(500).json({
             success: false,
-            error: error.message
+            error:
+                error.stderr ||
+                error.stdout ||
+                error.message
         });
- 
+
     }
- 
+
 };
  

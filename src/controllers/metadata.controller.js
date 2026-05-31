@@ -5,10 +5,10 @@ const util = require('util');
 
 const execAsync = util.promisify(exec);
 
-async function retrieveMetadataInternal(
+exports.retrieveMetadataInternal = async (
     refreshToken,
     instanceUrl
-) {
+) => {
  
     /*
      * STEP 1
