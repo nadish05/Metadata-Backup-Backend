@@ -285,21 +285,52 @@ console.timeEnd('retrieve');
  
 console.log('Metadata retrieval completed');
 
+// STEP 6 - GIT INIT
 
- 
- 
-// STEP 6
- 
+console.log('Initializing Git...');
+
+await execAsync(
+  `cd ${workspace}/backup-project && git init`
+);
+
+await execAsync(
+  `cd ${workspace}/backup-project && git config user.email "backup@system.com"`
+);
+
+await execAsync(
+  `cd ${workspace}/backup-project && git config user.name "Metadata Backup"`
+);
+
+console.log('Git initialized');
+
+// STEP 7 - COMMIT
+
+console.log('Adding files...');
+
+await execAsync(
+  `cd ${workspace}/backup-project && git add .`
+);
+
+console.log('Creating commit...');
+
+await execAsync(
+  `cd ${workspace}/backup-project && git commit -m "Metadata Backup"`
+);
+
+console.log('Commit completed');
+
+// STEP 8 - FILE COUNT
+
 const fileCount =
 await execAsync(
   `find ${workspace}/backup-project -type f | wc -l`
 );
- 
+
 console.log(
   'Total Files Retrieved:',
   fileCount.stdout
 );
- 
+
 const filesResult =
 await execAsync(
   `find ${workspace}/backup-project -type f | head -200`
