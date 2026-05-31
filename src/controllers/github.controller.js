@@ -72,3 +72,41 @@ exports.cloneRepo = async (req, res) => {
     }
 
 };
+
+exports.migrateToGithub = async (req, res) => {
+ 
+    try {
+ 
+        const {
+            refreshToken,
+            instanceUrl,
+            repoUrl,
+            githubToken
+        } = req.body;
+ 
+        return res.json({
+            success: true,
+            received: {
+                refreshTokenExists:
+                    !!refreshToken,
+ 
+                instanceUrl,
+ 
+                repoUrl,
+ 
+                githubTokenExists:
+                    !!githubToken
+            }
+        });
+ 
+    } catch (error) {
+ 
+        return res.status(500).json({
+            success: false,
+            error: error.message
+        });
+ 
+    }
+ 
+};
+ 

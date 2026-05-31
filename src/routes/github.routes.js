@@ -4,7 +4,8 @@ const router = express.Router();
 
 const {
     checkGit,
-    cloneRepo
+    cloneRepo,
+    migrateToGitHub
 } = require('../controllers/github.controller');
 
 router.get(
@@ -15,6 +16,11 @@ router.get(
 router.post(
     '/clone',
     cloneRepo
+);
+
+router.post(
+    '/migrate',
+    migrateToGitHub
 );
 
 module.exports = router;
