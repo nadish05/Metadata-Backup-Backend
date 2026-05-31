@@ -10,12 +10,11 @@ exports.retrieveMetadataInternal = async (
     instanceUrl
 ) => {
  
-    /*
-     * STEP 1
-     * Generate Access Token
-     */
+    try {
  
-    const tokenResponse =
+        console.log('STEP 1 - Generating token');
+ 
+        const tokenResponse =
         await axios.post(
             'https://login.salesforce.com/services/oauth2/token',
             null,
@@ -29,63 +28,71 @@ exports.retrieveMetadataInternal = async (
             }
         );
  
-    const accessToken =
+        console.log('STEP 1 COMPLETE');
+ 
+        const accessToken =
         tokenResponse.data.access_token;
  
-    /*
-     * STEP 2
-     * Create Workspace
-     */
+        console.log('STEP 2 - Creating workspace');
  
-    const workspace =
+        const workspace =
         `/tmp/workspace-${Date.now()}`;
  
-    fs.mkdirSync(
-        workspace,
-        { recursive: true }
-    );
+        fs.mkdirSync(
+            workspace,
+            { recursive: true }
+        );
  
-    /*
-     * STEP 3
-     * Generate Project
-     */
+        console.log('STEP 2 COMPLETE');
  
-    await execAsync(
-        `cd ${workspace} && sf project generate --name backup-project`
-    );
+        console.log('STEP 3 - Generating project');
  
-    /*
-     * STEP 4
-     * CLI Login
-     */
+        await execAsync(
+            `cd ${workspace} && sf project generate --name backup-project`
+        );
  
-    const loginCommand =
+        console.log('STEP 3 COMPLETE');
+ 
+        console.log('STEP 4 - CLI Login');
+ 
+        const loginCommand =
         `export SF_ACCESS_TOKEN="${accessToken}" && ` +
         `sf org login access-token ` +
         `-r ${instanceUrl} ` +
         `--alias temporg ` +
         `--no-prompt`;
  
-    await execAsync(loginCommand);
+        await execAsync(loginCommand);
  
-    /*
-     * STEP 5
-     * Retrieve Metadata
-     */
+        console.log('STEP 4 COMPLETE');
  
-    await execAsync(
-        `cd ${workspace}/backup-project && ` +
-        `sf project retrieve start ` +
-        `-o temporg ` +
-        `-m ApexClass`
-    );
+        console.log('STEP 5 - Retrieving ApexClass');
  
-    return {
-        workspace,
-        accessToken
-    };
+        await execAsync(
+            `cd ${workspace}/backup-project && ` +
+            `sf project retrieve start ` +
+            `-o temporg ` +
+            `-m ApexClass`
+        );
  
-}
+        console.log('STEP 5 COMPLETE');
+ 
+        return {
+            workspace,
+            accessToken
+        };
+ 
+    } catch (error) {
+ 
+        console.error(
+            'retrieveMetadataInternal FAILED:',
+            error
+        );
+ 
+        throw error;
+    }
+};
+ 
  
 
 exports.checkSfCli = async (req, res) => {
