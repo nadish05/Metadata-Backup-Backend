@@ -34,9 +34,11 @@ exports.cloneRepo = async (req, res) => {
     try {
 
         const {
-            repoUrl,
-            githubToken
+            repoUrl
         } = req.body;
+
+        const githubToken =
+            process.env.GITHUB_TOKEN;
 
         const repoPath =
             `/tmp/repo-${Date.now()}`;
@@ -44,7 +46,7 @@ exports.cloneRepo = async (req, res) => {
         const authenticatedUrl =
             repoUrl.replace(
                 'https://',
-                `https://${githubToken}@`
+                `https://${process.env.GITHUB_TOKEN}@`
             );
 
         const cloneCommand =
@@ -80,8 +82,7 @@ exports.migrateToGitHub = async (req, res) => {
         const {
             refreshToken,
             instanceUrl,
-            repoUrl,
-            githubToken
+            repoUrl
         } = req.body;
  
         return res.json({
@@ -95,7 +96,7 @@ exports.migrateToGitHub = async (req, res) => {
                 repoUrl,
  
                 githubTokenExists:
-                    !!githubToken
+                    !!process.env.GITHUB_TOKEN
             }
         });
  
