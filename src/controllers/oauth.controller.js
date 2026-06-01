@@ -22,7 +22,8 @@ exports.startOAuth = async (req, res) => {
                 `?response_type=code` +
                 `&client_id=${process.env.SF_CLIENT_ID}` +
                 `&redirect_uri=${encodeURIComponent(process.env.SF_CALLBACK_URL)}` +
-                `&state=${environment}`;
+                `&state=${environment}` +
+                `&prompt=login`;
 
         res.json({
             success: true,
