@@ -18,10 +18,11 @@ exports.startOAuth = async (req, res) => {
                 : 'https://login.salesforce.com';
 
         const authUrl =
-            `${loginUrl}/services/oauth2/authorize` +
-            `?response_type=code` +
-            `&client_id=${process.env.SF_CLIENT_ID}` +
-            `&redirect_uri=${encodeURIComponent(process.env.SF_CALLBACK_URL)}`;
+                `${loginUrl}/services/oauth2/authorize` +
+                `?response_type=code` +
+                `&client_id=${process.env.SF_CLIENT_ID}` +
+                `&redirect_uri=${encodeURIComponent(process.env.SF_CALLBACK_URL)}` +
+                `&state=${environment}`;
 
         res.json({
             success: true,
@@ -44,9 +45,16 @@ exports.callbackOAuth = async (req, res) => {
     try {
 
         const code = req.query.code;
+        const environment =
+            req.query.state || 'Production';
+
+        const tokenUrl =
+            environment === 'Sandbox'
+                ? 'https://test.salesforce.com/services/oauth2/token'
+                : 'https://login.salesforce.com/services/oauth2/token';
 
         const response = await axios.post(
-            'https://login.salesforce.com/services/oauth2/token',
+            tokenUrl,
             null,
             {
                 params: {
