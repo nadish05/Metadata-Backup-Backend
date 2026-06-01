@@ -68,12 +68,45 @@ exports.retrieveMetadataInternal = async (
  
         console.log('STEP 5 - Retrieving ApexClass');
  
-        await execAsync(
-            `cd ${workspace}/backup-project && ` +
-            `sf project retrieve start ` +
-            `-o temporg ` +
-            `-m ApexClass`
-        );
+        const metadataTypes = [
+ 'ApexClass',
+ 'ApexTrigger',
+ 'LightningComponentBundle',
+ 'AuraDefinitionBundle',
+ 'CustomObject',
+ 'Flow',
+ 'PermissionSet',
+ 'Profile',
+ 'CustomMetadata',
+ 'Report',
+ 'Dashboard',
+ 'Layout',
+ 'CustomApplication',
+ 'StaticResource',
+ 'EmailTemplate',
+ 'RemoteSiteSetting',
+ 'NamedCredential'
+];
+
+const metadataArgs =
+ metadataTypes
+ .map(type => `-m ${type}`)
+ .join(' ');
+
+console.log(
+ 'Retrieving Full Metadata...'
+);
+
+await execAsync(
+ `cd ${workspace}/backup-project && ` +
+ `sf project retrieve start ` +
+ `-o temporg ` +
+ `${metadataArgs}`
+);
+
+console.log(
+ 'Full Metadata Retrieval Complete'
+);
  
         console.log('STEP 5 COMPLETE');
  
