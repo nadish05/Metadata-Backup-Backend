@@ -81,10 +81,10 @@ const orgInfo = {
 
 setOAuthResult(orgInfo);
 
-res.json({
-    success: true,
-    orgInfo
-});
+res.redirect(
+    process.env.SF_CALLBACK_SUCCESS_URL
+);
+
     } catch (error) {
 
         res.status(500).json({
