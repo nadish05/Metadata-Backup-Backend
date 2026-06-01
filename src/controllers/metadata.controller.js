@@ -68,24 +68,25 @@ exports.retrieveMetadataInternal = async (
  
         console.log('STEP 5 - Retrieving ApexClass');
  
-        const metadataTypes = [
+const metadataTypes = [
  'ApexClass',
  'ApexTrigger',
  'LightningComponentBundle',
  'AuraDefinitionBundle',
+ 'FlexiPage',
+ 'ApexPage',
+ 'ApexComponent',
  'CustomObject',
+ 'CustomField',
+ 'ValidationRule',
+ 'RecordType',
  'Flow',
+ 'Workflow',
+ 'AssignmentRules',
+ 'EscalationRules',
  'PermissionSet',
- 'Profile',
- 'CustomMetadata',
- 'Report',
- 'Dashboard',
- 'Layout',
- 'CustomApplication',
- 'StaticResource',
- 'EmailTemplate',
- 'RemoteSiteSetting',
- 'NamedCredential'
+ 'CustomPermission',
+ 'Profile'
 ];
 
 const metadataArgs =
