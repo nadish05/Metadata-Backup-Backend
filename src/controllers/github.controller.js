@@ -79,6 +79,82 @@ exports.cloneRepo = async (req, res) => {
 
 };
 
+async function runMigration(
+    refreshToken,
+    instanceUrl,
+    repoUrl
+) {
+
+    try{
+
+    console.log('===== MIGRATION STARTED =====');
+
+    console.log('Retrieving metadata...');
+
+    let projectPath;
+
+    const metadataResult =
+    await retrieveMetadataInternal(
+        refreshToken,
+        instanceUrl
+    );
+
+    const workspace =
+    metadataResult.workspace;
+
+    projectPath =
+    `${workspace}/backup-project`;
+
+    console.log('Metadata retrieved');
+
+    console.log('Initializing Git...');
+
+    await execAsync(
+        `cd ${projectPath} && git init`
+    );
+
+    console.log('Adding files...');
+
+    await execAsync(
+        `cd ${projectPath} && git add .`
+    );
+
+    console.log('Creating commit...');
+
+    await execAsync(
+        `cd ${projectPath} && git config user.email "backup@system.com" && ` +
+        `git config user.name "Salesforce Backup Bot" && ` +
+        `git commit -m "Salesforce Metadata Backup"`
+    );
+
+    console.log('Pushing to GitHub...');
+
+    const githubToken =
+    process.env.GITHUB_TOKEN;
+
+    const authenticatedUrl =
+    repoUrl.replace(
+        'https://',
+        `https://${githubToken}@`
+    );
+
+    await execAsync(
+        `cd ${projectPath} && ` +
+        `git remote add origin ${authenticatedUrl} && ` +
+        `git branch -M main && ` +
+        `git push -u origin main --force`
+    );
+
+    console.log('Push completed');
+} catch (error) {
+    console.error(
+            'BACKGROUND MIGRATION ERROR:',
+            error
+        );
+}
+
+}
+
 exports.migrateToGitHub = async (req, res) => {
 
     try {
@@ -89,109 +165,23 @@ exports.migrateToGitHub = async (req, res) => {
             repoUrl
         } = req.body;
 
-        console.log('===== MIGRATION STARTED =====');
-
-        /*
-         * STEP 1
-         * Retrieve Metadata
-         */
-
-        console.log('Retrieving metadata...');
- 
-let projectPath;
- 
-try {
- 
- const metadataResult =
- await retrieveMetadataInternal(
- refreshToken,
- instanceUrl
- );
- 
- const workspace =
- metadataResult.workspace;
- 
- projectPath =
- `${workspace}/backup-project`;
- 
- console.log('Metadata retrieved');
- 
-} catch (err) {
- 
- console.error(
- 'METADATA RETRIEVAL ERROR:',
- err
- );
- 
- throw err;
-}
- 
-
-        /*
-         * STEP 2
-         * Initialize Git
-         */
-
-        console.log('Initializing Git...');
-
-        await execAsync(
-            `cd ${projectPath} && git init`
-        );
-
-        /*
-         * STEP 3
-         * Add Files
-         */
-
-        console.log('Adding files...');
-
-        await execAsync(
-            `cd ${projectPath} && git add .`
-        );
-
-        /*
-         * STEP 4
-         * Commit
-         */
-
-        console.log('Creating commit...');
-
-        await execAsync(
-            `cd ${projectPath} && git config user.email "backup@system.com" && ` +
-            `git config user.name "Salesforce Backup Bot" && ` +
-            `git commit -m "Salesforce Metadata Backup"`
-        );
-
-        /*
-         * STEP 5
-         * Push To GitHub
-         */
-
-        console.log('Pushing to GitHub...');
-
-        const githubToken =
-            process.env.GITHUB_TOKEN;
-
-        const authenticatedUrl =
-            repoUrl.replace(
-                'https://',
-                `https://${githubToken}@`
+        runMigration(
+            refreshToken,
+            instanceUrl,
+            repoUrl
+        ).catch(error => {
+            console.error(
+                'RUN MIGRATION FAILED:',
+                error
             );
-
-        await execAsync(
-            `cd ${projectPath} && ` +
-            `git remote add origin ${authenticatedUrl} && ` +
-            `git branch -M main && ` +
-            `git push -u origin main --force`
-        );
-
-        console.log('Push completed');
+        });
 
         return res.json({
             success: true,
-            message:
-                'Metadata migrated successfully'
+            message: 'Migration Started'
         });
+
+        
 
     } catch (error) {
 
