@@ -178,7 +178,7 @@ exports.migrateToGitHub = async (req, res) => {
 
         return res.json({
             success: true,
-            message: 'Migration Started'
+            message: 'Migration Started Successfully. Please check GitHub after a few minutes.'
         });
 
         
