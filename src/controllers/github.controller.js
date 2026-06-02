@@ -82,7 +82,8 @@ exports.cloneRepo = async (req, res) => {
 async function runMigration(
     refreshToken,
     instanceUrl,
-    repoUrl
+    repoUrl,
+    branchName
 ) {
 
     try{
@@ -141,8 +142,8 @@ async function runMigration(
     await execAsync(
         `cd ${projectPath} && ` +
         `git remote add origin ${authenticatedUrl} && ` +
-        `git branch -M main && ` +
-        `git push -u origin main --force`
+        `git checkout -B ${branchName} && ` +
+        `git push -u origin ${branchName} --force`
     );
 
     console.log('Push completed');
@@ -162,13 +163,15 @@ exports.migrateToGitHub = async (req, res) => {
         const {
             refreshToken,
             instanceUrl,
-            repoUrl
+            repoUrl,
+            branchName
         } = req.body;
 
         runMigration(
             refreshToken,
             instanceUrl,
-            repoUrl
+            repoUrl,
+            branchName
         ).catch(error => {
             console.error(
                 'RUN MIGRATION FAILED:',
