@@ -86,6 +86,9 @@ async function runMigration(
     branchName
 ) {
 
+    const targetBranch =
+        branchName || 'main';
+
     try{
 
     console.log('===== MIGRATION STARTED =====');
@@ -142,8 +145,8 @@ async function runMigration(
     await execAsync(
         `cd ${projectPath} && ` +
         `git remote add origin ${authenticatedUrl} && ` +
-        `git checkout -B ${branchName} && ` +
-        `git push -u origin ${branchName} --force`
+        `git checkout -B ${targetBranch} && ` +
+        `git push -u origin ${targetBranch} --force`
     );
 
     console.log('Push completed');
@@ -166,6 +169,8 @@ exports.migrateToGitHub = async (req, res) => {
             repoUrl,
             branchName
         } = req.body;
+
+        
 
         runMigration(
             refreshToken,
