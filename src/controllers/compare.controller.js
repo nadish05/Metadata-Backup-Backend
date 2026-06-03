@@ -31,12 +31,27 @@ exports.getDifferentFiles = async (req, res) => {
             `git clone ${authenticatedUrl} ${repoPath}`
         );
 
-        console.log('Comparing branches...');
+        
 
-        const diffResult =
-            await execAsync(
-                `cd ${repoPath} && git diff --name-only ${sourceBranch} ${destinationBranch}`
-            );
+        console.log('Fetching branches...');
+
+await execAsync(
+    `cd ${repoPath} && git fetch --all`
+);
+
+const branches =
+    await execAsync(
+        `cd ${repoPath} && git branch -a`
+    );
+
+console.log(branches.stdout);
+
+console.log('Comparing branches...');
+
+const diffResult =
+    await execAsync(
+        `cd ${repoPath} && git diff --name-only origin/${sourceBranch} origin/${destinationBranch}`
+    );
 
         const files =
             diffResult.stdout
@@ -45,6 +60,9 @@ exports.getDifferentFiles = async (req, res) => {
 
         return res.json({
             success: true,
+            sourceBranch,
+            destinationBranch,
+            totalFiles: files.length,
             files
         });
 
