@@ -102,7 +102,11 @@ await execAsync(
  `cd ${workspace}/backup-project && ` +
  `sf project retrieve start ` +
  `-o temporg ` +
- `${metadataArgs}`
+ `${metadataArgs} ` +
+ `--json`,
+ {
+     maxBuffer: 50 * 1024 * 1024
+ }
 );
 
 console.log(
