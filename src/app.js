@@ -17,6 +17,9 @@ const metadataRoutes =
 const githubRoutes =
     require('./routes/github.routes');
 
+const compareRoutes =
+    require('./routes/compare.routes');
+
 
 
 
@@ -30,6 +33,7 @@ app.use('/api/oauth', oauthRoutes);
 app.use('/api/token', tokenRoutes);
 app.use('/api/metadata', metadataRoutes);
 app.use('/api/github',githubRoutes);
+app.use('/api/compare',compareRoutes);
 
 const PORT = process.env.PORT || 3000;
 
