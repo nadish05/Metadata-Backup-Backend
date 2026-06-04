@@ -119,11 +119,68 @@ exports.getDifferenceReport = async (req, res) => {
                 `cd ${repoPath} && git diff origin/${sourceBranch} origin/${destinationBranch} -- "${filePath}"`
             );
 
-        return res.json({
-            success: true,
-            filePath,
-            diff: diffResult.stdout
-        });
+        const diffText =
+    diffResult.stdout;
+
+let changeType =
+    'MODIFIED';
+
+if (
+    diffText.includes(
+        'new file mode'
+    )
+) {
+
+    changeType =
+        'NEW';
+
+}
+else if (
+    diffText.includes(
+        'deleted file mode'
+    )
+) {
+
+    changeType =
+        'DELETED';
+
+}
+
+const addedLines =
+    diffText
+        .split('\n')
+        .filter(line =>
+            line.startsWith('+')
+            &&
+            !line.startsWith('+++')
+        )
+        .length;
+
+const removedLines =
+    diffText
+        .split('\n')
+        .filter(line =>
+            line.startsWith('-')
+            &&
+            !line.startsWith('---')
+        )
+        .length;
+
+return res.json({
+
+    success: true,
+
+    filePath,
+
+    changeType,
+
+    addedLines,
+
+    removedLines,
+
+    diff: diffText
+
+});
 
     } catch (error) {
 
