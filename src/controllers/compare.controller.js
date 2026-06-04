@@ -15,9 +15,6 @@ exports.getDifferentFiles = async (req, res) => {
         const githubToken =
             process.env.GITHUB_TOKEN;
 
-        const repoUrl =
-            'https://github.com/nadish05/New-salesforce-Backup';
-
         const repoPath =
             `/tmp/compare-${Date.now()}`;
 
@@ -83,6 +80,8 @@ const diffResult =
     }
 
 };
+
+
 
 exports.getDifferenceReport = async (req, res) => {
 
