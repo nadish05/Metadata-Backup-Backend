@@ -8,7 +8,6 @@ exports.getDifferentFiles = async (req, res) => {
     try {
 
         const {
-            repoUrl,
             sourceBranch,
             destinationBranch
         } = req.body;
@@ -69,6 +68,62 @@ const diffResult =
     } catch (error) {
 
         console.error(error);
+
+        return res.status(500).json({
+            success: false,
+            error:
+                error.stderr ||
+                error.stdout ||
+                error.message
+        });
+
+    }
+
+};
+
+exports.getDifferenceReport = async (req, res) => {
+
+    try {
+
+        const {
+            repoUrl,
+            sourceBranch,
+            destinationBranch,
+            filePath
+        } = req.body;
+
+        const repoPath =
+            `/tmp/compare-report-${Date.now()}`;
+
+        const cleanRepoUrl =
+            repoUrl.replace(
+                'https://github.com/',
+                ''
+            );
+
+        const gitUrl =
+            `https://${process.env.GITHUB_TOKEN}@github.com/${cleanRepoUrl}.git`;
+
+        await execAsync(
+            `git clone ${gitUrl} ${repoPath}`
+        );
+
+        await execAsync(
+            `cd ${repoPath} && git fetch --all`
+        );
+
+        const diffResult =
+            await execAsync(
+                `cd ${repoPath} && git diff origin/${sourceBranch} origin/${destinationBranch} -- "${filePath}"`
+            );
+
+        return res.json({
+            success: true,
+            filePath,
+            diff: diffResult.stdout
+        });
+
+    } catch (error) {
 
         return res.status(500).json({
             success: false,
