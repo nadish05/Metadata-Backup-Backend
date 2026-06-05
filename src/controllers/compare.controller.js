@@ -50,21 +50,51 @@ console.log('Comparing branches...');
 
 const diffResult =
     await execAsync(
-        `cd ${repoPath} && git diff --name-only origin/${sourceBranch} origin/${destinationBranch}`
+        `cd ${repoPath} && git diff --name-status origin/${sourceBranch} origin/${destinationBranch}`
     );
 
-        const files =
-            diffResult.stdout
-                .split('\n')
-                .filter(file => file.trim());
+const files =
+    diffResult.stdout
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => {
 
-        return res.json({
-            success: true,
-            sourceBranch,
-            destinationBranch,
-            totalFiles: files.length,
-            files
+            const parts = line.split('\t');
+
+            const gitStatus = parts[0];
+
+            const filePath = parts[1];
+
+            let changeType = 'MODIFIED';
+
+            if (gitStatus === 'A') {
+
+                changeType = 'NEW';
+
+            } else if (gitStatus === 'D') {
+
+                changeType = 'DELETED';
+
+            } else if (gitStatus === 'M') {
+
+                changeType = 'MODIFIED';
+
+            }
+
+            return {
+                filePath,
+                changeType
+            };
+
         });
+
+return res.json({
+    success: true,
+    sourceBranch,
+    destinationBranch,
+    totalFiles: files.length,
+    files
+});
 
     } catch (error) {
 
