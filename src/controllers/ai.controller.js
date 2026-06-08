@@ -17,8 +17,9 @@ async (req, res) => {
         } = req.body;
 
         const prompt = `
-Generate a professional Salesforce
-metadata comparison summary.
+You are a Salesforce DevOps Architect.
+
+Analyze the metadata comparison and generate a concise executive summary.
 
 Comparison:
 ${comparisonName}
@@ -33,12 +34,31 @@ ${JSON.stringify(
     2
 )}
 
-Provide:
+Instructions:
 
-1. Executive Summary
-2. Major Impact Areas
-3. Risk Level
-4. Recommended Testing
+- Maximum 200 words
+- Use simple business-friendly language
+- Use bullet points
+- Do not explain every metadata type
+- Keep the output concise
+
+Return exactly:
+
+Executive Summary:
+(2-3 sentences)
+
+Major Impact Areas:
+• Area 1
+• Area 2
+• Area 3
+
+Risk Level:
+Low / Medium / High
+
+Recommended Testing:
+• Test Area 1
+• Test Area 2
+• Test Area 3
 `;
 
         const response =
