@@ -1,5 +1,59 @@
 const { GoogleGenAI } = require("@google/genai");
 
+// =====================================
+// Gemini Retry Helper
+// =====================================
+
+async function generateWithRetry(
+    ai,
+    prompt
+) {
+
+    for (let i = 0; i < 3; i++) {
+
+        try {
+
+            const response =
+                await ai.models.generateContent({
+                    model: "gemini-2.5-flash",
+                    contents: prompt
+                });
+
+            return response.text;
+
+        } catch (error) {
+
+            console.error(
+                `Attempt ${i + 1} failed`,
+                error.message
+            );
+
+            if (
+                error.message.includes('503')
+                &&
+                i < 2
+            ) {
+
+                await new Promise(
+                    resolve =>
+                        setTimeout(
+                            resolve,
+                            2000
+                        )
+                );
+
+                continue;
+            }
+
+            throw error;
+        }
+    }
+}
+
+// =====================================
+// AI Comparison Summary
+// =====================================
+
 exports.generateComparisonSummary =
 async (req, res) => {
 
@@ -61,34 +115,40 @@ Recommended Testing:
 • Test Area 3
 `;
 
-        const response =
-            await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: prompt
-            });
+        const summary =
+            await generateWithRetry(
+                ai,
+                prompt
+            );
 
         return res.json({
             success: true,
-            summary:
-                response.text
+            summary
         });
 
-    } catch(error) {
+    } catch (error) {
 
         console.error(error);
 
         return res.status(500).json({
+
             success: false,
+
             error:
-                error.message
+                'AI service is currently busy. Please try again in a few moments.'
+
         });
 
     }
 
 };
 
+// =====================================
+// AI Explain Git Diff
+// =====================================
 
-exports.explainDiff = async (req, res) => {
+exports.explainDiff =
+async (req, res) => {
 
     try {
 
@@ -134,19 +194,20 @@ Risk Level:
 Recommended Testing:
 (Testing recommendations)
 
+Return plain text.
+Do not use markdown.
 Keep response under 250 words.
 `;
 
-        const response =
-            await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: prompt
-            });
+        const explanation =
+            await generateWithRetry(
+                ai,
+                prompt
+            );
 
         return res.json({
             success: true,
-            explanation:
-                response.text
+            explanation
         });
 
     } catch (error) {
@@ -154,9 +215,12 @@ Keep response under 250 words.
         console.error(error);
 
         return res.status(500).json({
+
             success: false,
+
             error:
-                error.message
+                'AI service is currently busy. Please try again in a few moments.'
+
         });
 
     }
