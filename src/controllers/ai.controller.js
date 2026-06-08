@@ -1,12 +1,14 @@
 const { GoogleGenAI } = require("@google/genai");
 
-const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY
-});
-
-exports.generateComparisonSummary = async (req, res) => {
+exports.generateComparisonSummary =
+async (req, res) => {
 
     try {
+
+        const ai = new GoogleGenAI({
+            apiKey:
+                process.env.GEMINI_API_KEY
+        });
 
         const {
             comparisonName,
@@ -15,26 +17,28 @@ exports.generateComparisonSummary = async (req, res) => {
         } = req.body;
 
         const prompt = `
-You are a Salesforce DevOps expert.
-
-Generate a short business-friendly comparison summary.
+Generate a professional Salesforce
+metadata comparison summary.
 
 Comparison:
 ${comparisonName}
 
-Total Changed Files:
+Total Files Changed:
 ${totalFiles}
 
 Metadata Breakdown:
-${JSON.stringify(groupedResults, null, 2)}
+${JSON.stringify(
+    groupedResults,
+    null,
+    2
+)}
 
-Return:
+Provide:
+
 1. Executive Summary
 2. Major Impact Areas
-3. Risk Level (Low/Medium/High)
-4. Recommended Testing Areas
-
-Keep response under 250 words.
+3. Risk Level
+4. Recommended Testing
 `;
 
         const response =
@@ -43,16 +47,20 @@ Keep response under 250 words.
                 contents: prompt
             });
 
-        res.json({
+        return res.json({
             success: true,
-            summary: response.text
+            summary:
+                response.text
         });
 
-    } catch (error) {
+    } catch(error) {
 
-        res.status(500).json({
+        console.error(error);
+
+        return res.status(500).json({
             success: false,
-            error: error.message
+            error:
+                error.message
         });
 
     }
