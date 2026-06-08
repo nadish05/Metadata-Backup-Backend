@@ -20,6 +20,9 @@ const githubRoutes =
 const compareRoutes =
     require('./routes/compare.routes');
 
+const aiRoutes =
+    require('./routes/ai.routes');
+
 
 
 
@@ -36,6 +39,7 @@ app.use('/api/token', tokenRoutes);
 app.use('/api/metadata', metadataRoutes);
 app.use('/api/github',githubRoutes);
 app.use('/api/compare',compareRoutes);
+app.use('/api/ai',aiRoutes);
 
 const PORT = process.env.PORT || 3000;
 
