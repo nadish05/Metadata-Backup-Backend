@@ -1,4 +1,5 @@
 const { GoogleGenAI } = require("@google/genai");
+const OpenAI = require("openai");
 
 // =====================================
 // Gemini Retry Helper
@@ -50,6 +51,32 @@ async function generateWithRetry(
     }
 }
 
+async function generateWithOpenAI(prompt) {
+
+    const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
+    });
+
+    const response =
+        await openai.chat.completions.create({
+
+            model: "gpt-4o-mini",
+
+            messages: [
+                {
+                    role: "user",
+                    content: prompt
+                }
+            ]
+
+        });
+
+    return response
+        .choices[0]
+        .message
+        .content;
+}
+
 // =====================================
 // AI Comparison Summary
 // =====================================
@@ -67,7 +94,8 @@ async (req, res) => {
         const {
             comparisonName,
             totalFiles,
-            groupedResults
+            groupedResults,
+            model
         } = req.body;
 
         const prompt = `
@@ -115,11 +143,23 @@ Recommended Testing:
 • Test Area 3
 `;
 
-        const summary =
-            await generateWithRetry(
-                ai,
-                prompt
-            );
+        let summary;
+
+if (model === 'openai') {
+
+    summary =
+        await generateWithOpenAI(
+            prompt
+        );
+
+} else {
+
+    summary =
+        await generateWithRetry(
+            ai,
+            prompt
+        );
+}
 
         return res.json({
             success: true,
@@ -160,7 +200,8 @@ async (req, res) => {
         const {
             fileName,
             metadataType,
-            diff
+            diff,
+            model
         } = req.body;
 
         const prompt = `
@@ -199,11 +240,23 @@ Do not use markdown.
 Keep response under 250 words.
 `;
 
-        const explanation =
-            await generateWithRetry(
-                ai,
-                prompt
-            );
+        let explanation;
+
+if (model === 'openai') {
+
+    explanation =
+        await generateWithOpenAI(
+            prompt
+        );
+
+} else {
+
+    explanation =
+        await generateWithRetry(
+            ai,
+            prompt
+        );
+}
 
         return res.json({
             success: true,
