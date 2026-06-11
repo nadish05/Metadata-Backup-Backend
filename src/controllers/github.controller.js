@@ -83,8 +83,7 @@ async function runMigration(
     refreshToken,
     instanceUrl,
     repoUrl,
-    branchName,
-    jobId
+    branchName
 ) {
 
     const targetBranch =
@@ -94,14 +93,7 @@ async function runMigration(
 
     console.log('===== MIGRATION STARTED =====');
 
-    await axios.post(
-    process.env.SF_JOB_API +
-    '/updateMigrationJob',
-    {
-        jobId,
-        status: 'Running'
-    }
-);
+    
 
     console.log('Retrieving metadata...');
 
@@ -161,44 +153,13 @@ async function runMigration(
 
     console.log('Push completed');
 
-    await axios.post(
-    process.env.SF_JOB_API +
-    '/updateMigrationJob',
-    {
-        jobId,
-        status: 'Completed'
-    }
-);
+    
 } catch(error) {
 
     console.error(
         'BACKGROUND MIGRATION ERROR:',
         error
     );
-
-    try {
-
-        await axios.post(
-            process.env.SF_JOB_API +
-            '/updateMigrationJob',
-            {
-                jobId,
-                status: 'Failed',
-                errorMessage:
-                    error.message ||
-                    error.stderr ||
-                    'Unknown Error'
-            }
-        );
-
-    } catch(ex) {
-
-        console.error(
-            'Failed updating job status',
-            ex
-        );
-
-    }
 
 }
 
@@ -217,27 +178,14 @@ exports.migrateToGitHub = async (req, res) => {
             branchName
         } = req.body;
 
-        const jobResponse =
-await axios.post(
-    process.env.SF_JOB_API +
-    '/createMigrationJob',
-    {
-        comparisonId,
-        branchName,
-        migrationType
-    }
-);
-
-const jobId =
-jobResponse.data.jobId;
+        
 
         
         runMigration(
             refreshToken,
             instanceUrl,
             repoUrl,
-            branchName,
-            jobId
+            branchName
         ).catch(error => {
             console.error(
                 'RUN MIGRATION FAILED:',
@@ -246,12 +194,9 @@ jobResponse.data.jobId;
         });
 
         return res.json({
-    success: true,
-    jobId: jobId,
-    status: 'Running',
-    message:
-        'Migration Started Successfully'
-});
+            success: true,
+            message: 'Migration started Successfully. This may take several minutes.'
+        });
 
         
 
