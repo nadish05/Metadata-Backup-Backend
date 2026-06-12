@@ -4,6 +4,14 @@ const {
     retrieveMetadataInternal
 } = require('./metadata.controller');
 
+const {
+    setStatus
+} = require('../status.store');
+
+const {
+    getStatus
+} = require('../status.store');
+
 exports.checkGit = async (req, res) => {
 
     exec(
@@ -92,10 +100,12 @@ async function runMigration(
     try{
 
     console.log('===== MIGRATION STARTED =====');
-
+    setStatus('Migration started');
+    
     
 
     console.log('Retrieving metadata...');
+    setStatus('Retrieving metadata');
 
     let projectPath;
 
@@ -112,20 +122,23 @@ async function runMigration(
     `${workspace}/backup-project`;
 
     console.log('Metadata retrieved');
+    setStatus('Metadata retrieved');
 
     console.log('Initializing Git...');
+    setStatus('Initializing Git');
 
     await execAsync(
         `cd ${projectPath} && git init`
     );
 
     console.log('Adding files...');
-
+    setStatus('Adding files');
     await execAsync(
         `cd ${projectPath} && git add .`
     );
 
     console.log('Creating commit...');
+    setStatus('Creating commit');
 
     await execAsync(
         `cd ${projectPath} && git config user.email "backup@system.com" && ` +
@@ -134,6 +147,7 @@ async function runMigration(
     );
 
     console.log('Pushing to GitHub...');
+    setStatus('Pushing to GitHub');
 
     const githubToken =
     process.env.GITHUB_TOKEN;
@@ -152,6 +166,7 @@ async function runMigration(
     );
 
     console.log('Push completed');
+    setStatus('Push completed');
 
     
 } catch(error) {
@@ -160,6 +175,8 @@ async function runMigration(
         'BACKGROUND MIGRATION ERROR:',
         error
     );
+
+    setStatus('Migration failed');
 
 }
 
@@ -208,6 +225,26 @@ exports.migrateToGitHub = async (req, res) => {
                 error.stderr ||
                 error.stdout ||
                 error.message
+        });
+
+    }
+
+};
+
+exports.getMigrationStatus = async (req, res) => {
+
+    try {
+
+        return res.json({
+            success: true,
+            status: getStatus()
+        });
+
+    } catch(error) {
+
+        return res.status(500).json({
+            success: false,
+            error: error.message
         });
 
     }

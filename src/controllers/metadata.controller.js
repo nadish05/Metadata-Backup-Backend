@@ -5,6 +5,10 @@ const util = require('util');
 
 const execAsync = util.promisify(exec);
 
+const {
+    setStatus
+} = require('../status.store');
+
 exports.retrieveMetadataInternal = async (
     refreshToken,
     instanceUrl
@@ -13,6 +17,7 @@ exports.retrieveMetadataInternal = async (
     try {
  
         console.log('STEP 1 - Generating token');
+        setStatus('Generating token');
  
         const tokenResponse =
         await axios.post(
@@ -34,6 +39,7 @@ exports.retrieveMetadataInternal = async (
         tokenResponse.data.access_token;
  
         console.log('STEP 2 - Creating workspace');
+        setStatus('Creating workspace');
  
         const workspace =
         `/tmp/workspace-${Date.now()}`;
@@ -46,7 +52,7 @@ exports.retrieveMetadataInternal = async (
         console.log('STEP 2 COMPLETE');
  
         console.log('STEP 3 - Generating project');
- 
+        setStatus('Generating project');
         await execAsync(
             `cd ${workspace} && sf project generate --name backup-project`
         );
@@ -54,6 +60,7 @@ exports.retrieveMetadataInternal = async (
         console.log('STEP 3 COMPLETE');
  
         console.log('STEP 4 - CLI Login');
+        setStatus('CLI Login');
  
         const loginCommand =
         `export SF_ACCESS_TOKEN="${accessToken}" && ` +
@@ -67,6 +74,7 @@ exports.retrieveMetadataInternal = async (
         console.log('STEP 4 COMPLETE');
  
         console.log('STEP 5 - Retrieving ApexClass');
+        setStatus('Retrieving ApexClass');
  
 const metadataTypes = [
  'ApexClass',
@@ -97,6 +105,7 @@ const metadataArgs =
 console.log(
  'Retrieving Full Metadata...'
 );
+setStatus('Retrieving Full Metadata');
 
 await execAsync(
  `cd ${workspace}/backup-project && ` +
@@ -112,7 +121,8 @@ await execAsync(
 console.log(
  'Full Metadata Retrieval Complete'
 );
- 
+setStatus('Full Metadata Retrieval Complete');
+
         console.log('STEP 5 COMPLETE');
  
         return {

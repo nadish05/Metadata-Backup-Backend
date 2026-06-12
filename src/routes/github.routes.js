@@ -5,7 +5,8 @@ const router = express.Router();
 const {
     checkGit,
     cloneRepo,
-    migrateToGitHub
+    migrateToGitHub,
+    getMigrationStatus
 } = require('../controllers/github.controller');
 
 router.get(
@@ -21,6 +22,11 @@ router.post(
 router.post(
     '/migrate',
     migrateToGitHub
+);
+
+router.get(
+    '/migration/status',
+    getMigrationStatus
 );
 
 module.exports = router;
