@@ -70,19 +70,26 @@ const files =
 
             let changeType = 'MODIFIED';
 
-            if (gitStatus === 'A') {
+if (gitStatus.startsWith('A')) {
 
-                changeType = 'NEW';
+    changeType = 'NEW';
 
-            } else if (gitStatus === 'D') {
+}
+else if (gitStatus.startsWith('D')) {
 
-                changeType = 'DELETED';
+    changeType = 'DELETED';
 
-            } else if (gitStatus === 'M') {
+}
+else if (gitStatus.startsWith('M')) {
 
-                changeType = 'MODIFIED';
+    changeType = 'MODIFIED';
 
-            }
+}
+else if (gitStatus.startsWith('R')) {
+
+    changeType = 'DELETED';
+
+}
 
             console.log(
     'GIT STATUS:',
