@@ -88,6 +88,10 @@ const files =
 
         });
 
+console.log(
+    JSON.stringify(files, null, 2)
+);
+
 return res.json({
     success: true,
     sourceBranch,
