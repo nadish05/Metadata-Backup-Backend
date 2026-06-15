@@ -81,6 +81,15 @@ const files =
 
             }
 
+            console.log(
+    'GIT STATUS:',
+    gitStatus,
+    'FILE:',
+    filePath,
+    'FINAL TYPE:',
+    changeType
+);
+
             return {
                 filePath,
                 changeType
