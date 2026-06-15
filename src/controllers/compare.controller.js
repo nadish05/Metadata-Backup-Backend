@@ -53,6 +53,9 @@ const diffResult =
         `cd ${repoPath} && git diff --name-status origin/${sourceBranch} origin/${destinationBranch}`
     );
 
+    console.log('RAW DIFF OUTPUT');
+    console.log(diffResult.stdout);
+
 const files =
     diffResult.stdout
         .split('\n')
