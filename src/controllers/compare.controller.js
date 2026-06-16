@@ -72,12 +72,35 @@ const files =
     filePath.includes('/flows/') &&
     filePath.endsWith('.flow-meta.xml');
 
-console.log(
-    'FILE:',
-    filePath,
-    'IS FLOW:',
-    isFlow
-);
+
+    let flowStatus = null;
+
+    if (isFlow) {
+
+    const fileContentResult =
+        await execAsync(
+            `cd ${repoPath} && git show origin/${sourceBranch}:"${filePath}"`
+        );
+
+    const content =
+        fileContentResult.stdout;
+
+    const statusMatch =
+        content.match(
+            /<status>(.*?)<\/status>/
+        );
+
+    if (statusMatch) {
+        flowStatus = statusMatch[1];
+    }
+
+    console.log(
+        'FLOW:',
+        filePath,
+        'STATUS:',
+        flowStatus
+    );
+}
 
             let changeType = 'MODIFIED';
 
@@ -113,7 +136,8 @@ else if (gitStatus.startsWith('R')) {
 
             return {
                 filePath,
-                changeType
+                changeType,
+                flowStatus
             };
 
         });
