@@ -56,83 +56,77 @@ const diffResult =
     console.log('RAW DIFF OUTPUT');
     console.log(diffResult.stdout);
 
-const files =
+const files = await Promise.all(
+
     diffResult.stdout
         .split('\n')
         .filter(line => line.trim())
-        .map(line => {
+        .map(async line => {
 
             const parts = line.split('\t');
 
             const gitStatus = parts[0];
-
             const filePath = parts[1];
 
             const isFlow =
-    filePath.includes('/flows/') &&
-    filePath.endsWith('.flow-meta.xml');
+                filePath.includes('/flows/') &&
+                filePath.endsWith('.flow-meta.xml');
 
+            let flowStatus = null;
 
-    let flowStatus = null;
+            if (isFlow) {
 
-    if (isFlow) {
+                try {
 
-    const fileContentResult =
-        await execAsync(
-            `cd ${repoPath} && git show origin/${sourceBranch}:"${filePath}"`
-        );
+                    const fileContentResult =
+                        await execAsync(
+                            `cd ${repoPath} && git show origin/${sourceBranch}:"${filePath}"`
+                        );
 
-    const content =
-        fileContentResult.stdout;
+                    const content =
+                        fileContentResult.stdout;
 
-    const statusMatch =
-        content.match(
-            /<status>(.*?)<\/status>/
-        );
+                    const statusMatch =
+                        content.match(
+                            /<status>(.*?)<\/status>/
+                        );
 
-    if (statusMatch) {
-        flowStatus = statusMatch[1];
-    }
+                    if (statusMatch) {
+                        flowStatus = statusMatch[1];
+                    }
 
-    console.log(
-        'FLOW:',
-        filePath,
-        'STATUS:',
-        flowStatus
-    );
-}
+                    console.log(
+                        'FLOW:',
+                        filePath,
+                        'STATUS:',
+                        flowStatus
+                    );
+
+                } catch(error) {
+
+                    console.log(
+                        'Could not read flow:',
+                        filePath
+                    );
+
+                }
+
+            }
 
             let changeType = 'MODIFIED';
 
-if (gitStatus.startsWith('A')) {
-
-    changeType = 'NEW';
-
-}
-else if (gitStatus.startsWith('D')) {
-
-    changeType = 'DELETED';
-
-}
-else if (gitStatus.startsWith('M')) {
-
-    changeType = 'MODIFIED';
-
-}
-else if (gitStatus.startsWith('R')) {
-
-    changeType = 'DELETED';
-
-}
-
-            console.log(
-    'GIT STATUS:',
-    gitStatus,
-    'FILE:',
-    filePath,
-    'FINAL TYPE:',
-    changeType
-);
+            if (gitStatus.startsWith('A')) {
+                changeType = 'NEW';
+            }
+            else if (gitStatus.startsWith('D')) {
+                changeType = 'DELETED';
+            }
+            else if (gitStatus.startsWith('M')) {
+                changeType = 'MODIFIED';
+            }
+            else if (gitStatus.startsWith('R')) {
+                changeType = 'DELETED';
+            }
 
             return {
                 filePath,
@@ -140,7 +134,8 @@ else if (gitStatus.startsWith('R')) {
                 flowStatus
             };
 
-        });
+        })
+);
 
 console.log(
     JSON.stringify(files, null, 2)
