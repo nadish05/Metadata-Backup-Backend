@@ -290,9 +290,29 @@ exports.getFileContent = async (req, res) => {
                 `cat ${repoPath}/${filePath}`
             );
 
+        const content = file.stdout;
+
+        let flowStatus = null;
+
+        if (
+            filePath.endsWith('.flow-meta.xml')
+        ) {
+
+            const statusMatch =
+                content.match(
+                    /<status>(.*?)<\/status>/
+                );
+
+            if (statusMatch) {
+                flowStatus = statusMatch[1];
+            }
+
+        }
+
         return res.json({
             success: true,
-            content: file.stdout
+            flowStatus,
+            content
         });
 
     } catch (error) {
