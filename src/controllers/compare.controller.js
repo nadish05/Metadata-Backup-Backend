@@ -68,6 +68,17 @@ const files =
 
             const filePath = parts[1];
 
+            const isFlow =
+    filePath.includes('/flows/') &&
+    filePath.endsWith('.flow-meta.xml');
+
+console.log(
+    'FILE:',
+    filePath,
+    'IS FLOW:',
+    isFlow
+);
+
             let changeType = 'MODIFIED';
 
 if (gitStatus.startsWith('A')) {
