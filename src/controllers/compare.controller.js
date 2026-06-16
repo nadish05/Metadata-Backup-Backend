@@ -248,4 +248,60 @@ return res.json({
 
     }
 
+
+
+    exports.getFileContent = async (req, res) => {
+
+    try {
+
+        const {
+            repoUrl,
+            branch,
+            filePath
+        } = req.body;
+
+        const repoPath =
+            `/tmp/file-content-${Date.now()}`;
+
+        const cleanRepoUrl =
+            repoUrl.replace(
+                'https://github.com/',
+                ''
+            );
+
+        const gitUrl =
+            `https://${process.env.GITHUB_TOKEN}@github.com/${cleanRepoUrl}.git`;
+
+        await execAsync(
+            `git clone ${gitUrl} ${repoPath}`
+        );
+
+        await execAsync(
+            `cd ${repoPath} && git checkout origin/${branch}`
+        );
+
+        const file =
+            await execAsync(
+                `cat ${repoPath}/${filePath}`
+            );
+
+        return res.json({
+            success: true,
+            content: file.stdout
+        });
+
+    } catch (error) {
+
+        return res.status(500).json({
+            success: false,
+            error:
+                error.stderr ||
+                error.stdout ||
+                error.message
+        });
+
+    }
+
+};
+
 };
