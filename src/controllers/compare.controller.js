@@ -13,13 +13,6 @@ exports.getDifferentFiles = async (req, res) => {
             destinationBranch
         } = req.body;
 
-
-        console.log('==========================');
-console.log('REPO URL:', repoUrl);
-console.log('SOURCE BRANCH:', sourceBranch);
-console.log('DESTINATION BRANCH:', destinationBranch);
-console.log('==========================');
-
         const githubToken =
             process.env.GITHUB_TOKEN;
 
@@ -44,30 +37,7 @@ console.log('==========================');
 
 await execAsync(
     `cd ${repoPath} && git fetch --all`
-
 );
-
-const sourceHead = await execAsync(
-    `cd ${repoPath} && git rev-parse origin/${sourceBranch}`
-);
-
-const destinationHead = await execAsync(
-    `cd ${repoPath} && git rev-parse origin/${destinationBranch}`
-);
-
-console.log('SOURCE HEAD:', sourceHead.stdout);
-console.log('DEST HEAD:', destinationHead.stdout);
-
-const sourceCommit = await execAsync(
-    `cd ${repoPath} && git log --oneline origin/${sourceBranch} -1`
-);
-
-const destinationCommit = await execAsync(
-    `cd ${repoPath} && git log --oneline origin/${destinationBranch} -1`
-);
-
-console.log('SOURCE COMMIT:', sourceCommit.stdout);
-console.log('DEST COMMIT:', destinationCommit.stdout);
 
 const branches =
     await execAsync(
@@ -78,10 +48,10 @@ console.log(branches.stdout);
 
 console.log('Comparing branches...');
 
-console.log(
-    `git diff --name-status origin/${sourceBranch} origin/${destinationBranch}`
-);
-
+const diffResult =
+    await execAsync(
+        `cd ${repoPath} && git diff --name-status origin/${sourceBranch} origin/${destinationBranch}`
+    );
 
     console.log('RAW DIFF OUTPUT');
     console.log(diffResult.stdout);
