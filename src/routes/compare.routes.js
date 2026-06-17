@@ -4,8 +4,8 @@ const router = express.Router();
 
 const {
     getDifferentFiles,
-    getDifferenceReport
-    //getFileContent
+    getDifferenceReport,
+    getFileContent
 } = require('../controllers/compare.controller');
 
 router.post(
@@ -18,9 +18,9 @@ router.post(
     getDifferenceReport
 );
 
-//router.post(
+router.post(
     '/file-content',
     getFileContent
-//);
+);
 
 module.exports = router;
