@@ -44,7 +44,30 @@ console.log('==========================');
 
 await execAsync(
     `cd ${repoPath} && git fetch --all`
+
 );
+
+const sourceHead = await execAsync(
+    `cd ${repoPath} && git rev-parse origin/${sourceBranch}`
+);
+
+const destinationHead = await execAsync(
+    `cd ${repoPath} && git rev-parse origin/${destinationBranch}`
+);
+
+console.log('SOURCE HEAD:', sourceHead.stdout);
+console.log('DEST HEAD:', destinationHead.stdout);
+
+const sourceCommit = await execAsync(
+    `cd ${repoPath} && git log --oneline origin/${sourceBranch} -1`
+);
+
+const destinationCommit = await execAsync(
+    `cd ${repoPath} && git log --oneline origin/${destinationBranch} -1`
+);
+
+console.log('SOURCE COMMIT:', sourceCommit.stdout);
+console.log('DEST COMMIT:', destinationCommit.stdout);
 
 const branches =
     await execAsync(
@@ -59,10 +82,6 @@ console.log(
     `git diff --name-status origin/${sourceBranch} origin/${destinationBranch}`
 );
 
-const diffResult =
-    await execAsync(
-        `cd ${repoPath} && git diff --name-status origin/${sourceBranch} origin/${destinationBranch}`
-    );
 
     console.log('RAW DIFF OUTPUT');
     console.log(diffResult.stdout);
