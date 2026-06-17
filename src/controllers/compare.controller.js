@@ -31,7 +31,7 @@ exports.getDifferentFiles = async (req, res) => {
             `git clone ${authenticatedUrl} ${repoPath}`
         );
 
-        
+
 
         console.log('Fetching branches...');
 
@@ -56,86 +56,63 @@ const diffResult =
     console.log('RAW DIFF OUTPUT');
     console.log(diffResult.stdout);
 
-const files = await Promise.all(
-
+const files =
     diffResult.stdout
         .split('\n')
         .filter(line => line.trim())
-        .map(async line => {
+        .map(line => {
 
             const parts = line.split('\t');
 
             const gitStatus = parts[0];
+
             const filePath = parts[1];
-
-            const isFlow =
-                filePath.includes('/flows/') &&
-                filePath.endsWith('.flow-meta.xml');
-
-            let flowStatus = null;
-
-            if (isFlow) {
-
-                try {
-
-                    const fileContentResult =
-                        await execAsync(
-                            `cd ${repoPath} && git show origin/${sourceBranch}:"${filePath}"`
-                        );
-
-                    const content =
-                        fileContentResult.stdout;
-
-                    const statusMatch =
-                        content.match(
-                            /<status>(.*?)<\/status>/
-                        );
-
-                    if (statusMatch) {
-                        flowStatus = statusMatch[1];
-                    }
-
-                    console.log(
-                        'FLOW:',
-                        filePath,
-                        'STATUS:',
-                        flowStatus
-                    );
-
-                } catch(error) {
-
-                    console.log(
-                        'Could not read flow:',
-                        filePath
-                    );
-
-                }
-
-            }
 
             let changeType = 'MODIFIED';
 
-            if (gitStatus.startsWith('A')) {
+            if (gitStatus === 'A') {
+if (gitStatus.startsWith('A')) {
+
                 changeType = 'NEW';
-            }
-            else if (gitStatus.startsWith('D')) {
+    changeType = 'NEW';
+
+            } else if (gitStatus === 'D') {
+}
+else if (gitStatus.startsWith('D')) {
+
+    changeType = 'DELETED';
+
+}
+else if (gitStatus.startsWith('M')) {
+
                 changeType = 'DELETED';
-            }
-            else if (gitStatus.startsWith('M')) {
+    changeType = 'MODIFIED';
+
+            } else if (gitStatus === 'M') {
+}
+else if (gitStatus.startsWith('R')) {
+
                 changeType = 'MODIFIED';
+    changeType = 'DELETED';
+
             }
-            else if (gitStatus.startsWith('R')) {
-                changeType = 'DELETED';
-            }
+}
+
+            console.log(
+    'GIT STATUS:',
+    gitStatus,
+    'FILE:',
+    filePath,
+    'FINAL TYPE:',
+    changeType
+);
 
             return {
                 filePath,
-                changeType,
-                flowStatus
+                changeType
             };
 
-        })
-);
+        });
 
 console.log(
     JSON.stringify(files, null, 2)
@@ -277,84 +254,4 @@ return res.json({
         });
 
     }
-
-
-
-
-
-};
-
-
-exports.getFileContent = async (req, res) => {
-
-    try {
-
-        const {
-            repoUrl,
-            branch,
-            filePath
-        } = req.body;
-
-        const repoPath =
-            `/tmp/file-content-${Date.now()}`;
-
-        const cleanRepoUrl =
-            repoUrl.replace(
-                'https://github.com/',
-                ''
-            );
-
-        const gitUrl =
-            `https://${process.env.GITHUB_TOKEN}@github.com/${cleanRepoUrl}.git`;
-
-        await execAsync(
-            `git clone ${gitUrl} ${repoPath}`
-        );
-
-        await execAsync(
-            `cd ${repoPath} && git checkout origin/${branch}`
-        );
-
-        const file =
-            await execAsync(
-                `cat ${repoPath}/${filePath}`
-            );
-
-        const content = file.stdout;
-
-        let flowStatus = null;
-
-        if (
-            filePath.endsWith('.flow-meta.xml')
-        ) {
-
-            const statusMatch =
-                content.match(
-                    /<status>(.*?)<\/status>/
-                );
-
-            if (statusMatch) {
-                flowStatus = statusMatch[1];
-            }
-
-        }
-
-        return res.json({
-            success: true,
-            flowStatus,
-            content
-        });
-
-    } catch (error) {
-
-        return res.status(500).json({
-            success: false,
-            error:
-                error.stderr ||
-                error.stdout ||
-                error.message
-        });
-
-    }
-
 };
