@@ -56,56 +56,86 @@ const diffResult =
     console.log('RAW DIFF OUTPUT');
     console.log(diffResult.stdout);
 
-const files =
+const files = await Promise.all(
+
     diffResult.stdout
         .split('\n')
         .filter(line => line.trim())
-        .map(line => {
+        .map(async line => {
 
             const parts = line.split('\t');
 
             const gitStatus = parts[0];
-
             const filePath = parts[1];
 
             let changeType = 'MODIFIED';
 
-if (gitStatus.startsWith('A')) {
+            if (gitStatus.startsWith('A')) {
+                changeType = 'NEW';
+            }
+            else if (gitStatus.startsWith('D')) {
+                changeType = 'DELETED';
+            }
+            else if (gitStatus.startsWith('M')) {
+                changeType = 'MODIFIED';
+            }
+            else if (gitStatus.startsWith('R')) {
+                changeType = 'DELETED';
+            }
 
-    changeType = 'NEW';
+            let flowStatus = null;
 
+            const isFlow =
+                filePath &&
+                filePath.includes('/flows/') &&
+                filePath.endsWith('.flow-meta.xml');
+
+            if (isFlow) {
+
+    try {
+
+        const fileContent =
+            await execAsync(
+                `cd ${repoPath} && git show origin/${sourceBranch}:"${filePath}"`
+            );
+
+        const statusMatch =
+            fileContent.stdout.match(
+                /<status>(.*?)<\/status>/i
+            );
+
+        if (statusMatch) {
+            flowStatus = statusMatch[1];
+        }
+
+        console.log(
+            'FLOW:',
+            filePath,
+            'STATUS:',
+            flowStatus
+        );
+
+    }
+    catch (e) {
+
+        console.log(
+            'Unable to determine flow status:',
+            filePath
+        );
+
+    }
 }
-else if (gitStatus.startsWith('D')) {
-
-    changeType = 'DELETED';
-
-}
-else if (gitStatus.startsWith('M')) {
-
-    changeType = 'MODIFIED';
-
-}
-else if (gitStatus.startsWith('R')) {
-
-    changeType = 'DELETED';
-
-}
-
-            console.log(
-    'GIT STATUS:',
-    gitStatus,
-    'FILE:',
-    filePath,
-    'FINAL TYPE:',
-    changeType
-);
 
             return {
                 filePath,
-                changeType
+                changeType,
+                flowStatus
             };
 
-        });
+        })
+);
+
+
 
 console.log(
     JSON.stringify(files, null, 2)
