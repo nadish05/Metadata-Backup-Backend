@@ -13,6 +13,13 @@ exports.getDifferentFiles = async (req, res) => {
             destinationBranch
         } = req.body;
 
+
+        console.log('==========================');
+console.log('REPO URL:', repoUrl);
+console.log('SOURCE BRANCH:', sourceBranch);
+console.log('DESTINATION BRANCH:', destinationBranch);
+console.log('==========================');
+
         const githubToken =
             process.env.GITHUB_TOKEN;
 
@@ -47,6 +54,10 @@ const branches =
 console.log(branches.stdout);
 
 console.log('Comparing branches...');
+
+console.log(
+    `git diff --name-status origin/${sourceBranch} origin/${destinationBranch}`
+);
 
 const diffResult =
     await execAsync(
