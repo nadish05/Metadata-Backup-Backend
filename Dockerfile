@@ -1,19 +1,19 @@
 FROM node:22
 
-# Install Salesforce CLI
-RUN npm install -g @salesforce/cli
+RUN apt-get update && \
+    apt-get install -y git && \
+    rm -rf /var/lib/apt/lists/*
 
-# Verify installation
-RUN sf --version
+RUN npm install -g @salesforce/cli
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install
+RUN npm ci
 
 COPY . .
 
-EXPOSE 10000
+EXPOSE 3000
 
 CMD ["npm", "start"]
