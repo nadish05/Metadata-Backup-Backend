@@ -94,9 +94,14 @@ const files = await Promise.all(
 
     try {
 
+        const branchToRead =
+            changeType === 'DELETED'
+                ? sourceBranch
+                : destinationBranch;
+
         const fileContent =
             await execAsync(
-                `cd ${repoPath} && git show origin/${sourceBranch}:"${filePath}"`
+                `cd ${repoPath} && git show origin/${branchToRead}:"${filePath}"`
             );
 
         const statusMatch =
