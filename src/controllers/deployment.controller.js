@@ -13,6 +13,11 @@ exports.analyzeDependencies = async (req, res) => {
             filePath
         } = req.body;
 
+        console.log('================================');
+        console.log('DEPENDENCY ANALYSIS STARTED');
+        console.log('BRANCH:', branch);
+        console.log('FILE:', filePath);
+
         const githubToken =
             process.env.GITHUB_TOKEN;
 
@@ -25,6 +30,8 @@ exports.analyzeDependencies = async (req, res) => {
                 `https://${githubToken}@`
             );
 
+        console.log('Cloning repository...');
+
         await execAsync(
             `git clone ${authenticatedUrl} ${repoPath}`
         );
@@ -32,6 +39,8 @@ exports.analyzeDependencies = async (req, res) => {
         await execAsync(
             `cd ${repoPath} && git fetch --all`
         );
+
+        console.log('Reading file...');
 
         const fileContent =
             await execAsync(
@@ -41,6 +50,10 @@ exports.analyzeDependencies = async (req, res) => {
         const content =
             fileContent.stdout;
 
+        console.log('FILE CONTENT LENGTH:',
+            content.length
+        );
+
         const matches =
             content.match(
                 /\b([A-Z][A-Za-z0-9_]+)\./g
@@ -48,13 +61,20 @@ exports.analyzeDependencies = async (req, res) => {
 
         const dependencies =
             [...new Set(
-
                 matches.map(
                     item =>
                         item.replace('.', '')
                 )
-
             )];
+
+        console.log(
+            'DEPENDENCIES FOUND:',
+            dependencies
+        );
+
+        await execAsync(
+            `rm -rf ${repoPath}`
+        );
 
         return res.json({
 
@@ -67,7 +87,14 @@ exports.analyzeDependencies = async (req, res) => {
 
         });
 
-    } catch (error) {
+    }
+    catch (error) {
+
+        console.error(
+            'DEPENDENCY ANALYSIS ERROR'
+        );
+
+        console.error(error);
 
         return res.status(500).json({
 
