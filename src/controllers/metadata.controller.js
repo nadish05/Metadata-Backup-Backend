@@ -45,6 +45,16 @@ exports.retrieveMetadataInternal = async (
  
         const accessToken =
         tokenResponse.data.access_token;
+
+        console.log('TOKEN RESPONSE');
+
+console.log(
+    JSON.stringify(
+        tokenResponse.data,
+        null,
+        2
+    )
+);
  
         console.log('STEP 2 - Creating workspace');
         setStatus('Creating workspace');
@@ -71,15 +81,39 @@ exports.retrieveMetadataInternal = async (
         setStatus('CLI Login');
  
         const loginCommand =
-        `export SF_ACCESS_TOKEN="${accessToken}" && ` +
-        `sf org login access-token ` +
-        `-r ${instanceUrl} ` +
-        `--alias temporg ` +
-        `--no-prompt`;
- 
+`export SF_ACCESS_TOKEN="${accessToken}" && ` +
+`sf org login access-token ` +
+`-r ${instanceUrl} ` +
+`--alias temporg ` +
+`--no-prompt`;
+
+try {
+
+    const loginResult =
         await execAsync(loginCommand);
- 
-        console.log('STEP 4 COMPLETE');
+
+    console.log('LOGIN STDOUT');
+    console.log(loginResult.stdout);
+
+    console.log('LOGIN STDERR');
+    console.log(loginResult.stderr);
+
+}
+catch(error) {
+
+    console.log('LOGIN FAILED');
+
+    console.log('STDOUT');
+    console.log(error.stdout);
+
+    console.log('STDERR');
+    console.log(error.stderr);
+
+    throw error;
+
+}
+
+console.log('STEP 4 COMPLETE');
  
         console.log('STEP 5 - Retrieving ApexClass');
         setStatus('Retrieving ApexClass');
