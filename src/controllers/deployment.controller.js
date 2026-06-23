@@ -59,13 +59,43 @@ exports.analyzeDependencies = async (req, res) => {
                 /\b([A-Z][A-Za-z0-9_]+)\./g
             ) || [];
 
-        const dependencies =
-            [...new Set(
-                matches.map(
-                    item =>
-                        item.replace('.', '')
-                )
-            )];
+        const systemClasses = [
+
+    'System',
+    'String',
+    'Database',
+    'List',
+    'Set',
+    'Map',
+    'Math',
+    'Date',
+    'Datetime',
+    'Time',
+    'LoggingLevel',
+    'Exception',
+    'JSON',
+    'Schema',
+    'UserInfo',
+    'Test'
+
+];
+
+const dependencies =
+    [...new Set(
+
+        matches
+            .map(
+                item =>
+                    item.replace('.', '')
+            )
+            .filter(
+                item =>
+                    !systemClasses.includes(
+                        item
+                    )
+            )
+
+    )];
 
         console.log(
             'DEPENDENCIES FOUND:',
