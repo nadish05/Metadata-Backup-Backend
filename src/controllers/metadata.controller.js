@@ -32,6 +32,14 @@ exports.retrieveMetadataInternal = async (
                 }
             }
         );
+
+        console.log(
+    JSON.stringify(
+        tokenResponse.data,
+        null,
+        2
+    )
+);
  
         console.log('STEP 1 COMPLETE');
  
