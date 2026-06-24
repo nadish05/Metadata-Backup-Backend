@@ -48,11 +48,18 @@ exports.analyzeDependencies = async (req, res) => {
             );
 
         const content =
-            fileContent.stdout;
+    fileContent.stdout;
 
-        console.log('FILE CONTENT LENGTH:',
-            content.length
-        );
+const cleanedContent =
+    content.replace(
+        /'[^']*'/g,
+        ''
+    );
+
+console.log(
+    'FILE CONTENT LENGTH:',
+    content.length
+);
 
         const systemClasses = [
 
@@ -77,44 +84,90 @@ exports.analyzeDependencies = async (req, res) => {
 
 // Apex Class References
 const classRefs =
-    content.match(
+    cleanedContent.match(
         /\b[A-Z][A-Za-z0-9_]+\./g
     ) || [];
 
 // Custom Objects
 const customObjects =
-    content.match(
+    cleanedContent.match(
         /\b[A-Za-z0-9_]+__c\b/g
     ) || [];
 
 // Custom Metadata
 const customMetadata =
-    content.match(
+    cleanedContent.match(
         /\b[A-Za-z0-9_]+__mdt\b/g
     ) || [];
 
+const namedCredentialMatches =
+    cleanedContent.match(
+        /callout:([A-Za-z0-9_]+)/g
+    ) || [];
+
+const namedCredentials =
+    [...new Set(
+
+        namedCredentialMatches.map(
+            item =>
+                item.replace(
+                    'callout:',
+                    ''
+                )
+        )
+
+    )];
+
+const constructorMatches =
+    cleanedContent.match(
+        /new\s+([A-Z][A-Za-z0-9_]+)/g
+    ) || [];
+
+const constructorClasses =
+    constructorMatches.map(
+        item =>
+            item.replace(
+                'new ',
+                ''
+            )
+    );
+
+    const innerClassMatches =
+    cleanedContent.match(
+        /(public|private)\s+class\s+([A-Za-z0-9_]+)/g
+    ) || [];
+
+const innerClasses =
+    innerClassMatches.map(
+        item =>
+            item.split('class ')[1]
+    );
+
 // Flow References
 const flowRefs =
-    content.match(
+    cleanedContent.match(
         /Flow\.Interview\.([A-Za-z0-9_]+)/g
     ) || [];
 
 const classes =
-    [...new Set(
+    [...new Set([
 
-        classRefs
-            .map(
-                item =>
-                    item.replace('.', '')
-            )
-            .filter(
-                item =>
-                    !systemClasses.includes(
-                        item
-                    )
-            )
+        ...classRefs.map(
+            item =>
+                item.replace('.', '')
+        ),
 
-    )];
+        ...constructorClasses,
+
+        ...innerClasses
+
+    ])]
+    .filter(
+        item =>
+            !systemClasses.includes(
+                item
+            )
+    );
 
 const objects =
     [...new Set(customObjects)];
@@ -153,7 +206,7 @@ const dependencies = [
             `rm -rf ${repoPath}`
         );
 
-        return res.json({
+    return res.json({
 
     success: true,
 
@@ -163,12 +216,19 @@ const dependencies = [
 
     flows,
 
+    namedCredentials,
+
     customMetadata: metadata,
 
     dependencies,
 
     dependencyCount:
-        dependencies.length
+
+        objects.length +
+        classes.length +
+        flows.length +
+        metadata.length +
+        namedCredentials.length
 
 });
 
