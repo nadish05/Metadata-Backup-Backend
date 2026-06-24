@@ -54,11 +54,6 @@ exports.analyzeDependencies = async (req, res) => {
             content.length
         );
 
-        const matches =
-            content.match(
-                /\b([A-Z][A-Za-z0-9_]+)\./g
-            ) || [];
-
         const systemClasses = [
 
     'System',
@@ -80,10 +75,34 @@ exports.analyzeDependencies = async (req, res) => {
 
 ];
 
-const dependencies =
+// Apex Class References
+const classRefs =
+    content.match(
+        /\b[A-Z][A-Za-z0-9_]+\./g
+    ) || [];
+
+// Custom Objects
+const customObjects =
+    content.match(
+        /\b[A-Za-z0-9_]+__c\b/g
+    ) || [];
+
+// Custom Metadata
+const customMetadata =
+    content.match(
+        /\b[A-Za-z0-9_]+__mdt\b/g
+    ) || [];
+
+// Flow References
+const flowRefs =
+    content.match(
+        /Flow\.Interview\.([A-Za-z0-9_]+)/g
+    ) || [];
+
+const classes =
     [...new Set(
 
-        matches
+        classRefs
             .map(
                 item =>
                     item.replace('.', '')
@@ -97,6 +116,34 @@ const dependencies =
 
     )];
 
+const objects =
+    [...new Set(customObjects)];
+
+const metadata =
+    [...new Set(customMetadata)];
+
+const flows =
+    [...new Set(
+
+        flowRefs.map(
+            item =>
+                item.replace(
+                    'Flow.Interview.',
+                    ''
+                )
+        )
+
+    )];
+
+const dependencies = [
+
+    ...objects,
+    ...metadata,
+    ...classes,
+    ...flows
+
+];
+
         console.log(
             'DEPENDENCIES FOUND:',
             dependencies
@@ -108,14 +155,22 @@ const dependencies =
 
         return res.json({
 
-            success: true,
+    success: true,
 
-            dependencies,
+    objects,
 
-            dependencyCount:
-                dependencies.length
+    classes,
 
-        });
+    flows,
+
+    customMetadata: metadata,
+
+    dependencies,
+
+    dependencyCount:
+        dependencies.length
+
+});
 
     }
     catch (error) {
