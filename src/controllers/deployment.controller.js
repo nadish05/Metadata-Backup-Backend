@@ -72,19 +72,45 @@ console.log(
 
     'System',
     'String',
-    'Database',
-    'List',
-    'Set',
-    'Map',
-    'Math',
+    'Integer',
+    'Long',
+    'Boolean',
+    'Decimal',
+    'Double',
     'Date',
     'Datetime',
     'Time',
-    'LoggingLevel',
-    'Exception',
+
+    'List',
+    'Set',
+    'Map',
+
+    'Math',
+
     'JSON',
     'Schema',
+    'Database',
+
+    'Http',
+    'HttpRequest',
+    'HttpResponse',
+
+    'RestContext',
+    'RestRequest',
+    'RestResponse',
+
+    'XmlStreamReader',
+    'XmlStreamWriter',
+
+    'Blob',
+
+    'Exception',
+    'CalloutException',
+
     'UserInfo',
+
+    'LoggingLevel',
+
     'Test'
 
 ];
@@ -157,24 +183,27 @@ const flowRefs =
     ) || [];
 
 const classes =
-    [...new Set([
+    [...new Set(
 
-        ...classRefs.map(
-            item =>
-                item.replace('.', '')
-        ),
+        classRefs
 
-        ...constructorClasses,
-
-        ...innerClasses
-
-    ])]
-    .filter(
-        item =>
-            !systemClasses.includes(
-                item
+            .map(
+                item =>
+                    item.replace('.', '')
             )
-    );
+
+            .filter(
+                item =>
+
+                    !systemClasses.includes(item) &&
+
+                    !innerClasses.includes(item) &&
+
+                    item !== currentClass
+
+            )
+
+    )];
 
 const objects =
     [...new Set(customObjects)];

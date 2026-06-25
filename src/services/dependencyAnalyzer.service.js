@@ -1,6 +1,32 @@
 class DependencyAnalyzer {
 
     analyzeApexClass(content) {
+
+        const classNameMatch =
+            content.match(
+                /class\s+([A-Za-z0-9_]+)/
+            );
+
+        const currentClass =
+
+            classNameMatch
+                ? classNameMatch[1]
+                : null;
+                
+        const innerClassMatches =
+    [...content.matchAll(
+        /(private|public|global|protected)?\s*class\s+([A-Za-z0-9_]+)/g
+    )];
+
+const innerClasses =
+
+    innerClassMatches.map(
+        match => match[2]
+    );
+    
+
+
+
         return this.createEmptyResult();
     }
 
