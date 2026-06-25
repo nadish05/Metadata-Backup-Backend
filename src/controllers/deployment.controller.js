@@ -3,6 +3,8 @@ const { exec } = require('child_process');
 
 const execAsync = util.promisify(exec);
 
+const dependencyAnalyzer = require('../services/dependencyAnalyzer.service');
+
 exports.analyzeDependencies = async (req, res) => {
 
     try {
@@ -12,6 +14,11 @@ exports.analyzeDependencies = async (req, res) => {
             branch,
             filePath
         } = req.body;
+
+
+        const result = dependencyAnalyzer.analyzeApexClass('');
+
+        console.log('Dependency Analyzer Test:', result);
 
         console.log('================================');
         console.log('DEPENDENCY ANALYSIS STARTED');
