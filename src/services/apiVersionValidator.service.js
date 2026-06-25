@@ -1,4 +1,4 @@
-async function validateApiVersion(metadataType, filePath, workspace) {
+async function validateApiVersion(metadataType, filePath, repoUrl, branch) {
     return {
         supported: true,
         apiVersion: null

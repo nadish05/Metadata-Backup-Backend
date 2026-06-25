@@ -1,4 +1,3 @@
-const fs = require('fs').promises;
 const path = require('path');
 
 const SYSTEM_CLASSES = new Set([
@@ -188,15 +187,7 @@ function analyzeApexContent(content, currentClassName) {
     };
 }
 
-async function analyzeDependencies(metadataType, filePath, workspace) {
-    const absolutePath = path.resolve(workspace, filePath);
-    const content = await fs.readFile(absolutePath, 'utf8');
-    const currentClassName = getCurrentClassName(content, filePath);
-
-    return analyzeApexContent(content, currentClassName);
-}
-
 module.exports = {
-    analyzeDependencies,
-    analyzeApexContent
+    analyzeApexContent,
+    getCurrentClassName
 };
