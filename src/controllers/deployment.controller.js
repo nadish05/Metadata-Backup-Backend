@@ -16,9 +16,7 @@ exports.analyzeDependencies = async (req, res) => {
         } = req.body;
 
 
-        const result = dependencyAnalyzer.analyzeApexClass('');
-
-        console.log('Dependency Analyzer Test:', result);
+        
 
         console.log('================================');
         console.log('DEPENDENCY ANALYSIS STARTED');
@@ -62,6 +60,12 @@ const cleanedContent =
         /'[^']*'/g,
         ''
     );
+
+    const analysis =
+    dependencyAnalyzer
+        .analyzeApexClass(
+            cleanedContent
+        );
 
 console.log(
     'FILE CONTENT LENGTH:',
@@ -133,23 +137,7 @@ const customMetadata =
         /\b[A-Za-z0-9_]+__mdt\b/g
     ) || [];
 
-const namedCredentialMatches =
-    cleanedContent.match(
-        /callout:([A-Za-z0-9_]+)/g
-    ) || [];
 
-const namedCredentials =
-    [...new Set(
-
-        namedCredentialMatches.map(
-            item =>
-                item.replace(
-                    'callout:',
-                    ''
-                )
-        )
-
-    )];
 
 const constructorMatches =
     cleanedContent.match(
@@ -252,7 +240,8 @@ const dependencies = [
 
     flows,
 
-    namedCredentials,
+    namedCredentials:
+    analysis.namedCredentials,
 
     customMetadata: metadata,
 
@@ -264,7 +253,7 @@ const dependencies = [
         classes.length +
         flows.length +
         metadata.length +
-        namedCredentials.length
+        analysis.namedCredentials.length
 
 });
 

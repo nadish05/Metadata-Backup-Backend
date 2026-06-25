@@ -2,33 +2,30 @@ class DependencyAnalyzer {
 
     analyzeApexClass(content) {
 
-        const classNameMatch =
-            content.match(
-                /class\s+([A-Za-z0-9_]+)/
-            );
+    const result =
+        this.createEmptyResult();
 
-        const currentClass =
+    const namedCredentialMatches =
+        content.match(
+            /callout:([A-Za-z0-9_]+)/g
+        ) || [];
 
-            classNameMatch
-                ? classNameMatch[1]
-                : null;
-                
-        const innerClassMatches =
-    [...content.matchAll(
-        /(private|public|global|protected)?\s*class\s+([A-Za-z0-9_]+)/g
-    )];
+    result.namedCredentials =
+        [...new Set(
 
-const innerClasses =
+            namedCredentialMatches.map(
+                item =>
+                    item.replace(
+                        'callout:',
+                        ''
+                    )
+            )
 
-    innerClassMatches.map(
-        match => match[2]
-    );
-    
+        )];
 
+    return result;
 
-
-        return this.createEmptyResult();
-    }
+}
 
     analyzeTrigger(content) {
         return this.createEmptyResult();
@@ -47,7 +44,9 @@ const innerClasses =
     }
 
     createEmptyResult() {
+
         return {
+
             customObjects: [],
             customFields: [],
             apexClasses: [],
@@ -61,8 +60,11 @@ const innerClasses =
             recordTypes: [],
             validationRules: [],
             pageLayouts: []
+
         };
+
     }
+
 }
 
 module.exports = new DependencyAnalyzer();
