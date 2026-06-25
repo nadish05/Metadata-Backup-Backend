@@ -35,7 +35,18 @@ async function withClonedRepository({ repoUrl, branch }, callback) {
             return fileContent.stdout;
         };
 
-        return await callback(readRepoFile);
+        const listRepoFiles = async () => {
+            const result = await execAsync(
+                `cd ${repoPath} && git ls-tree -r --name-only origin/${branch}`
+            );
+
+            return result.stdout
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean);
+        };
+
+        return await callback(readRepoFile, listRepoFiles);
     } finally {
         await execAsync(
             `rm -rf ${repoPath}`
@@ -44,7 +55,7 @@ async function withClonedRepository({ repoUrl, branch }, callback) {
 }
 
 async function runDeploymentReview({ metadataType, repoUrl, branch, filePath }) {
-    return withClonedRepository({ repoUrl, branch }, async (readRepoFile) => {
+    return withClonedRepository({ repoUrl, branch }, async (readRepoFile, listRepoFiles) => {
         const content = await readRepoFile(filePath);
 
         const currentClassName = dependencyAnalyzer.getCurrentClassName(
@@ -66,8 +77,8 @@ async function runDeploymentReview({ metadataType, repoUrl, branch, filePath }) 
         const testValidation = await testClassValidator.findTestClasses(
             metadataType,
             filePath,
-            repoUrl,
-            branch
+            readRepoFile,
+            listRepoFiles
         );
 
         const coverageValidation = await coverageValidator.validateCoverage(
