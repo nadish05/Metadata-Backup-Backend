@@ -28,6 +28,11 @@ const deploymentRoutes =
         './routes/deployment.routes'
     );
 
+const deploymentReviewRoutes =
+    require(
+        './routes/deploymentReview.routes'
+    );
+
 
 
 
@@ -45,6 +50,7 @@ app.use('/api/github',githubRoutes);
 app.use('/api/compare',compareRoutes);
 app.use('/api/ai',aiRoutes);
 app.use('/api/deployment',deploymentRoutes);
+app.use('/api/deployment', deploymentReviewRoutes);
 
 const PORT = process.env.PORT || 3000;
 
