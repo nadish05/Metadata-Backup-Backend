@@ -54,7 +54,13 @@ async function withClonedRepository({ repoUrl, branch }, callback) {
     }
 }
 
-async function runDeploymentReview({ metadataType, repoUrl, branch, filePath }) {
+async function runDeploymentReview({
+    metadataType,
+    repoUrl,
+    branch,
+    filePath,
+    destinationOrgId
+}) {
     return withClonedRepository({ repoUrl, branch }, async (readRepoFile, listRepoFiles) => {
         const content = await readRepoFile(filePath);
 
@@ -84,8 +90,8 @@ async function runDeploymentReview({ metadataType, repoUrl, branch, filePath }) 
         const coverageValidation = await coverageValidator.validateCoverage(
             metadataType,
             filePath,
-            repoUrl,
-            branch
+            destinationOrgId,
+            testValidation
         );
 
         const deploymentReadiness = await readinessCalculator.calculateReadiness({
