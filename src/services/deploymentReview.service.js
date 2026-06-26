@@ -4,10 +4,15 @@ const { exec } = require('child_process');
 const execAsync = util.promisify(exec);
 
 const dependencyAnalyzer = require('./deploymentReview/dependencyAnalyzer.service');
+const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
-const coverageValidator = require('./coverageValidator.service');
 const readinessCalculator = require('./readinessCalculator.service');
+
+const COVERAGE_PLACEHOLDER = {
+    coverage: 0,
+    passed: false
+};
 
 async function withClonedRepository({ repoUrl, branch }, callback) {
     const githubToken = process.env.GITHUB_TOKEN;
@@ -58,8 +63,7 @@ async function runDeploymentReview({
     metadataType,
     repoUrl,
     branch,
-    filePath,
-    destinationOrgId
+    filePath
 }) {
     return withClonedRepository({ repoUrl, branch }, async (readRepoFile, listRepoFiles) => {
         const content = await readRepoFile(filePath);
@@ -69,7 +73,7 @@ async function runDeploymentReview({
             filePath
         );
 
-        const dependencyAnalysis = dependencyAnalyzer.analyzeApexContent(
+        const rawDependencyAnalysis = dependencyAnalyzer.analyzeApexContent(
             content,
             currentClassName
         );
@@ -87,12 +91,12 @@ async function runDeploymentReview({
             listRepoFiles
         );
 
-        const coverageValidation = await coverageValidator.validateCoverage(
-            metadataType,
-            filePath,
-            destinationOrgId,
+        const dependencyAnalysis = dependencySelection.buildDependencySelection(
+            rawDependencyAnalysis,
             testValidation
         );
+
+        const coverageValidation = COVERAGE_PLACEHOLDER;
 
         const deploymentReadiness = await readinessCalculator.calculateReadiness({
             dependencyAnalysis,
