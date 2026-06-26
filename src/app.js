@@ -33,6 +33,11 @@ const deploymentReviewRoutes =
         './routes/deploymentReview.routes'
     );
 
+const sourceValidateRoutes =
+    require(
+        './routes/sourceValidate.routes'
+    );
+
 
 
 
@@ -51,6 +56,7 @@ app.use('/api/compare',compareRoutes);
 app.use('/api/ai',aiRoutes);
 app.use('/api/deployment',deploymentRoutes);
 app.use('/api/deployment', deploymentReviewRoutes);
+app.use('/api/deployment', sourceValidateRoutes);
 
 const PORT = process.env.PORT || 3000;
 
