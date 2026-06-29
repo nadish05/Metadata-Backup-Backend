@@ -59,6 +59,7 @@ async function runApexTests(testClassNames, alias) {
     const command =
         `sf apex run test ` +
         `--tests "${testsArg}" ` +
+        `--code-coverage ` +
         `--result-format json ` +
         `--target-org ${alias} ` +
         `--wait 10 ` +
@@ -159,7 +160,8 @@ async function executeTestsWithResults(testClassNames, alias) {
             results: [],
             overallStatus: 'PASS',
             testRunId: null,
-            executionTime: null
+            executionTime: null,
+            testResult: null
         };
     }
 
@@ -176,7 +178,8 @@ async function executeTestsWithResults(testClassNames, alias) {
         results,
         overallStatus,
         testRunId,
-        executionTime
+        executionTime,
+        testResult
     };
 }
 
