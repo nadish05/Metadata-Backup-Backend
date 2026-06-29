@@ -2,15 +2,9 @@ const deploymentReviewService = require('../services/deploymentReview.service');
 
 exports.reviewDeployment = async (req, res) => {
     try {
-        const { metadataType, repoUrl, branch, filePath, destinationOrgId } = req.body;
-
-        const result = await deploymentReviewService.runDeploymentReview({
-            metadataType,
-            repoUrl,
-            branch,
-            filePath,
-            destinationOrgId
-        });
+        const result = await deploymentReviewService.runDeploymentReview(
+            req.body
+        );
 
         return res.json(result);
     } catch (error) {
