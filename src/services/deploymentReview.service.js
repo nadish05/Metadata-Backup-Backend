@@ -43,7 +43,7 @@ function normalizeDeploymentPackage(payload) {
         return {
             comparisonId: null,
             repoUrl: payload.repoUrl,
-            sourceBranch: null,
+            sourceBranch: payload.sourceBranch || payload.branch,
             destinationBranch: payload.destinationBranch || payload.branch,
             selectedMetadata: [
                 {
@@ -57,7 +57,7 @@ function normalizeDeploymentPackage(payload) {
     return {
         comparisonId: payload.comparisonId || null,
         repoUrl: payload.repoUrl,
-        sourceBranch: payload.sourceBranch || null,
+        sourceBranch: payload.sourceBranch || payload.branch || null,
         destinationBranch: payload.destinationBranch || payload.branch,
         selectedMetadata: []
     };
@@ -199,10 +199,10 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
 
 async function runDeploymentReview(payload) {
     const deploymentPackage = normalizeDeploymentPackage(payload);
-    const { repoUrl, destinationBranch, selectedMetadata } = deploymentPackage;
+    const { repoUrl, sourceBranch, selectedMetadata } = deploymentPackage;
 
-    if (!repoUrl || !destinationBranch) {
-        throw new Error('repoUrl and destinationBranch are required');
+    if (!repoUrl || !sourceBranch) {
+        throw new Error('repoUrl and sourceBranch are required');
     }
 
     if (!selectedMetadata.length) {
@@ -226,7 +226,7 @@ async function runDeploymentReview(payload) {
     }
 
     return withClonedRepository(
-        { repoUrl, branch: destinationBranch },
+        { repoUrl, branch: sourceBranch },
         async (readRepoFile, listRepoFiles) => {
             const deploymentReview = [];
 
