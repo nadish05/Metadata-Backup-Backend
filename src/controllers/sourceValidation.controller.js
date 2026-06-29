@@ -2,10 +2,17 @@ const sourceValidationService = require('../services/sourceValidation.service');
 
 exports.runSourceValidation = async (req, res) => {
     try {
-        const { connectedOrgId, deploymentPackage } = req.body;
+        const {
+            refreshToken,
+            instanceUrl,
+            orgId,
+            deploymentPackage
+        } = req.body;
 
         const result = await sourceValidationService.runSourceValidation({
-            connectedOrgId,
+            refreshToken,
+            instanceUrl,
+            orgId,
             deploymentPackage
         });
 

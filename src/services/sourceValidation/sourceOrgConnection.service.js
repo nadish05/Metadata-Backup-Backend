@@ -2,34 +2,7 @@ const axios = require('axios');
 const util = require('util');
 const { exec } = require('child_process');
 
-const { getOAuthResult } = require('../oauthStore');
-
 const execAsync = util.promisify(exec);
-
-function orgIdsMatch(storedOrgId, requestedOrgId) {
-    if (!storedOrgId || !requestedOrgId) {
-        return false;
-    }
-
-    return (
-        storedOrgId.substring(0, 15) ===
-        requestedOrgId.substring(0, 15)
-    );
-}
-
-function getConnectedOrgCredentials(connectedOrgId) {
-    const org = getOAuthResult();
-
-    if (
-        !org?.refreshToken ||
-        !org?.instanceUrl ||
-        !orgIdsMatch(org.orgId, connectedOrgId)
-    ) {
-        throw new Error('Connected org credentials not found');
-    }
-
-    return org;
-}
 
 async function refreshAccessToken(refreshToken) {
     const tokenResponse = await axios.post(
@@ -59,15 +32,18 @@ async function loginSfOrg(accessToken, instanceUrl, alias) {
     await execAsync(loginCommand);
 }
 
-async function connectToSourceOrg(connectedOrgId) {
-    const org = getConnectedOrgCredentials(connectedOrgId);
+async function connectToSourceOrg({ refreshToken, instanceUrl }) {
+    if (!refreshToken || !instanceUrl) {
+        throw new Error('Missing org credentials');
+    }
+
     const alias = `source-validation-${Date.now()}`;
 
-    const accessToken = await refreshAccessToken(org.refreshToken);
+    const accessToken = await refreshAccessToken(refreshToken);
 
     await loginSfOrg(
         accessToken,
-        org.instanceUrl,
+        instanceUrl,
         alias
     );
 

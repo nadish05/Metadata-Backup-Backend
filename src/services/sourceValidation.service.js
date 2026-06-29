@@ -22,11 +22,17 @@ function resolveSelectedTestClassNames(deploymentPackage) {
         .filter(Boolean);
 }
 
-async function runSourceValidation({ connectedOrgId, deploymentPackage }) {
+async function runSourceValidation({
+    refreshToken,
+    instanceUrl,
+    orgId,
+    deploymentPackage
+}) {
     const testClassNames = resolveSelectedTestClassNames(deploymentPackage);
-    const alias = await sourceOrgConnection.connectToSourceOrg(
-        connectedOrgId
-    );
+    const alias = await sourceOrgConnection.connectToSourceOrg({
+        refreshToken,
+        instanceUrl
+    });
 
     const executionResult = await testRunner.executeTestsWithResults(
         testClassNames,
