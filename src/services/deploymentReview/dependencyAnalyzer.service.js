@@ -87,34 +87,106 @@ function isSalesforceMetadataToken(name) {
     return name.endsWith('__c') || name.endsWith('__mdt');
 }
 
-function analyzeApexContent(content, currentClassName) {
-    const cleanedContent = stripLiteralsAndComments(content);
-    const innerClasses = getInnerClassNames(content);
+function isRelationshipReferenceToken(name) {
+    return name.endsWith('__r');
+}
 
-    const customFieldMatches =
+function extractObjectContextNames(cleanedContent) {
+    const objectNames = new Set();
+
+    const objectPatterns = [
+        /\bnew\s+([A-Za-z0-9_]+__c)\b/g,
+        /\bFROM\s+([A-Za-z0-9_]+__c)\b/gi,
+        /\bList<\s*([A-Za-z0-9_]+__c)\s*>/g,
+        /\bSet<\s*([A-Za-z0-9_]+__c)\s*>/g,
+        /\bSchema\.SObjectType\.([A-Za-z0-9_]+__c)\b/g,
+        /\b([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\b/g
+    ];
+
+    objectPatterns.forEach((pattern) => {
+        const matches = cleanedContent.matchAll(pattern);
+
+        for (const match of matches) {
+            objectNames.add(match[1]);
+        }
+    });
+
+    const dottedFieldRefs =
         cleanedContent.match(
             /\b([A-Za-z0-9_]+__c)\.([A-Za-z0-9_]+__c)\b/g
         ) || [];
 
-    const fieldOnlyNames = new Set(
-        customFieldMatches.map((fieldRef) => fieldRef.split('.')[1])
+    dottedFieldRefs.forEach((fieldRef) => {
+        objectNames.add(fieldRef.split('.')[0]);
+    });
+
+    return objectNames;
+}
+
+function classifyCustomObjectsAndFields(cleanedContent) {
+    const allTokens = uniqueSorted(
+        cleanedContent.match(/\b[A-Za-z0-9_]+__c\b/g) || []
     );
 
-    const customObjects = (
+    const dottedFieldRefs =
         cleanedContent.match(
-            /\b[A-Za-z0-9_]+__c\b/g
-        ) || []
-    ).filter((name) => !fieldOnlyNames.has(name));
+            /\b([A-Za-z0-9_]+__c)\.([A-Za-z0-9_]+__c)\b/g
+        ) || [];
+
+    const customFields = new Set(dottedFieldRefs);
+
+    dottedFieldRefs.forEach((fieldRef) => {
+        customFields.add(fieldRef.split('.')[1]);
+    });
+
+    const dotFieldNames = (
+        cleanedContent.match(/\.([A-Za-z0-9_]+__c)\b/g) || []
+    ).map((match) => match.slice(1));
+
+    dotFieldNames.forEach((name) => customFields.add(name));
+
+    const objectNames = extractObjectContextNames(cleanedContent);
+    const customObjects = [];
+
+    allTokens.forEach((token) => {
+        if (objectNames.has(token)) {
+            customObjects.push(token);
+            return;
+        }
+
+        customFields.add(token);
+    });
+
+    return {
+        customObjects: uniqueSorted(customObjects),
+        customFields: uniqueSorted([...customFields])
+    };
+}
+
+function classifyRelationshipReferences(cleanedContent) {
+    return uniqueSorted(
+        cleanedContent.match(/\b[A-Za-z0-9_]+__r\b/g) || []
+    );
+}
+
+function analyzeApexContent(content, currentClassName) {
+    const cleanedContent = stripLiteralsAndComments(content);
+    const innerClasses = getInnerClassNames(content);
+
+    const { customObjects, customFields } =
+        classifyCustomObjectsAndFields(cleanedContent);
+
+    const relationshipReferences =
+        classifyRelationshipReferences(cleanedContent);
 
     const customMetadata =
         cleanedContent.match(
             /\b[A-Za-z0-9_]+__mdt\b/g
         ) || [];
 
-    const contentForClassRefs = cleanedContent.replace(
-        /\bFlow\.Interview\.[A-Za-z0-9_]+\b/g,
-        ''
-    );
+    const contentForClassRefs = cleanedContent
+        .replace(/\bFlow\.Interview\.[A-Za-z0-9_]+\b/g, '')
+        .replace(/\b[A-Za-z0-9_]+__r\./g, '');
 
     const classRefs =
         contentForClassRefs.match(
@@ -160,12 +232,14 @@ function analyzeApexContent(content, currentClassName) {
     ].filter(
         (name) =>
             !excludedClasses.has(name) &&
-            !isSalesforceMetadataToken(name)
+            !isSalesforceMetadataToken(name) &&
+            !isRelationshipReferenceToken(name)
     ));
 
     return {
-        customObjects: uniqueSorted(customObjects),
-        customFields: uniqueSorted(customFieldMatches),
+        customObjects,
+        customFields,
+        relationshipReferences,
         apexClasses,
         triggers: uniqueSorted(triggerRefs),
         flows: uniqueSorted(

@@ -29,6 +29,9 @@ function buildDependencySelection(rawAnalysis, testValidation) {
         ...rawAnalysis.customFields.map((name) =>
             createRequiredDependency(name, 'CustomField')
         ),
+        ...(rawAnalysis.relationshipReferences || []).map((name) =>
+            createRequiredDependency(name, 'RelationshipReference')
+        ),
         ...rawAnalysis.namedCredentials.map((name) =>
             createRequiredDependency(name, 'NamedCredential')
         ),
