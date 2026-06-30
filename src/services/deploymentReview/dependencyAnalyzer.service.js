@@ -96,11 +96,15 @@ function extractObjectContextNames(cleanedContent) {
 
     const objectPatterns = [
         /\bnew\s+([A-Za-z0-9_]+__c)\b/g,
-        /\bFROM\s+([A-Za-z0-9_]+__c)\b/gi,
+        /\b(?:FROM|UPDATE|INSERT|DELETE|UPSERT|MERGE|UNDELETE)\s+([A-Za-z0-9_]+__c)\b/gi,
         /\bList<\s*([A-Za-z0-9_]+__c)\s*>/g,
         /\bSet<\s*([A-Za-z0-9_]+__c)\s*>/g,
+        /\bMap<\s*[^,>]+\s*,\s*([A-Za-z0-9_]+__c)\s*>/g,
         /\bSchema\.SObjectType\.([A-Za-z0-9_]+__c)\b/g,
-        /\b([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\b/g
+        /\b([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\b/g,
+        /\bfor\s*\(\s*([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\s*:/gi,
+        /\(\s*([A-Za-z0-9_]+__c)\s*\)/g,
+        /\b([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\s*\(/g
     ];
 
     objectPatterns.forEach((pattern) => {
@@ -119,6 +123,14 @@ function extractObjectContextNames(cleanedContent) {
     dottedFieldRefs.forEach((fieldRef) => {
         objectNames.add(fieldRef.split('.')[0]);
     });
+
+    const objectPropertyAccess = cleanedContent.matchAll(
+        /\b([A-Za-z0-9_]+__c)\.[A-Za-z0-9_]+/g
+    );
+
+    for (const match of objectPropertyAccess) {
+        objectNames.add(match[1]);
+    }
 
     return objectNames;
 }
