@@ -1,5 +1,7 @@
 const axios = require('axios');
 
+const metadataValidationService = require('./metadataValidation.service');
+
 function logSection(title) {
     console.log('------------------------------------');
     console.log(title);
@@ -147,6 +149,34 @@ async function validateDestinationConnectivity({
     }
 }
 
+async function validateDeployment({
+    refreshToken,
+    instanceUrl,
+    orgId,
+    deploymentPackage
+}) {
+    const connectivityResult = await validateDestinationConnectivity({
+        refreshToken,
+        instanceUrl,
+        orgId
+    });
+
+    if (!deploymentPackage) {
+        return connectivityResult;
+    }
+
+    const metadataValidation =
+        await metadataValidationService.validateMetadataPackage(
+            deploymentPackage
+        );
+
+    return {
+        ...connectivityResult,
+        metadataValidation
+    };
+}
+
 module.exports = {
-    validateDestinationConnectivity
+    validateDestinationConnectivity,
+    validateDeployment
 };

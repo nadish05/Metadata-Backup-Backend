@@ -290,14 +290,16 @@ exports.validateDeployment = async (req, res) => {
         const {
             refreshToken,
             instanceUrl,
-            orgId
+            orgId,
+            deploymentPackage
         } = req.body;
 
         const result =
-            await deploymentValidationService.validateDestinationConnectivity({
+            await deploymentValidationService.validateDeployment({
                 refreshToken,
                 instanceUrl,
-                orgId
+                orgId,
+                deploymentPackage
             });
 
         return res.json(result);
