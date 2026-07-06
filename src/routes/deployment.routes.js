@@ -14,5 +14,10 @@ router.post(
     deploymentController.analyzeDependencies
 );
 
+router.post(
+    '/validate',
+    deploymentController.validateDeployment
+);
+
 module.exports =
     router;

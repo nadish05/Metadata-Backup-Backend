@@ -280,3 +280,44 @@ const dependencies = [
     }
 
 };
+
+const deploymentValidationService = require('../services/deploymentValidation.service');
+
+exports.validateDeployment = async (req, res) => {
+
+    try {
+
+        const {
+            refreshToken,
+            instanceUrl,
+            orgId
+        } = req.body;
+
+        const result =
+            await deploymentValidationService.validateDestinationConnectivity({
+                refreshToken,
+                instanceUrl,
+                orgId
+            });
+
+        return res.json(result);
+
+    } catch (error) {
+
+        console.error('DEPLOYMENT VALIDATION ERROR');
+        console.error(error);
+
+        return res.status(500).json({
+            success: false,
+            deploymentValidation: {
+                destinationConnected: false,
+                status: 'BLOCKED',
+                message:
+                    error.message ||
+                    'Unable to authenticate with destination org.'
+            }
+        });
+
+    }
+
+};
