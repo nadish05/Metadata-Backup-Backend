@@ -52,31 +52,42 @@ function stripLiteralsAndComments(content) {
 
 function getCurrentClassName(content, filePath) {
     const classMatch = content.match(
-        /\b(?:public|global|private|with\s+sharing|without\s+sharing|inherited\s+sharing)\s+(?:virtual\s+|abstract\s+)?class\s+([A-Za-z0-9_]+)/
+        /\b(?:(?:public|global|private)\s+(?:(?:with|without|inherited)\s+sharing\s+)?|(?:(?:with|without|inherited)\s+sharing\s+))(?:virtual\s+|abstract\s+)?class\s+([A-Za-z0-9_]+)/
     );
 
     if (classMatch) {
         return classMatch[1];
     }
 
-    const baseName = path.basename(filePath, path.extname(filePath));
-    return baseName || null;
+    if (filePath) {
+        const baseName = path.basename(filePath, path.extname(filePath));
+
+        if (baseName) {
+            return baseName;
+        }
+    }
+
+    return null;
 }
 
-function getInnerClassNames(content) {
-    const matches = content.match(
-        /\b(?:public|private|protected)\s+class\s+([A-Za-z0-9_]+)/g
-    ) || [];
+function getInternalTypeDeclarations(content) {
+    const declarations = new Set();
 
-    const outerClassMatch = content.match(
-        /\b(?:public|global)\s+(?:virtual\s+|abstract\s+)?class\s+([A-Za-z0-9_]+)/
-    );
+    const declarationPatterns = [
+        /\b(?:(?:public|global|private|protected)\s+(?:(?:with|without|inherited)\s+sharing\s+)?(?:(?:virtual|abstract)\s+)*|(?:(?:with|without|inherited)\s+sharing\s+)(?:(?:virtual|abstract)\s+)*)class\s+([A-Za-z0-9_]+)/gi,
+        /\b(?:public|global|private|protected)\s+interface\s+([A-Za-z0-9_]+)/gi,
+        /\b(?:public|global|private|protected)\s+enum\s+([A-Za-z0-9_]+)/gi
+    ];
 
-    const outerClassName = outerClassMatch ? outerClassMatch[1] : null;
+    declarationPatterns.forEach((pattern) => {
+        const matches = content.matchAll(pattern);
 
-    return matches
-        .map((match) => match.replace(/.*class\s+/, ''))
-        .filter((name) => name !== outerClassName);
+        for (const match of matches) {
+            declarations.add(match[1]);
+        }
+    });
+
+    return [...declarations];
 }
 
 function uniqueSorted(values) {
@@ -183,7 +194,12 @@ function classifyRelationshipReferences(cleanedContent) {
 
 function analyzeApexContent(content, currentClassName) {
     const cleanedContent = stripLiteralsAndComments(content);
-    const innerClasses = getInnerClassNames(content);
+    const internalDeclarations = getInternalTypeDeclarations(content);
+    const outerClassName = currentClassName || getCurrentClassName(content);
+
+    const internalTypesToExclude = new Set(
+        internalDeclarations.filter((name) => name !== outerClassName)
+    );
 
     const { customObjects, customFields } =
         classifyCustomObjectsAndFields(cleanedContent);
@@ -232,8 +248,8 @@ function analyzeApexContent(content, currentClassName) {
 
     const excludedClasses = new Set([
         ...SYSTEM_CLASSES,
-        ...innerClasses,
-        ...(currentClassName ? [currentClassName] : [])
+        ...internalTypesToExclude,
+        ...(outerClassName ? [outerClassName] : [])
     ]);
 
     const apexClasses = uniqueSorted([
