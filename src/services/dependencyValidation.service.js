@@ -42,20 +42,38 @@ function escapeSoql(value) {
     return String(value).replace(/'/g, "\\'");
 }
 
-function buildExcludedDependencyKeys(selectedMetadata) {
-    const excluded = new Set();
+const PACKAGE_PASS_RESOLUTION =
+    'Will be deployed as part of this deployment package.';
+const PACKAGE_BLOCKED_RESOLUTION =
+    'Add this dependency to the deployment package.';
+
+function normalizeDependencyKey(type, name) {
+    return `${type}:${String(name).toLowerCase()}`;
+}
+
+function buildPackageMetadataKeys(selectedMetadata) {
+    const keys = new Set();
 
     if (!Array.isArray(selectedMetadata)) {
-        return excluded;
+        return keys;
     }
 
     for (const item of selectedMetadata) {
-        if (item?.metadataName && item?.metadataType) {
-            excluded.add(`${item.metadataType}:${item.metadataName}`);
+        if (item?.metadataType && item?.metadataName) {
+            keys.add(
+                normalizeDependencyKey(
+                    item.metadataType,
+                    item.metadataName
+                )
+            );
         }
     }
 
-    return excluded;
+    return keys;
+}
+
+function isIncludedInDeploymentPackage(type, name, packageMetadataKeys) {
+    return packageMetadataKeys.has(normalizeDependencyKey(type, name));
 }
 
 async function getLatestApiVersion(instanceUrl, accessToken) {
@@ -236,22 +254,36 @@ async function validateSingleDependency(
     dependency,
     instanceUrl,
     accessToken,
-    apiVersion
+    apiVersion,
+    packageMetadataKeys
 ) {
     const { name, type } = dependency;
+    const includedInDeploymentPackage = isIncludedInDeploymentPackage(
+        type,
+        name,
+        packageMetadataKeys
+    );
 
     if (!SUPPORTED_DEPENDENCY_TYPES.has(type)) {
-        const status = 'WARNING';
+        const status = includedInDeploymentPackage ? 'PASS' : 'WARNING';
 
         logDependencyCheck(name, type, status);
 
-        return {
+        const result = {
             name,
             type,
-            exists: false,
-            status,
-            message: `${type} validation is not supported.`
+            existsInDestination: false,
+            includedInDeploymentPackage,
+            status
         };
+
+        if (includedInDeploymentPackage) {
+            result.resolution = PACKAGE_PASS_RESOLUTION;
+        } else {
+            result.message = `${type} validation is not supported.`;
+        }
+
+        return result;
     }
 
     try {
@@ -263,16 +295,38 @@ async function validateSingleDependency(
             apiVersion
         );
 
-        logDependencyCheck(name, type, validationResult.status);
+        const existsInDestination = validationResult.exists;
+        let status;
+
+        if (existsInDestination) {
+            status = 'PASS';
+        } else if (includedInDeploymentPackage) {
+            status = 'PASS';
+        } else if (validationResult.status === 'WARNING') {
+            status = 'WARNING';
+        } else {
+            status = 'BLOCKED';
+        }
+
+        logDependencyCheck(name, type, status);
 
         const result = {
             name,
             type,
-            exists: validationResult.exists,
-            status: validationResult.status
+            existsInDestination,
+            includedInDeploymentPackage,
+            status
         };
 
-        if (validationResult.message) {
+        if (status === 'PASS' && includedInDeploymentPackage && !existsInDestination) {
+            result.resolution = PACKAGE_PASS_RESOLUTION;
+        } else if (status === 'BLOCKED') {
+            result.resolution = PACKAGE_BLOCKED_RESOLUTION;
+            result.message =
+                validationResult.message ||
+                BLOCKED_MESSAGES[type] ||
+                `${type} not found in destination org.`;
+        } else if (validationResult.message && status === 'WARNING') {
             result.message = validationResult.message;
         }
 
@@ -281,6 +335,19 @@ async function validateSingleDependency(
         console.error(`Dependency validation error for ${type}:${name}`);
         console.error(error.response?.data || error.message);
 
+        if (includedInDeploymentPackage) {
+            logDependencyCheck(name, type, 'PASS');
+
+            return {
+                name,
+                type,
+                existsInDestination: false,
+                includedInDeploymentPackage: true,
+                status: 'PASS',
+                resolution: PACKAGE_PASS_RESOLUTION
+            };
+        }
+
         const status = 'WARNING';
 
         logDependencyCheck(name, type, status);
@@ -288,7 +355,8 @@ async function validateSingleDependency(
         return {
             name,
             type,
-            exists: false,
+            existsInDestination: false,
+            includedInDeploymentPackage: false,
             status,
             message:
                 error.response?.data?.[0]?.message ||
@@ -345,14 +413,11 @@ async function validateDependencies({
         };
     }
 
-    const excludedKeys = buildExcludedDependencyKeys(
+    const packageMetadataKeys = buildPackageMetadataKeys(
         deploymentPackage?.selectedMetadata
     );
 
-    const dependenciesToValidate = requiredDependencies.filter(
-        (dependency) =>
-            !excludedKeys.has(`${dependency.type}:${dependency.name}`)
-    );
+    const dependenciesToValidate = requiredDependencies;
 
     if (!dependenciesToValidate.length) {
         logSection('Dependency Validation Complete');
@@ -371,7 +436,8 @@ async function validateDependencies({
             dependency,
             instanceUrl,
             accessToken,
-            apiVersion
+            apiVersion,
+            packageMetadataKeys
         );
 
         results.push(result);
