@@ -2,6 +2,7 @@ const axios = require('axios');
 
 const metadataValidationService = require('./metadataValidation.service');
 const dependencyValidationService = require('./dependencyValidation.service');
+const deploymentReadinessService = require('./deploymentReadiness.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -206,10 +207,18 @@ async function validateDeployment({
         };
     }
 
+    const deploymentReadiness =
+        deploymentReadinessService.evaluateDeploymentReadiness({
+            deploymentValidation: connectivityResult.deploymentValidation,
+            metadataValidation,
+            dependencyValidation
+        });
+
     return {
         ...connectivityResult,
         metadataValidation,
-        dependencyValidation
+        dependencyValidation,
+        deploymentReadiness
     };
 }
 
