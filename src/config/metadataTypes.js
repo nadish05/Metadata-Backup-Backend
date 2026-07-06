@@ -46,6 +46,14 @@ const METADATA_TYPE_RULES = {
     CustomField: {
         extension: '.field-meta.xml',
         requiresMetaXml: false
+    },
+    NamedCredential: {
+        extension: '.namedCredential-meta.xml',
+        requiresMetaXml: false
+    },
+    CustomMetadata: {
+        extension: '.md-meta.xml',
+        requiresMetaXml: false
     }
 };
 
