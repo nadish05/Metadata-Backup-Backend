@@ -136,7 +136,10 @@ const metadataTypes = [
  'EscalationRules',
  'PermissionSet',
  'CustomPermission',
- 'Profile'
+ 'Profile',
+ 'NamedCredential',
+ 'CustomLabel',
+ 'CustomMetadata'
 ];
 
 const metadataArgs =
@@ -359,7 +362,10 @@ console.log('Retrieving metadata...');
 const metadataTypes = [
   'ApexClass',
   'ApexTrigger',
-  'CustomObject'
+  'CustomObject',
+  'NamedCredential',
+  'CustomLabel',
+  'CustomMetadata'
 ];
 
 const metadataArgs =
