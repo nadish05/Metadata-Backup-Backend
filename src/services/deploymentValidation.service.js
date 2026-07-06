@@ -1,6 +1,7 @@
 const axios = require('axios');
 
 const metadataValidationService = require('./metadataValidation.service');
+const dependencyValidationService = require('./dependencyValidation.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -170,9 +171,45 @@ async function validateDeployment({
             deploymentPackage
         );
 
+    let dependencyValidation;
+
+    if (connectivityResult.deploymentValidation?.destinationConnected) {
+        try {
+            const tokenResult = await refreshAccessToken(refreshToken);
+            const resolvedInstanceUrl =
+                tokenResult.instanceUrl || instanceUrl;
+
+            dependencyValidation =
+                await dependencyValidationService.validateDependencies({
+                    accessToken: tokenResult.accessToken,
+                    instanceUrl: resolvedInstanceUrl,
+                    deploymentPackage
+                });
+        } catch (error) {
+            console.error('DEPENDENCY VALIDATION ERROR');
+            console.error(error);
+
+            dependencyValidation = {
+                overallStatus: 'BLOCKED',
+                results: [],
+                message:
+                    error.message ||
+                    'Unable to validate dependencies in destination org.'
+            };
+        }
+    } else {
+        dependencyValidation = {
+            overallStatus: 'BLOCKED',
+            results: [],
+            message:
+                'Destination org not connected. Dependency validation skipped.'
+        };
+    }
+
     return {
         ...connectivityResult,
-        metadataValidation
+        metadataValidation,
+        dependencyValidation
     };
 }
 
