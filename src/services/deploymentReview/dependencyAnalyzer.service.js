@@ -90,6 +90,10 @@ function getInternalTypeDeclarations(content) {
     return [...declarations];
 }
 
+function normalizeApexIdentifier(name) {
+    return name ? name.toLowerCase() : '';
+}
+
 function uniqueSorted(values) {
     return [...new Set(values)].sort();
 }
@@ -196,9 +200,11 @@ function analyzeApexContent(content, currentClassName) {
     const cleanedContent = stripLiteralsAndComments(content);
     const internalDeclarations = getInternalTypeDeclarations(content);
     const outerClassName = currentClassName || getCurrentClassName(content);
+    const normalizedOuterClassName = normalizeApexIdentifier(outerClassName);
 
-    const internalTypesToExclude = new Set(
-        internalDeclarations.filter((name) => name !== outerClassName)
+    const internalTypesToExclude = internalDeclarations.filter(
+        (name) =>
+            normalizeApexIdentifier(name) !== normalizedOuterClassName
     );
 
     const { customObjects, customFields } =
@@ -247,9 +253,9 @@ function analyzeApexContent(content, currentClassName) {
         ) || [];
 
     const excludedClasses = new Set([
-        ...SYSTEM_CLASSES,
-        ...internalTypesToExclude,
-        ...(outerClassName ? [outerClassName] : [])
+        ...[...SYSTEM_CLASSES].map(normalizeApexIdentifier),
+        ...internalTypesToExclude.map(normalizeApexIdentifier),
+        ...(normalizedOuterClassName ? [normalizedOuterClassName] : [])
     ]);
 
     const apexClasses = uniqueSorted([
@@ -259,7 +265,7 @@ function analyzeApexContent(content, currentClassName) {
         )
     ].filter(
         (name) =>
-            !excludedClasses.has(name) &&
+            !excludedClasses.has(normalizeApexIdentifier(name)) &&
             !isSalesforceMetadataToken(name) &&
             !isRelationshipReferenceToken(name)
     ));
