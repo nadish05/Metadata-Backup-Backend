@@ -261,11 +261,11 @@ async function copyRepositoryFile({
     repoPath,
     workspacePath,
     relativeFilePath,
-    copiedFiles
+    workspaceStats
 }) {
     const normalizedPath = relativeFilePath.replace(/\\/g, '/');
 
-    if (copiedFiles.has(normalizedPath)) {
+    if (workspaceStats.copiedFilePaths.has(normalizedPath)) {
         return true;
     }
 
@@ -279,9 +279,13 @@ async function copyRepositoryFile({
         return false;
     }
 
+    const fileStat = await stat(sourcePath);
+
     await ensureParentDirectory(destinationPath);
     await copyFile(sourcePath, destinationPath);
-    copiedFiles.add(normalizedPath);
+    workspaceStats.copiedFilePaths.add(normalizedPath);
+    workspaceStats.copiedFiles += 1;
+    workspaceStats.totalBytes += fileStat.size;
 
     return true;
 }
@@ -291,7 +295,7 @@ async function copyMetadataItems({
     repoPath,
     workspacePath,
     repoFiles,
-    copiedFiles,
+    workspaceStats,
     missingFiles
 }) {
     logSection('Copying Metadata');
@@ -323,7 +327,7 @@ async function copyMetadataItems({
                 repoPath,
                 workspacePath,
                 relativeFilePath: filePath,
-                copiedFiles
+                workspaceStats
             });
 
             if (copied) {
@@ -353,7 +357,7 @@ async function copyDependencyItems({
     repoPath,
     workspacePath,
     repoFiles,
-    copiedFiles,
+    workspaceStats,
     missingFiles
 }) {
     logSection('Copying Dependencies');
@@ -389,7 +393,7 @@ async function copyDependencyItems({
                 repoPath,
                 workspacePath,
                 relativeFilePath: filePath,
-                copiedFiles
+                workspaceStats
             });
 
             if (copied) {
@@ -422,17 +426,44 @@ async function createWorkspace(workspacePath) {
     await mkdir(workspacePath, { recursive: true });
 }
 
-async function writePackageXml(workspacePath, packageXml) {
+async function writePackageXml(workspacePath, packageXml, workspaceStats) {
     logSection('Writing package.xml');
 
     const packageXmlPath = path.join(workspacePath, 'package.xml');
     await writeFile(packageXmlPath, packageXml, 'utf8');
 
-    return pathExists(packageXmlPath);
+    if (!(await pathExists(packageXmlPath))) {
+        return false;
+    }
+
+    workspaceStats.copiedFiles += 1;
+    workspaceStats.totalBytes += Buffer.byteLength(packageXml, 'utf8');
+
+    return true;
 }
 
 function dedupeMissingFiles(missingFiles) {
     return [...new Set(missingFiles)];
+}
+
+function formatWorkspaceSize(totalBytes) {
+    if (totalBytes < 1024) {
+        return `${totalBytes} B`;
+    }
+
+    if (totalBytes < 1024 * 1024) {
+        return `${Math.round(totalBytes / 1024)} KB`;
+    }
+
+    return `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function createWorkspaceStats() {
+    return {
+        copiedFilePaths: new Set(),
+        copiedFiles: 0,
+        totalBytes: 0
+    };
 }
 
 function buildWorkspaceResult({
@@ -441,6 +472,8 @@ function buildWorkspaceResult({
     packageXmlWritten = false,
     metadataCopied = 0,
     dependenciesCopied = 0,
+    copiedFiles = 0,
+    workspaceSize = '0 B',
     missingFiles = [],
     status = 'BLOCKED'
 }) {
@@ -450,6 +483,8 @@ function buildWorkspaceResult({
         packageXmlWritten,
         metadataCopied,
         dependenciesCopied,
+        copiedFiles,
+        workspaceSize,
         missingFiles: dedupeMissingFiles(missingFiles),
         status
     };
@@ -459,6 +494,8 @@ function logWorkspaceSummary(result) {
     logSection('Workspace Summary');
     console.log('Metadata Copied:', result.metadataCopied);
     console.log('Dependencies Copied:', result.dependenciesCopied);
+    console.log('Copied Files:', result.copiedFiles);
+    console.log('Workspace Size:', result.workspaceSize);
     console.log('Missing Files:', result.missingFiles);
     console.log('Workspace Status:', result.status);
 
@@ -505,6 +542,7 @@ async function buildDeploymentWorkspace({
     let packageXmlWritten = false;
     let metadataCopied = 0;
     let dependenciesCopied = 0;
+    const workspaceStats = createWorkspaceStats();
 
     try {
         const repoPath = await prepareRepository(repoUrl);
@@ -514,7 +552,6 @@ async function buildDeploymentWorkspace({
         await createWorkspace(workspacePath);
         workspaceCreated = true;
 
-        const copiedFiles = new Set();
         const metadata = generatedDeploymentPackage.metadata || [];
         const dependencies = generatedDeploymentPackage.dependencies || [];
 
@@ -523,7 +560,7 @@ async function buildDeploymentWorkspace({
             repoPath,
             workspacePath,
             repoFiles,
-            copiedFiles,
+            workspaceStats,
             missingFiles
         });
 
@@ -532,13 +569,14 @@ async function buildDeploymentWorkspace({
             repoPath,
             workspacePath,
             repoFiles,
-            copiedFiles,
+            workspaceStats,
             missingFiles
         });
 
         packageXmlWritten = await writePackageXml(
             workspacePath,
-            generatedManifest.packageXml
+            generatedManifest.packageXml,
+            workspaceStats
         );
 
         if (!packageXmlWritten) {
@@ -556,6 +594,8 @@ async function buildDeploymentWorkspace({
         packageXmlWritten,
         metadataCopied,
         dependenciesCopied,
+        copiedFiles: workspaceStats.copiedFiles,
+        workspaceSize: formatWorkspaceSize(workspaceStats.totalBytes),
         missingFiles,
         status:
             workspaceCreated &&
