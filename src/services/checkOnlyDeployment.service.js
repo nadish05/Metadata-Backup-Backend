@@ -142,22 +142,86 @@ function toNumber(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function formatDuration(startTime, endTime, totalTimeMs) {
-    if (totalTimeMs != null && totalTimeMs !== '') {
-        const seconds = Math.round(toNumber(totalTimeMs) / 1000);
+function isDebugEnabled() {
+    return process.env.DEPLOYMENT_DEBUG === 'true';
+}
 
-        return seconds > 0 ? `${seconds}s` : `${toNumber(totalTimeMs)}ms`;
+function resolveExecutionMode(deploymentValidationFlag) {
+    if (deploymentValidationFlag === '--dry-run') {
+        return 'dry-run';
     }
 
+    if (deploymentValidationFlag === '--check-only') {
+        return 'check-only';
+    }
+
+    return null;
+}
+
+function formatElapsedDuration(milliseconds) {
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) {
+        return null;
+    }
+
+    if (milliseconds < 1000) {
+        return `${Math.round(milliseconds)}ms`;
+    }
+
+    const totalSeconds = Math.round(milliseconds / 1000);
+
+    if (totalSeconds < 60) {
+        return `${totalSeconds}s`;
+    }
+
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    return `${minutes}m ${seconds}s`;
+}
+
+function formatDuration(startTime, endTime, elapsedMs) {
     if (startTime && endTime) {
         const milliseconds = new Date(endTime) - new Date(startTime);
 
         if (Number.isFinite(milliseconds) && milliseconds >= 0) {
-            return `${Math.round(milliseconds / 1000)}s`;
+            return formatElapsedDuration(milliseconds);
         }
     }
 
+    if (elapsedMs != null) {
+        return formatElapsedDuration(elapsedMs);
+    }
+
     return null;
+}
+
+function buildDeploymentSummary({
+    deployResult,
+    componentSuccesses,
+    componentFailures,
+    testResults,
+    codeCoverage
+}) {
+    return {
+        componentsValidated: componentSuccesses,
+        componentsFailed: componentFailures,
+        testsRun: testResults?.testsRun || 0,
+        testsFailed: testResults?.testsFailed || 0,
+        overallCoverage: codeCoverage?.overallCoverage || 0,
+        deploymentStatus: deployResult?.status || 'Unknown'
+    };
+}
+
+function applyCliDiagnostics(result, { cliStdout, cliStderr } = {}) {
+    if (!isDebugEnabled()) {
+        return result;
+    }
+
+    return {
+        ...result,
+        cliStdout: cliStdout || '',
+        cliStderr: cliStderr || ''
+    };
 }
 
 function mapComponentFailure(failure) {
@@ -319,7 +383,11 @@ function mapDeployStatus(deployResult) {
 function mapDeployOutcome({
     cliJson,
     cliStdout,
-    cliStderr
+    cliStderr,
+    elapsedMs,
+    cliCommand,
+    cliVersion,
+    executionMode
 }) {
     const deployResult = cliJson?.result || {};
     const details = deployResult.details || {};
@@ -339,6 +407,13 @@ function mapDeployOutcome({
     const warnings = mapWarnings(details, cliJson);
     const status = mapDeployStatus(deployResult);
     const success = status === 'SUCCESS';
+    const deploymentSummary = buildDeploymentSummary({
+        deployResult,
+        componentSuccesses,
+        componentFailures,
+        testResults,
+        codeCoverage
+    });
 
     let message = success
         ? 'Check-only deployment validation succeeded.'
@@ -352,67 +427,102 @@ function mapDeployOutcome({
             'Check-only deployment validation failed due to test failures.';
     }
 
-    return {
-        deploymentId: deployResult.id || null,
-        status,
-        success,
-        startTime: deployResult.createdDate || null,
-        endTime: deployResult.completedDate || null,
-        duration: formatDuration(
-            deployResult.createdDate,
-            deployResult.completedDate,
-            details.runTestResult?.totalTime
-        ),
-        componentSuccesses,
-        componentFailures,
-        failureDetails,
-        testResults,
-        codeCoverage,
-        warnings,
-        message,
-        cliStdout,
-        cliStderr
-    };
+    return applyCliDiagnostics(
+        {
+            deploymentId: deployResult.id || null,
+            status,
+            success,
+            startTime: deployResult.createdDate || null,
+            endTime: deployResult.completedDate || null,
+            duration: formatDuration(
+                deployResult.createdDate,
+                deployResult.completedDate,
+                elapsedMs
+            ),
+            componentSuccesses,
+            componentFailures,
+            failureDetails,
+            testResults,
+            codeCoverage,
+            warnings,
+            deploymentSummary,
+            message,
+            cliCommand: cliCommand || null,
+            cliVersion: cliVersion || null,
+            executionMode: executionMode || null
+        },
+        { cliStdout, cliStderr }
+    );
 }
 
-function buildBlockedResult(message, cliStdout = '', cliStderr = '') {
-    return {
-        deploymentId: null,
-        status: 'BLOCKED',
-        success: false,
-        startTime: null,
-        endTime: null,
-        duration: null,
-        componentSuccesses: 0,
-        componentFailures: 0,
-        failureDetails: [],
-        testResults: { ...EMPTY_TEST_RESULTS },
-        codeCoverage: { ...EMPTY_CODE_COVERAGE },
-        warnings: [],
-        message,
-        cliStdout,
-        cliStderr
-    };
+function buildBlockedResult(
+    message,
+    { cliStdout = '', cliStderr = '', cliCommand = null, cliVersion = null, executionMode = null } = {}
+) {
+    return applyCliDiagnostics(
+        {
+            deploymentId: null,
+            status: 'BLOCKED',
+            success: false,
+            startTime: null,
+            endTime: null,
+            duration: null,
+            componentSuccesses: 0,
+            componentFailures: 0,
+            failureDetails: [],
+            testResults: { ...EMPTY_TEST_RESULTS },
+            codeCoverage: { ...EMPTY_CODE_COVERAGE },
+            warnings: [],
+            deploymentSummary: {
+                componentsValidated: 0,
+                componentsFailed: 0,
+                testsRun: 0,
+                testsFailed: 0,
+                overallCoverage: 0,
+                deploymentStatus: 'Blocked'
+            },
+            message,
+            cliCommand,
+            cliVersion,
+            executionMode
+        },
+        { cliStdout, cliStderr }
+    );
 }
 
-function buildFailedResult(message, cliStdout = '', cliStderr = '') {
-    return {
-        deploymentId: null,
-        status: 'FAILED',
-        success: false,
-        startTime: null,
-        endTime: null,
-        duration: null,
-        componentSuccesses: 0,
-        componentFailures: 0,
-        failureDetails: [],
-        testResults: { ...EMPTY_TEST_RESULTS },
-        codeCoverage: { ...EMPTY_CODE_COVERAGE },
-        warnings: [],
-        message,
-        cliStdout,
-        cliStderr
-    };
+function buildFailedResult(
+    message,
+    { cliStdout = '', cliStderr = '', cliCommand = null, cliVersion = null, executionMode = null } = {}
+) {
+    return applyCliDiagnostics(
+        {
+            deploymentId: null,
+            status: 'FAILED',
+            success: false,
+            startTime: null,
+            endTime: null,
+            duration: null,
+            componentSuccesses: 0,
+            componentFailures: 0,
+            failureDetails: [],
+            testResults: { ...EMPTY_TEST_RESULTS },
+            codeCoverage: { ...EMPTY_CODE_COVERAGE },
+            warnings: [],
+            deploymentSummary: {
+                componentsValidated: 0,
+                componentsFailed: 0,
+                testsRun: 0,
+                testsFailed: 0,
+                overallCoverage: 0,
+                deploymentStatus: 'Failed'
+            },
+            message,
+            cliCommand,
+            cliVersion,
+            executionMode
+        },
+        { cliStdout, cliStderr }
+    );
 }
 
 function logDeploymentSummary(result) {
@@ -426,6 +536,7 @@ function logDeploymentSummary(result) {
     console.log('Tests Run:', result.testResults.testsRun);
     console.log('Tests Failed:', result.testResults.testsFailed);
     console.log('Overall Coverage:', result.codeCoverage.overallCoverage);
+    console.log('Execution Mode:', result.executionMode);
     console.log('Warnings:', result.warnings);
     console.log('Message:', result.message);
 }
@@ -497,8 +608,12 @@ async function runCheckOnlyDeployment({
     }
 
     const alias = `destination-checkonly-${Date.now()}`;
+    const executionMode = resolveExecutionMode(
+        compatibility.deploymentValidationFlag
+    );
     let cliStdout = '';
     let cliStderr = '';
+    let deployCommand = null;
 
     try {
         logSection('Authenticating Destination Org');
@@ -514,7 +629,7 @@ async function runCheckOnlyDeployment({
 
         logSection('Running Salesforce CLI');
 
-        const deployCommand =
+        deployCommand =
             `cd ${shellQuote(workspacePath)} && ` +
             `sf project deploy start ` +
             `--manifest package.xml ` +
@@ -524,6 +639,7 @@ async function runCheckOnlyDeployment({
             `--json`;
 
         let cliJson;
+        const cliStartedAt = Date.now();
 
         try {
             const commandResult = await execAsync(deployCommand, {
@@ -544,12 +660,18 @@ async function runCheckOnlyDeployment({
             }
         }
 
+        const elapsedMs = Date.now() - cliStartedAt;
+
         logSection('Collecting Deployment Results');
 
         const result = mapDeployOutcome({
             cliJson,
             cliStdout,
-            cliStderr
+            cliStderr,
+            elapsedMs,
+            cliCommand: deployCommand,
+            cliVersion: compatibility.cliVersion,
+            executionMode
         });
 
         logDeploymentSummary(result);
@@ -560,11 +682,13 @@ async function runCheckOnlyDeployment({
         console.error('CHECK-ONLY DEPLOYMENT ERROR');
         console.error(error.stderr || error.stdout || error.message);
 
-        const result = buildFailedResult(
-            resolveErrorMessage(error),
+        const result = buildFailedResult(resolveErrorMessage(error), {
             cliStdout,
-            cliStderr || error.stderr || ''
-        );
+            cliStderr: cliStderr || error.stderr || '',
+            cliCommand: deployCommand,
+            cliVersion: compatibility.cliVersion,
+            executionMode
+        });
 
         logDeploymentSummary(result);
         logSection('Check-Only Deployment Complete');
