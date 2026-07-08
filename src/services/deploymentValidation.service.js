@@ -5,6 +5,7 @@ const dependencyValidationService = require('./dependencyValidation.service');
 const deploymentReadinessService = require('./deploymentReadiness.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const packageXmlService = require('./packageXml.service');
+const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -223,13 +224,23 @@ async function validateDeployment({
         generatedDeploymentPackage
     );
 
+    const generatedWorkspace =
+        await deploymentWorkspaceService.buildDeploymentWorkspace({
+            generatedDeploymentPackage,
+            generatedManifest,
+            repoUrl: deploymentPackage.repoUrl,
+            sourceBranch:
+                deploymentPackage.sourceBranch || deploymentPackage.branch
+        });
+
     return {
         ...connectivityResult,
         metadataValidation,
         dependencyValidation,
         deploymentReadiness,
         generatedDeploymentPackage,
-        generatedManifest
+        generatedManifest,
+        generatedWorkspace
     };
 }
 
