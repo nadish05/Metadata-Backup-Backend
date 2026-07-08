@@ -4,6 +4,9 @@ const path = require('path');
 const { exec } = require('child_process');
 
 const { parseCoverageFromTestResult } = require('./sourceValidation/coverageParser.service');
+const {
+    getCliCompatibility
+} = require('./salesforceCliCompatibility.service');
 
 const execAsync = util.promisify(exec);
 
@@ -456,6 +459,28 @@ async function runCheckOnlyDeployment({
         return result;
     }
 
+    let compatibility;
+
+    try {
+        compatibility = await getCliCompatibility();
+    } catch (error) {
+        const result = buildBlockedResult(
+            'Installed Salesforce CLI does not support deployment validation.'
+        );
+        logDeploymentSummary(result);
+        logSection('Check-Only Deployment Complete');
+        return result;
+    }
+
+    if (!compatibility?.deploymentValidationFlag) {
+        const result = buildBlockedResult(
+            'Installed Salesforce CLI does not support deployment validation.'
+        );
+        logDeploymentSummary(result);
+        logSection('Check-Only Deployment Complete');
+        return result;
+    }
+
     const workspacePath = path.resolve(workspaceValidation.workspacePath);
     const alias = `destination-checkonly-${Date.now()}`;
     let cliStdout = '';
@@ -479,7 +504,7 @@ async function runCheckOnlyDeployment({
             `cd ${shellQuote(workspacePath)} && ` +
             `sf project deploy start ` +
             `--manifest package.xml ` +
-            `--check-only ` +
+            `${compatibility.deploymentValidationFlag} ` +
             `--target-org ${shellQuote(alias)} ` +
             `--wait 30 ` +
             `--json`;
