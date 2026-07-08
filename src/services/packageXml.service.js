@@ -86,9 +86,28 @@ ${typesXml}
 </Package>`;
 }
 
-function generateManifest(generatedDeploymentPackage) {
+function buildManifestSummary(typeMap, apiVersion) {
+    let members = 0;
+
+    for (const memberSet of typeMap.values()) {
+        members += memberSet.size;
+    }
+
     return {
-        packageXml: generatePackageXml(generatedDeploymentPackage)
+        metadataTypes: typeMap.size,
+        members,
+        apiVersion
+    };
+}
+
+function generateManifest(generatedDeploymentPackage) {
+    const apiVersion = DEFAULT_API_VERSION;
+    const metadata = generatedDeploymentPackage?.metadata || [];
+    const typeMap = groupMetadataByType(metadata);
+
+    return {
+        packageXml: generatePackageXml(generatedDeploymentPackage, apiVersion),
+        summary: buildManifestSummary(typeMap, apiVersion)
     };
 }
 
