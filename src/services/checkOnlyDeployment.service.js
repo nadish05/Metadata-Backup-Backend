@@ -7,6 +7,7 @@ const { parseCoverageFromTestResult } = require('./sourceValidation/coveragePars
 const {
     getCliCompatibility
 } = require('./salesforceCliCompatibility.service');
+const { ensureSfdxProject } = require('./sfdxProject.service');
 
 const execAsync = util.promisify(exec);
 
@@ -482,6 +483,19 @@ async function runCheckOnlyDeployment({
     }
 
     const workspacePath = path.resolve(workspaceValidation.workspacePath);
+
+    const projectBootstrap = await ensureSfdxProject(workspacePath);
+
+    if (!projectBootstrap.success) {
+        const result = buildFailedResult(
+            projectBootstrap.message ||
+                'Unable to create sfdx-project.json for Salesforce DX project.'
+        );
+        logDeploymentSummary(result);
+        logSection('Check-Only Deployment Complete');
+        return result;
+    }
+
     const alias = `destination-checkonly-${Date.now()}`;
     let cliStdout = '';
     let cliStderr = '';
