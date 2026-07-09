@@ -15,6 +15,20 @@ function logSection(title) {
     console.log('------------------------------------');
 }
 
+function resolveDeploymentMode(deploymentPackage) {
+    const mode = deploymentPackage?.deploymentMode;
+
+    if (mode === 'VALIDATE' || mode === 'DEPLOY') {
+        return mode;
+    }
+
+    if (deploymentPackage?.executeDeployment === true) {
+        return 'DEPLOY';
+    }
+
+    return 'VALIDATE';
+}
+
 function resolveErrorMessage(error) {
     const oauthError = error.response?.data;
 
@@ -235,18 +249,15 @@ async function validateDeployment({
                 deploymentPackage.sourceBranch || deploymentPackage.branch
         });
 
-    const checkOnlyDeployment =
-        await checkOnlyDeploymentService.runCheckOnlyDeployment({
-            generatedWorkspace,
-            generatedManifest,
-            refreshToken,
-            instanceUrl
-        });
+    const deploymentMode = resolveDeploymentMode(deploymentPackage);
 
-    const executeDeployment = deploymentPackage?.executeDeployment === true;
+    logSection('Deployment Mode Selected');
+    console.log('Mode:', deploymentMode);
+
+    let checkOnlyDeployment;
     let deploymentExecution;
 
-    if (executeDeployment) {
+    if (deploymentMode === 'DEPLOY') {
         deploymentExecution =
             await deploymentExecutionService.runDeploymentExecution({
                 generatedWorkspace,
@@ -255,19 +266,33 @@ async function validateDeployment({
                 refreshToken,
                 instanceUrl
             });
+    } else {
+        checkOnlyDeployment =
+            await checkOnlyDeploymentService.runCheckOnlyDeployment({
+                generatedWorkspace,
+                generatedManifest,
+                refreshToken,
+                instanceUrl
+            });
     }
 
-    return {
+    const response = {
         ...connectivityResult,
         metadataValidation,
         dependencyValidation,
         deploymentReadiness,
         generatedDeploymentPackage,
         generatedManifest,
-        generatedWorkspace,
-        checkOnlyDeployment,
-        ...(deploymentExecution ? { deploymentExecution } : {})
+        generatedWorkspace
     };
+
+    if (deploymentMode === 'DEPLOY') {
+        response.deploymentExecution = deploymentExecution;
+    } else {
+        response.checkOnlyDeployment = checkOnlyDeployment;
+    }
+
+    return response;
 }
 
 module.exports = {
