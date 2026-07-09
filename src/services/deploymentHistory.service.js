@@ -462,11 +462,214 @@ function getAllHistory() {
     }
 }
 
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 100;
+
+function parseDurationToMilliseconds(duration) {
+    if (!duration || typeof duration !== 'string') {
+        return null;
+    }
+
+    const normalized = duration.trim().toLowerCase();
+    let totalMs = 0;
+
+    const minuteMatch = normalized.match(/(\d+)\s*m/);
+
+    if (minuteMatch) {
+        totalMs += Number.parseInt(minuteMatch[1], 10) * 60 * 1000;
+    }
+
+    const secondMatch = normalized.match(/(\d+(?:\.\d+)?)\s*s/);
+
+    if (secondMatch) {
+        totalMs += Math.round(Number.parseFloat(secondMatch[1]) * 1000);
+    }
+
+    const millisecondMatch = normalized.match(/(\d+)\s*ms/);
+
+    if (millisecondMatch) {
+        totalMs += Number.parseInt(millisecondMatch[1], 10);
+    }
+
+    if (
+        !minuteMatch &&
+        !secondMatch &&
+        !millisecondMatch &&
+        /^\d+$/.test(normalized)
+    ) {
+        totalMs = Number.parseInt(normalized, 10);
+    }
+
+    return totalMs > 0 ? totalMs : null;
+}
+
+function resolveDurationMilliseconds(history) {
+    if (history?.startedAt && history?.completedAt) {
+        const startMs = new Date(history.startedAt).getTime();
+        const endMs = new Date(history.completedAt).getTime();
+
+        if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+            return endMs - startMs;
+        }
+    }
+
+    return parseDurationToMilliseconds(history?.duration);
+}
+
+function formatAverageDuration(totalMs, count) {
+    if (!count || !Number.isFinite(totalMs) || totalMs <= 0) {
+        return null;
+    }
+
+    const averageMs = totalMs / count;
+
+    if (averageMs < 1000) {
+        return `${Math.round(averageMs)}ms`;
+    }
+
+    return `${(averageMs / 1000).toFixed(1)}s`;
+}
+
+function listHistory(options = {}) {
+    try {
+        const limit = Math.min(
+            Math.max(Number(options.limit) || DEFAULT_LIST_LIMIT, 1),
+            MAX_LIST_LIMIT
+        );
+        const sort = options.sort === 'asc' ? 'asc' : 'desc';
+
+        let results = getAllHistory();
+
+        if (options.status) {
+            results = results.filter(
+                (history) => history.status === options.status
+            );
+        }
+
+        if (options.deploymentMode) {
+            results = results.filter(
+                (history) => history.deploymentMode === options.deploymentMode
+            );
+        }
+
+        results.sort((left, right) => {
+            const leftTime = new Date(left.startedAt).getTime() || 0;
+            const rightTime = new Date(right.startedAt).getTime() || 0;
+
+            return sort === 'asc'
+                ? leftTime - rightTime
+                : rightTime - leftTime;
+        });
+
+        return results.slice(0, limit);
+    } catch (error) {
+        console.error('DEPLOYMENT HISTORY ERROR');
+        console.error(error);
+        return [];
+    }
+}
+
+function getLatest() {
+    try {
+        const [latest] = listHistory({
+            limit: 1,
+            sort: 'desc'
+        });
+
+        return latest || null;
+    } catch (error) {
+        console.error('DEPLOYMENT HISTORY ERROR');
+        console.error(error);
+        return null;
+    }
+}
+
+function getStatistics() {
+    try {
+        const allHistory = getAllHistory();
+
+        let successfulDeployments = 0;
+        let failedDeployments = 0;
+        let blockedDeployments = 0;
+        let validationRuns = 0;
+        let deploymentRuns = 0;
+        let durationTotalMs = 0;
+        let durationCount = 0;
+        let lastDeploymentTime = null;
+
+        for (const history of allHistory) {
+            if (history.status === 'SUCCESS') {
+                successfulDeployments += 1;
+            } else if (history.status === 'FAILED') {
+                failedDeployments += 1;
+            } else if (history.status === 'BLOCKED') {
+                blockedDeployments += 1;
+            }
+
+            if (history.deploymentMode === 'VALIDATE') {
+                validationRuns += 1;
+            } else if (history.deploymentMode === 'DEPLOY') {
+                deploymentRuns += 1;
+            }
+
+            const durationMs = resolveDurationMilliseconds(history);
+
+            if (durationMs !== null) {
+                durationTotalMs += durationMs;
+                durationCount += 1;
+            }
+
+            const candidateTime = history.completedAt || history.startedAt;
+
+            if (
+                candidateTime &&
+                (!lastDeploymentTime ||
+                    new Date(candidateTime).getTime() >
+                        new Date(lastDeploymentTime).getTime())
+            ) {
+                lastDeploymentTime = candidateTime;
+            }
+        }
+
+        return {
+            totalDeployments: allHistory.length,
+            successfulDeployments,
+            failedDeployments,
+            blockedDeployments,
+            validationRuns,
+            deploymentRuns,
+            averageDuration: formatAverageDuration(
+                durationTotalMs,
+                durationCount
+            ),
+            lastDeploymentTime
+        };
+    } catch (error) {
+        console.error('DEPLOYMENT HISTORY ERROR');
+        console.error(error);
+        return {
+            totalDeployments: 0,
+            successfulDeployments: 0,
+            failedDeployments: 0,
+            blockedDeployments: 0,
+            validationRuns: 0,
+            deploymentRuns: 0,
+            averageDuration: null,
+            lastDeploymentTime: null
+        };
+    }
+}
+
 module.exports = {
     STAGES,
     createHistory,
     updateHistory,
     completeHistory,
     getHistory,
-    getAllHistory
+    getAllHistory,
+    listHistory,
+    getLatest,
+    getStatistics,
+    DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT
 };
