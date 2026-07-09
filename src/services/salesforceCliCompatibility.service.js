@@ -10,6 +10,10 @@ const CHECK_ONLY_PATTERN = /--check-only\b/i;
 let cachedCompatibility = null;
 let detectionPromise = null;
 
+function isDebugEnabled() {
+    return process.env.DEPLOYMENT_DEBUG === 'true';
+}
+
 function logSection(title) {
     console.log('------------------------------------');
     console.log(title);
@@ -62,29 +66,120 @@ function resolveDeploymentValidationFlag({
     return null;
 }
 
-async function runCliCommand(command) {
+async function runCliCommand(command, { collectDiagnostics = false } = {}) {
+    const startedAt = Date.now();
+
     try {
         const result = await execAsync(command, {
             maxBuffer: 10 * 1024 * 1024
         });
+        const stdout = result.stdout || '';
+        const stderr = result.stderr || '';
+        const response = {
+            output: `${stdout}\n${stderr}`.trim(),
+            commandFailed: false,
+            stdout,
+            stderr,
+            exitCode: 0
+        };
 
-        return {
-            output: `${result.stdout || ''}\n${result.stderr || ''}`.trim(),
-            commandFailed: false
-        };
+        if (collectDiagnostics) {
+            response.diagnostics = buildHelpDiagnostics({
+                command,
+                exitCode: 0,
+                durationMs: Date.now() - startedAt,
+                stdout,
+                stderr,
+                output: response.output
+            });
+        }
+
+        return response;
     } catch (error) {
-        return {
-            output: `${error.stdout || ''}\n${error.stderr || ''}`.trim(),
+        const stdout = error.stdout || '';
+        const stderr = error.stderr || '';
+        const response = {
+            output: `${stdout}\n${stderr}`.trim(),
             commandFailed: true,
-            errorMessage: error.message || null
+            errorMessage: error.message || null,
+            stdout,
+            stderr,
+            exitCode:
+                typeof error.code === 'number' && Number.isFinite(error.code)
+                    ? error.code
+                    : 1
         };
+
+        if (collectDiagnostics) {
+            response.diagnostics = buildHelpDiagnostics({
+                command,
+                exitCode: response.exitCode,
+                durationMs: Date.now() - startedAt,
+                stdout,
+                stderr,
+                output: response.output
+            });
+        }
+
+        return response;
     }
+}
+
+function truncatePreview(value, maxLength = 1000) {
+    const text = String(value || '');
+
+    if (text.length <= maxLength) {
+        return text;
+    }
+
+    return text.slice(0, maxLength);
+}
+
+function formatDiagnosticDuration(durationMs) {
+    return `${Math.round(durationMs)}ms`;
+}
+
+function buildHelpDiagnostics({
+    command,
+    exitCode,
+    durationMs,
+    stdout,
+    stderr,
+    output
+}) {
+    const detectionInput = String(output || '');
+
+    return {
+        command,
+        exitCode,
+        duration: formatDiagnosticDuration(durationMs),
+        stdoutLength: stdout.length,
+        stderrLength: stderr.length,
+        dryRunDetected: DRY_RUN_PATTERN.test(detectionInput),
+        checkOnlyDetected: CHECK_ONLY_PATTERN.test(detectionInput),
+        stdoutPreview: truncatePreview(stdout),
+        stderrPreview: truncatePreview(stderr)
+    };
 }
 
 async function readDeployHelp() {
     logSection('Reading CLI Help');
 
-    return runCliCommand('sf project deploy start --help');
+    if (isDebugEnabled()) {
+        logSection('CLI Diagnostics Started');
+        logSection('Executing Help Command');
+    }
+
+    const result = await runCliCommand(DETECTION_SOURCE, {
+        collectDiagnostics: isDebugEnabled()
+    });
+
+    if (isDebugEnabled()) {
+        logSection('Parsing Help Output');
+        logSection('Diagnostics Complete');
+    }
+
+    return result;
 }
 
 function buildCompatibilityResult({
@@ -93,7 +188,8 @@ function buildCompatibilityResult({
     helpOutput,
     supportsDryRun,
     supportsCheckOnly,
-    failureReason = null
+    failureReason = null,
+    helpDiagnostics = null
 }) {
     const deploymentValidationFlag = resolveDeploymentValidationFlag({
         supportsDryRun,
@@ -109,7 +205,8 @@ function buildCompatibilityResult({
         detectionSource: DETECTION_SOURCE,
         detectedAt: new Date().toISOString(),
         failureReason,
-        helpDetected: Boolean(helpOutput?.trim())
+        helpDetected: Boolean(helpOutput?.trim()),
+        helpDiagnostics
     };
 }
 
@@ -118,7 +215,7 @@ function buildCliCompatibilityDiagnostics(compatibility, { cached = false } = {}
         return null;
     }
 
-    return {
+    const diagnostics = {
         cliVersion: compatibility.cliVersion || null,
         deploymentValidationFlag: compatibility.deploymentValidationFlag || null,
         supportsDryRun: compatibility.supportsDryRun === true,
@@ -127,6 +224,12 @@ function buildCliCompatibilityDiagnostics(compatibility, { cached = false } = {}
         cached,
         detectedAt: compatibility.detectedAt || null
     };
+
+    if (isDebugEnabled() && compatibility.helpDiagnostics) {
+        diagnostics.debug = compatibility.helpDiagnostics;
+    }
+
+    return diagnostics;
 }
 
 async function detectCliCompatibility() {
@@ -158,7 +261,8 @@ async function detectCliCompatibility() {
         helpOutput: helpResult.output,
         supportsDryRun: helpCapabilities.supportsDryRun,
         supportsCheckOnly: helpCapabilities.supportsCheckOnly,
-        failureReason: null
+        failureReason: null,
+        helpDiagnostics: helpResult.diagnostics || null
     });
 
     if (compatibility.deploymentValidationFlag) {
@@ -184,7 +288,8 @@ async function detectCliCompatibility() {
             helpOutput: helpResult.output,
             supportsDryRun: false,
             supportsCheckOnly: false,
-            failureReason: 'unable_to_determine'
+            failureReason: 'unable_to_determine',
+            helpDiagnostics: helpResult.diagnostics || null
         });
     }
 
@@ -197,7 +302,8 @@ async function detectCliCompatibility() {
         helpOutput: helpResult.output,
         supportsDryRun: false,
         supportsCheckOnly: false,
-        failureReason: 'unsupported'
+        failureReason: 'unsupported',
+        helpDiagnostics: helpResult.diagnostics || null
     });
 }
 
