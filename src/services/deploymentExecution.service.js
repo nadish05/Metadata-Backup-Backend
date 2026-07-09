@@ -2,7 +2,7 @@ const util = require('util');
 const path = require('path');
 const { exec } = require('child_process');
 
-const { getCliCompatibility } = require('./salesforceCliCompatibility.service');
+const { getCliCompatibility, buildCliCompatibilityDiagnostics } = require('./salesforceCliCompatibility.service');
 const { ensureSfdxProject } = require('./sfdxProject.service');
 const {
     logSection,
@@ -28,6 +28,17 @@ function logExecutionSummary(result) {
     console.log('Component Successes:', result.componentSuccesses);
     console.log('Component Failures:', result.componentFailures);
     console.log('Message:', result.message);
+}
+
+function withCliCompatibility(result, cliCompatibility) {
+    if (!cliCompatibility) {
+        return result;
+    }
+
+    return {
+        ...result,
+        cliCompatibility
+    };
 }
 
 async function runDeploymentExecution({
@@ -82,16 +93,24 @@ async function runDeploymentExecution({
     }
 
     let compatibility;
+    let cliCompatibility;
 
     try {
-        compatibility = await getCliCompatibility();
+        const compatibilityContext = await getCliCompatibility();
+        compatibility = compatibilityContext.compatibility;
+        cliCompatibility = buildCliCompatibilityDiagnostics(compatibility, {
+            cached: compatibilityContext.cached
+        });
     } catch (error) {
-        const result = buildBlockedResult(
-            'Installed Salesforce CLI does not support deployment execution.',
-            {
-                mode: 'execution',
-                executionMode: 'deploy'
-            }
+        const result = withCliCompatibility(
+            buildBlockedResult(
+                'Unable to determine Salesforce CLI deployment validation capabilities.',
+                {
+                    mode: 'execution',
+                    executionMode: 'deploy'
+                }
+            ),
+            cliCompatibility
         );
         logExecutionSummary(result);
         logSection('Deployment Failed');
@@ -169,18 +188,21 @@ async function runDeploymentExecution({
 
         logSection('Parsing Deployment Result');
 
-        const result = mapDeployOutcome({
-            cliJson,
-            cliStdout,
-            cliStderr,
-            elapsedMs,
-            cliCommand: deployCommand,
-            cliVersion: compatibility.cliVersion,
-            executionMode: 'deploy',
-            mode: 'execution',
-            successMessage: 'Deployment completed successfully.',
-            failureMessage: 'Deployment failed.'
-        });
+        const result = withCliCompatibility(
+            mapDeployOutcome({
+                cliJson,
+                cliStdout,
+                cliStderr,
+                elapsedMs,
+                cliCommand: deployCommand,
+                cliVersion: compatibility.cliVersion,
+                executionMode: 'deploy',
+                mode: 'execution',
+                successMessage: 'Deployment completed successfully.',
+                failureMessage: 'Deployment failed.'
+            }),
+            cliCompatibility
+        );
 
         logExecutionSummary(result);
         logSection(result.success ? 'Deployment Completed' : 'Deployment Failed');
@@ -190,14 +212,17 @@ async function runDeploymentExecution({
         console.error('DEPLOYMENT EXECUTION ERROR');
         console.error(error.stderr || error.stdout || error.message);
 
-        const result = buildFailedResult(resolveErrorMessage(error), {
-            cliStdout,
-            cliStderr: cliStderr || error.stderr || '',
-            cliCommand: deployCommand,
-            cliVersion: compatibility?.cliVersion || null,
-            executionMode: 'deploy',
-            mode: 'execution'
-        });
+        const result = withCliCompatibility(
+            buildFailedResult(resolveErrorMessage(error), {
+                cliStdout,
+                cliStderr: cliStderr || error.stderr || '',
+                cliCommand: deployCommand,
+                cliVersion: compatibility?.cliVersion || null,
+                executionMode: 'deploy',
+                mode: 'execution'
+            }),
+            cliCompatibility
+        );
 
         logExecutionSummary(result);
         logSection('Deployment Failed');

@@ -3,6 +3,10 @@ const { exec } = require('child_process');
 
 const execAsync = util.promisify(exec);
 
+const DETECTION_SOURCE = 'sf project deploy start --help';
+const DRY_RUN_PATTERN = /--dry-run\b/i;
+const CHECK_ONLY_PATTERN = /--check-only\b/i;
+
 let cachedCompatibility = null;
 let detectionPromise = null;
 
@@ -17,34 +21,45 @@ function extractCliVersion(versionOutput) {
         return null;
     }
 
+    const semanticVersionMatch = String(versionOutput).match(
+        /(\d+\.\d+(?:\.\d+)?)/
+    );
+
+    if (semanticVersionMatch) {
+        return semanticVersionMatch[1];
+    }
+
     const lines = String(versionOutput)
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean);
 
-    if (!lines.length) {
-        return null;
-    }
-
-    const versionLine =
-        lines.find((line) => /@salesforce\/cli/i.test(line)) ||
-        lines.find((line) => /\dsf\b/i.test(line)) ||
-        lines[0];
-
-    const versionMatch = versionLine.match(/(\d+\.\d+(?:\.\d+)?)/);
-
-    return versionMatch ? versionMatch[1] : versionLine;
+    return lines[0] || null;
 }
 
-function helpSupportsFlag(helpText, flagName) {
-    if (!helpText) {
-        return false;
+function parseHelpCapabilities(helpText) {
+    const normalizedHelp = String(helpText || '');
+
+    return {
+        supportsDryRun: DRY_RUN_PATTERN.test(normalizedHelp),
+        supportsCheckOnly: CHECK_ONLY_PATTERN.test(normalizedHelp),
+        hasHelpContent: normalizedHelp.trim().length > 0
+    };
+}
+
+function resolveDeploymentValidationFlag({
+    supportsDryRun,
+    supportsCheckOnly
+}) {
+    if (supportsDryRun) {
+        return '--dry-run';
     }
 
-    const escapedFlag = flagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const flagPattern = new RegExp(`(?:^|\\s)${escapedFlag}(?:\\s|,|=|$)`, 'm');
+    if (supportsCheckOnly) {
+        return '--check-only';
+    }
 
-    return flagPattern.test(helpText);
+    return null;
 }
 
 async function runCliCommand(command) {
@@ -53,57 +68,158 @@ async function runCliCommand(command) {
             maxBuffer: 10 * 1024 * 1024
         });
 
-        return `${result.stdout || ''}\n${result.stderr || ''}`;
+        return {
+            output: `${result.stdout || ''}\n${result.stderr || ''}`.trim(),
+            commandFailed: false
+        };
     } catch (error) {
-        return `${error.stdout || ''}\n${error.stderr || ''}`;
+        return {
+            output: `${error.stdout || ''}\n${error.stderr || ''}`.trim(),
+            commandFailed: true,
+            errorMessage: error.message || null
+        };
     }
 }
 
-async function detectCliCompatibility() {
-    logSection('Salesforce CLI Compatibility Detection Started');
+async function readDeployHelp() {
+    logSection('Reading CLI Help');
 
-    const versionOutput = await runCliCommand('sf --version');
-    const cliVersion = extractCliVersion(versionOutput);
+    return runCliCommand('sf project deploy start --help');
+}
+
+function buildCompatibilityResult({
+    cliVersion,
+    rawVersionOutput,
+    helpOutput,
+    supportsDryRun,
+    supportsCheckOnly,
+    failureReason = null
+}) {
+    const deploymentValidationFlag = resolveDeploymentValidationFlag({
+        supportsDryRun,
+        supportsCheckOnly
+    });
+
+    return {
+        cliVersion,
+        rawVersionOutput,
+        deploymentValidationFlag,
+        supportsDryRun,
+        supportsCheckOnly,
+        detectionSource: DETECTION_SOURCE,
+        detectedAt: new Date().toISOString(),
+        failureReason,
+        helpDetected: Boolean(helpOutput?.trim())
+    };
+}
+
+function buildCliCompatibilityDiagnostics(compatibility, { cached = false } = {}) {
+    if (!compatibility) {
+        return null;
+    }
+
+    return {
+        cliVersion: compatibility.cliVersion || null,
+        deploymentValidationFlag: compatibility.deploymentValidationFlag || null,
+        supportsDryRun: compatibility.supportsDryRun === true,
+        supportsCheckOnly: compatibility.supportsCheckOnly === true,
+        detectionSource: compatibility.detectionSource || DETECTION_SOURCE,
+        cached,
+        detectedAt: compatibility.detectedAt || null
+    };
+}
+
+async function detectCliCompatibility() {
+    logSection('CLI Compatibility Detection Started');
+
+    logSection('Reading CLI Version');
+    const versionResult = await runCliCommand('sf --version');
+    const rawVersionOutput = versionResult.output || '';
+    const cliVersion = extractCliVersion(rawVersionOutput);
 
     console.log('CLI Version');
     console.log(cliVersion || 'Unknown');
 
-    const helpOutput = await runCliCommand('sf project deploy start --help');
-    const supportsDryRun = helpSupportsFlag(helpOutput, '--dry-run');
-    const supportsCheckOnly = helpSupportsFlag(helpOutput, '--check-only');
+    let helpResult = await readDeployHelp();
+    let helpCapabilities = parseHelpCapabilities(helpResult.output);
 
-    let deploymentValidationFlag = null;
-
-    if (supportsDryRun) {
-        deploymentValidationFlag = '--dry-run';
-    } else if (supportsCheckOnly) {
-        deploymentValidationFlag = '--check-only';
+    if (
+        !helpCapabilities.supportsDryRun &&
+        !helpCapabilities.supportsCheckOnly
+    ) {
+        logSection('Retrying Help Detection');
+        helpResult = await readDeployHelp();
+        helpCapabilities = parseHelpCapabilities(helpResult.output);
     }
 
-    console.log('Supported Validation Flag');
-    console.log(deploymentValidationFlag || 'None');
-
-    const compatibility = {
+    const compatibility = buildCompatibilityResult({
         cliVersion,
-        deploymentValidationFlag,
-        supportsDryRun,
-        supportsCheckOnly
-    };
+        rawVersionOutput,
+        helpOutput: helpResult.output,
+        supportsDryRun: helpCapabilities.supportsDryRun,
+        supportsCheckOnly: helpCapabilities.supportsCheckOnly,
+        failureReason: null
+    });
 
-    logSection('Compatibility Cached');
+    if (compatibility.deploymentValidationFlag) {
+        logSection('CLI Compatibility Detected');
+        console.log('Supported Validation Flag');
+        console.log(compatibility.deploymentValidationFlag);
+        logSection('Compatibility Cached');
+        return compatibility;
+    }
 
-    return compatibility;
+    const helpUnavailable =
+        helpResult.commandFailed ||
+        !helpCapabilities.hasHelpContent ||
+        !versionResult.output;
+
+    if (helpUnavailable) {
+        logSection('CLI Compatibility Detection Failed');
+        console.log('Reason: unable to determine capabilities');
+
+        return buildCompatibilityResult({
+            cliVersion,
+            rawVersionOutput,
+            helpOutput: helpResult.output,
+            supportsDryRun: false,
+            supportsCheckOnly: false,
+            failureReason: 'unable_to_determine'
+        });
+    }
+
+    logSection('CLI Compatibility Detection Failed');
+    console.log('Reason: deployment validation flags not supported');
+
+    return buildCompatibilityResult({
+        cliVersion,
+        rawVersionOutput,
+        helpOutput: helpResult.output,
+        supportsDryRun: false,
+        supportsCheckOnly: false,
+        failureReason: 'unsupported'
+    });
 }
 
 async function getCliCompatibility() {
     if (cachedCompatibility) {
-        return cachedCompatibility;
+        logSection('Using Cached CLI Compatibility');
+
+        return {
+            compatibility: cachedCompatibility,
+            cached: true
+        };
     }
 
     if (!detectionPromise) {
         detectionPromise = detectCliCompatibility()
             .then((compatibility) => {
-                cachedCompatibility = compatibility;
+                if (compatibility.deploymentValidationFlag) {
+                    cachedCompatibility = compatibility;
+                } else {
+                    detectionPromise = null;
+                }
+
                 return compatibility;
             })
             .catch((error) => {
@@ -112,9 +228,15 @@ async function getCliCompatibility() {
             });
     }
 
-    return detectionPromise;
+    const compatibility = await detectionPromise;
+
+    return {
+        compatibility,
+        cached: false
+    };
 }
 
 module.exports = {
-    getCliCompatibility
+    getCliCompatibility,
+    buildCliCompatibilityDiagnostics
 };

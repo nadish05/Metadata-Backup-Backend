@@ -5,7 +5,8 @@ const { exec } = require('child_process');
 
 const { parseCoverageFromTestResult } = require('./sourceValidation/coverageParser.service');
 const {
-    getCliCompatibility
+    getCliCompatibility,
+    buildCliCompatibilityDiagnostics
 } = require('./salesforceCliCompatibility.service');
 const { ensureSfdxProject } = require('./sfdxProject.service');
 
@@ -26,6 +27,25 @@ function logSection(title) {
     console.log('------------------------------------');
     console.log(title);
     console.log('------------------------------------');
+}
+
+function withCliCompatibility(result, cliCompatibility) {
+    if (!cliCompatibility) {
+        return result;
+    }
+
+    return {
+        ...result,
+        cliCompatibility
+    };
+}
+
+function resolveValidationCapabilityMessage(compatibility) {
+    if (compatibility?.failureReason === 'unsupported') {
+        return 'Installed Salesforce CLI does not support deployment validation.';
+    }
+
+    return 'Unable to determine Salesforce CLI deployment validation capabilities.';
 }
 
 function shellQuote(value) {
@@ -635,12 +655,20 @@ async function runCheckOnlyDeployment({
     }
 
     let compatibility;
+    let cliCompatibility;
 
     try {
-        compatibility = await getCliCompatibility();
+        const compatibilityContext = await getCliCompatibility();
+        compatibility = compatibilityContext.compatibility;
+        cliCompatibility = buildCliCompatibilityDiagnostics(compatibility, {
+            cached: compatibilityContext.cached
+        });
     } catch (error) {
-        const result = buildBlockedResult(
-            'Installed Salesforce CLI does not support deployment validation.'
+        const result = withCliCompatibility(
+            buildBlockedResult(
+                'Unable to determine Salesforce CLI deployment validation capabilities.'
+            ),
+            cliCompatibility
         );
         logDeploymentSummary(result);
         logSection('Check-Only Deployment Complete');
@@ -648,8 +676,11 @@ async function runCheckOnlyDeployment({
     }
 
     if (!compatibility?.deploymentValidationFlag) {
-        const result = buildBlockedResult(
-            'Installed Salesforce CLI does not support deployment validation.'
+        const result = withCliCompatibility(
+            buildBlockedResult(resolveValidationCapabilityMessage(compatibility), {
+                cliVersion: compatibility?.cliVersion || null
+            }),
+            cliCompatibility
         );
         logDeploymentSummary(result);
         logSection('Check-Only Deployment Complete');
@@ -727,15 +758,18 @@ async function runCheckOnlyDeployment({
 
         logSection('Collecting Deployment Results');
 
-        const result = mapDeployOutcome({
-            cliJson,
-            cliStdout,
-            cliStderr,
-            elapsedMs,
-            cliCommand: deployCommand,
-            cliVersion: compatibility.cliVersion,
-            executionMode
-        });
+        const result = withCliCompatibility(
+            mapDeployOutcome({
+                cliJson,
+                cliStdout,
+                cliStderr,
+                elapsedMs,
+                cliCommand: deployCommand,
+                cliVersion: compatibility.cliVersion,
+                executionMode
+            }),
+            cliCompatibility
+        );
 
         logDeploymentSummary(result);
         logSection('Check-Only Deployment Complete');
@@ -745,13 +779,16 @@ async function runCheckOnlyDeployment({
         console.error('CHECK-ONLY DEPLOYMENT ERROR');
         console.error(error.stderr || error.stdout || error.message);
 
-        const result = buildFailedResult(resolveErrorMessage(error), {
-            cliStdout,
-            cliStderr: cliStderr || error.stderr || '',
-            cliCommand: deployCommand,
-            cliVersion: compatibility.cliVersion,
-            executionMode
-        });
+        const result = withCliCompatibility(
+            buildFailedResult(resolveErrorMessage(error), {
+                cliStdout,
+                cliStderr: cliStderr || error.stderr || '',
+                cliCommand: deployCommand,
+                cliVersion: compatibility.cliVersion,
+                executionMode
+            }),
+            cliCompatibility
+        );
 
         logDeploymentSummary(result);
         logSection('Check-Only Deployment Complete');
