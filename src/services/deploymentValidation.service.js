@@ -8,11 +8,22 @@ const packageXmlService = require('./packageXml.service');
 const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
 const deploymentExecutionService = require('./deploymentExecution.service');
+const deploymentHistoryService = require('./deploymentHistory.service');
 
 function logSection(title) {
     console.log('------------------------------------');
     console.log(title);
     console.log('------------------------------------');
+}
+
+function runHistorySafely(operation) {
+    try {
+        return operation();
+    } catch (error) {
+        console.error('DEPLOYMENT HISTORY ERROR');
+        console.error(error);
+        return null;
+    }
 }
 
 function resolveDeploymentMode(deploymentPackage) {
@@ -233,11 +244,34 @@ async function validateDeployment({
             dependencyValidation
         });
 
+    const historyId = runHistorySafely(() =>
+        deploymentHistoryService.createHistory({
+            deploymentPackage,
+            deploymentReadiness,
+            metadataValidation,
+            dependencyValidation
+        })
+    );
+
     const generatedDeploymentPackage =
         deploymentPackageService.generateDeploymentPackage(deploymentPackage);
 
+    runHistorySafely(() =>
+        deploymentHistoryService.updateHistory(historyId, {
+            stage: deploymentHistoryService.STAGES.PACKAGE_GENERATED,
+            metadataSummary: generatedDeploymentPackage.summary
+        })
+    );
+
     const generatedManifest = packageXmlService.generateManifest(
         generatedDeploymentPackage
+    );
+
+    runHistorySafely(() =>
+        deploymentHistoryService.updateHistory(historyId, {
+            stage: deploymentHistoryService.STAGES.MANIFEST_GENERATED,
+            manifestSummary: generatedManifest.summary
+        })
     );
 
     const generatedWorkspace =
@@ -248,6 +282,23 @@ async function validateDeployment({
             sourceBranch:
                 deploymentPackage.sourceBranch || deploymentPackage.branch
         });
+
+    runHistorySafely(() =>
+        deploymentHistoryService.updateHistory(historyId, {
+            stage: deploymentHistoryService.STAGES.WORKSPACE_BUILT,
+            workspaceSummary: {
+                workspaceCreated: generatedWorkspace.workspaceCreated === true,
+                workspacePath: generatedWorkspace.workspacePath || null,
+                status: generatedWorkspace.status || null,
+                metadataCopied: generatedWorkspace.metadataCopied ?? 0,
+                dependenciesCopied: generatedWorkspace.dependenciesCopied ?? 0,
+                copiedFiles: generatedWorkspace.copiedFiles ?? 0,
+                workspaceSize: generatedWorkspace.workspaceSize || null,
+                missingFiles: generatedWorkspace.missingFiles || []
+            },
+            workspacePath: generatedWorkspace.workspacePath || null
+        })
+    );
 
     const deploymentMode = resolveDeploymentMode(deploymentPackage);
 
@@ -290,6 +341,38 @@ async function validateDeployment({
         response.deploymentExecution = deploymentExecution;
     } else {
         response.checkOnlyDeployment = checkOnlyDeployment;
+    }
+
+    const deploymentResult =
+        deploymentMode === 'DEPLOY'
+            ? deploymentExecution
+            : checkOnlyDeployment;
+
+    runHistorySafely(() =>
+        deploymentHistoryService.updateHistory(historyId, {
+            stage:
+                deploymentMode === 'DEPLOY'
+                    ? deploymentHistoryService.STAGES.DEPLOYMENT_EXECUTED
+                    : deploymentHistoryService.STAGES.CHECK_ONLY_COMPLETED,
+            deploymentSummary: deploymentResult?.deploymentSummary || null,
+            deploymentId: deploymentResult?.deploymentId || null,
+            errors: deploymentResult?.success === false && deploymentResult?.message
+                ? [deploymentResult.message]
+                : []
+        })
+    );
+
+    const deploymentHistory = runHistorySafely(() =>
+        deploymentHistoryService.completeHistory(historyId, {
+            deploymentMode,
+            deploymentReadiness,
+            generatedWorkspace,
+            deploymentResult
+        })
+    );
+
+    if (deploymentHistory) {
+        response.deploymentHistory = deploymentHistory;
     }
 
     return response;
