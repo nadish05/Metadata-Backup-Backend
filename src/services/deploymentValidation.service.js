@@ -7,6 +7,7 @@ const deploymentPackageService = require('./deploymentPackage.service');
 const packageXmlService = require('./packageXml.service');
 const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
+const deploymentExecutionService = require('./deploymentExecution.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -242,6 +243,20 @@ async function validateDeployment({
             instanceUrl
         });
 
+    const executeDeployment = deploymentPackage?.executeDeployment === true;
+    let deploymentExecution;
+
+    if (executeDeployment) {
+        deploymentExecution =
+            await deploymentExecutionService.runDeploymentExecution({
+                generatedWorkspace,
+                generatedManifest,
+                deploymentReadiness,
+                refreshToken,
+                instanceUrl
+            });
+    }
+
     return {
         ...connectivityResult,
         metadataValidation,
@@ -250,7 +265,8 @@ async function validateDeployment({
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
-        checkOnlyDeployment
+        checkOnlyDeployment,
+        ...(deploymentExecution ? { deploymentExecution } : {})
     };
 }
 

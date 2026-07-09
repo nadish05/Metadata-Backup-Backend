@@ -200,15 +200,28 @@ function buildDeploymentSummary({
     componentSuccesses,
     componentFailures,
     testResults,
-    codeCoverage
+    codeCoverage,
+    mode = 'validation'
 }) {
-    return {
-        componentsValidated: componentSuccesses,
-        componentsFailed: componentFailures,
+    const summary = {
         testsRun: testResults?.testsRun || 0,
         testsFailed: testResults?.testsFailed || 0,
         overallCoverage: codeCoverage?.overallCoverage || 0,
         deploymentStatus: deployResult?.status || 'Unknown'
+    };
+
+    if (mode === 'execution') {
+        return {
+            componentsDeployed: componentSuccesses,
+            componentsFailed: componentFailures,
+            ...summary
+        };
+    }
+
+    return {
+        componentsValidated: componentSuccesses,
+        componentsFailed: componentFailures,
+        ...summary
     };
 }
 
@@ -387,7 +400,10 @@ function mapDeployOutcome({
     elapsedMs,
     cliCommand,
     cliVersion,
-    executionMode
+    executionMode,
+    mode = 'validation',
+    successMessage,
+    failureMessage
 }) {
     const deployResult = cliJson?.result || {};
     const details = deployResult.details || {};
@@ -412,19 +428,28 @@ function mapDeployOutcome({
         componentSuccesses,
         componentFailures,
         testResults,
-        codeCoverage
+        codeCoverage,
+        mode
     });
 
     let message = success
-        ? 'Check-only deployment validation succeeded.'
-        : 'Check-only deployment validation failed.';
+        ? successMessage ||
+          (mode === 'execution'
+              ? 'Deployment completed successfully.'
+              : 'Check-only deployment validation succeeded.')
+        : failureMessage ||
+          (mode === 'execution'
+              ? 'Deployment failed.'
+              : 'Check-only deployment validation failed.');
 
     if (!success && failureDetails.length) {
         message = failureDetails[0].problem || message;
     } else if (!success && testResults.testsFailed > 0) {
         message =
             testResults.failingTests[0]?.message ||
-            'Check-only deployment validation failed due to test failures.';
+            (mode === 'execution'
+                ? 'Deployment failed due to test failures.'
+                : 'Check-only deployment validation failed due to test failures.');
     }
 
     return applyCliDiagnostics(
@@ -457,8 +482,34 @@ function mapDeployOutcome({
 
 function buildBlockedResult(
     message,
-    { cliStdout = '', cliStderr = '', cliCommand = null, cliVersion = null, executionMode = null } = {}
+    {
+        cliStdout = '',
+        cliStderr = '',
+        cliCommand = null,
+        cliVersion = null,
+        executionMode = null,
+        mode = 'validation'
+    } = {}
 ) {
+    const deploymentSummary =
+        mode === 'execution'
+            ? {
+                  componentsDeployed: 0,
+                  componentsFailed: 0,
+                  testsRun: 0,
+                  testsFailed: 0,
+                  overallCoverage: 0,
+                  deploymentStatus: 'Blocked'
+              }
+            : {
+                  componentsValidated: 0,
+                  componentsFailed: 0,
+                  testsRun: 0,
+                  testsFailed: 0,
+                  overallCoverage: 0,
+                  deploymentStatus: 'Blocked'
+              };
+
     return applyCliDiagnostics(
         {
             deploymentId: null,
@@ -473,14 +524,7 @@ function buildBlockedResult(
             testResults: { ...EMPTY_TEST_RESULTS },
             codeCoverage: { ...EMPTY_CODE_COVERAGE },
             warnings: [],
-            deploymentSummary: {
-                componentsValidated: 0,
-                componentsFailed: 0,
-                testsRun: 0,
-                testsFailed: 0,
-                overallCoverage: 0,
-                deploymentStatus: 'Blocked'
-            },
+            deploymentSummary,
             message,
             cliCommand,
             cliVersion,
@@ -492,8 +536,34 @@ function buildBlockedResult(
 
 function buildFailedResult(
     message,
-    { cliStdout = '', cliStderr = '', cliCommand = null, cliVersion = null, executionMode = null } = {}
+    {
+        cliStdout = '',
+        cliStderr = '',
+        cliCommand = null,
+        cliVersion = null,
+        executionMode = null,
+        mode = 'validation'
+    } = {}
 ) {
+    const deploymentSummary =
+        mode === 'execution'
+            ? {
+                  componentsDeployed: 0,
+                  componentsFailed: 0,
+                  testsRun: 0,
+                  testsFailed: 0,
+                  overallCoverage: 0,
+                  deploymentStatus: 'Failed'
+              }
+            : {
+                  componentsValidated: 0,
+                  componentsFailed: 0,
+                  testsRun: 0,
+                  testsFailed: 0,
+                  overallCoverage: 0,
+                  deploymentStatus: 'Failed'
+              };
+
     return applyCliDiagnostics(
         {
             deploymentId: null,
@@ -508,14 +578,7 @@ function buildFailedResult(
             testResults: { ...EMPTY_TEST_RESULTS },
             codeCoverage: { ...EMPTY_CODE_COVERAGE },
             warnings: [],
-            deploymentSummary: {
-                componentsValidated: 0,
-                componentsFailed: 0,
-                testsRun: 0,
-                testsFailed: 0,
-                overallCoverage: 0,
-                deploymentStatus: 'Failed'
-            },
+            deploymentSummary,
             message,
             cliCommand,
             cliVersion,
@@ -698,5 +761,15 @@ async function runCheckOnlyDeployment({
 }
 
 module.exports = {
-    runCheckOnlyDeployment
+    runCheckOnlyDeployment,
+    logSection,
+    shellQuote,
+    parseCliJson,
+    resolveErrorMessage,
+    refreshAccessToken,
+    loginSfOrg,
+    validateWorkspace,
+    mapDeployOutcome,
+    buildBlockedResult,
+    buildFailedResult
 };
