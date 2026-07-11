@@ -183,6 +183,10 @@ async function syncDeploymentHistory({
 
         logSection('Calling Salesforce Apex');
 
+        console.log('Deployment History Sync URL:', `${instanceUrl}/services/apexrest/deployment-history`);
+
+        console.log('Instance URL:', instanceUrl);
+
         const response = await axios.post(
             `${instanceUrl}/services/apexrest/deployment-history`,
             payload,
