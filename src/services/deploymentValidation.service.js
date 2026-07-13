@@ -414,9 +414,10 @@ async function validateDeployment({
                     generatedManifest,
                     generatedWorkspace,
                     deploymentMode,
+                    // Destination org identity for DTO only.
+                    // History sync authenticates to the APPLICATION org
+                    // (SF_APP_INSTANCE_URL / SF_APP_REFRESH_TOKEN), never destination.
                     connectedOrg: {
-                        refreshToken,
-                        instanceUrl,
                         orgId
                     }
                 });

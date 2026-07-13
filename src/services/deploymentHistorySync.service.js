@@ -1,6 +1,6 @@
-const axios = require('axios');
-
-const { refreshAccessToken } = require('./checkOnlyDeployment.service');
+const {
+    postToApplicationOrgApex
+} = require('./applicationOrgRest.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -57,7 +57,7 @@ function buildApexPayload({
     generatedManifest,
     generatedWorkspace,
     deploymentMode,
-    connectedOrg
+    destinationOrgId
 }) {
     const history = deploymentHistory || {};
     const summary =
@@ -126,11 +126,17 @@ function buildApexPayload({
         metadataComparisonId: valueOrNull(history.metadataComparisonId),
         sourceOrgId: valueOrNull(history.sourceOrgId),
         destinationOrgId: valueOrNull(
-            history.destinationOrgId || connectedOrg?.orgId
+            history.destinationOrgId || destinationOrgId
         )
     };
 }
 
+/**
+ * Persist completed deployment history to the APPLICATION Salesforce Org.
+ *
+ * Destination org credentials must NEVER be used here.
+ * Destination org receives metadata deploys only.
+ */
 async function syncDeploymentHistory({
     deploymentHistory,
     deploymentSummary,
@@ -144,26 +150,7 @@ async function syncDeploymentHistory({
     logSection('History Synchronization Started');
 
     try {
-        if (!connectedOrg?.refreshToken || !connectedOrg?.instanceUrl) {
-            logSection('History Synchronization Failed');
-            return buildFailedResult(
-                'Unable to synchronize deployment history to Salesforce.'
-            );
-        }
-
         if (!deploymentHistory?.historyId) {
-            logSection('History Synchronization Failed');
-            return buildFailedResult(
-                'Unable to synchronize deployment history to Salesforce.'
-            );
-        }
-
-        const tokenResult = await refreshAccessToken(connectedOrg.refreshToken);
-        const accessToken = tokenResult.accessToken;
-        const instanceUrl =
-            tokenResult.instanceUrl || connectedOrg.instanceUrl;
-
-        if (!accessToken || !instanceUrl) {
             logSection('History Synchronization Failed');
             return buildFailedResult(
                 'Unable to synchronize deployment history to Salesforce.'
@@ -178,34 +165,36 @@ async function syncDeploymentHistory({
             generatedManifest,
             generatedWorkspace,
             deploymentMode,
-            connectedOrg
+            destinationOrgId: connectedOrg?.orgId ?? null
         });
 
         logSection('Calling Salesforce Apex');
 
-        console.log('Deployment History Sync URL:', `${instanceUrl}/services/apexrest/deployment-history`);
-
-        console.log('Instance URL:', instanceUrl);
-
-        const response = await axios.post(
-            `${instanceUrl}/services/apexrest/deployment-history`,
-            payload,
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: 30000
-            }
+        const apexResult = await postToApplicationOrgApex(
+            '/services/apexrest/deployment-history',
+            payload
         );
 
-        const body = response.data || {};
+        if (!apexResult.success) {
+            logSection('History Synchronization Failed');
+            return buildFailedResult(
+                apexResult.message ||
+                    'Unable to synchronize deployment history to Salesforce.',
+                apexResult.httpStatus
+            );
+        }
+
+        if (apexResult.url) {
+            console.log('Deployment History Sync URL:', apexResult.url);
+        }
+
+        const body = apexResult.data || {};
 
         if (body.success === true) {
             logSection('History Synchronization Complete');
             return buildSuccessResult(
                 body.recordId || null,
-                response.status
+                apexResult.httpStatus
             );
         }
 
@@ -213,7 +202,7 @@ async function syncDeploymentHistory({
         return buildFailedResult(
             body.message ||
                 'Unable to synchronize deployment history to Salesforce.',
-            response.status
+            apexResult.httpStatus
         );
     } catch (error) {
         console.error('HISTORY SYNCHRONIZATION ERROR');
