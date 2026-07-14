@@ -147,6 +147,7 @@ const metadataTypes = [
  'CustomPermission',
  'Profile',
  'NamedCredential',
+ 'ExternalCredential',
  'CustomLabel',
  'CustomMetadata'
 ];
@@ -391,6 +392,7 @@ const metadataTypes = [
   'ApexTrigger',
   'CustomObject',
   'NamedCredential',
+  'ExternalCredential',
   'CustomLabel',
   'CustomMetadata'
 ];
