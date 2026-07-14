@@ -12,6 +12,12 @@ const {
     getStatus
 } = require('../status.store');
 
+const {
+    cleanupRetrievalResources
+} = require('../services/retrievalCleanup.service');
+
+const RETRIEVAL_CLI_ALIAS = 'temporg';
+
 exports.checkGit = async (req, res) => {
 
     exec(
@@ -97,6 +103,8 @@ async function runMigration(
     const targetBranch =
         branchName || 'main';
 
+    let workspacePath = null;
+
     try{
 
     console.log('===== MIGRATION STARTED =====');
@@ -117,6 +125,8 @@ async function runMigration(
 
     const workspace =
     metadataResult.workspace;
+
+    workspacePath = workspace;
 
     projectPath =
     `${workspace}/backup-project`;
@@ -178,6 +188,11 @@ async function runMigration(
 
     setStatus('Migration failed');
 
+} finally {
+    await cleanupRetrievalResources({
+        workspacePath,
+        alias: RETRIEVAL_CLI_ALIAS
+    });
 }
 
 

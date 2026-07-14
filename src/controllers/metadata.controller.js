@@ -9,11 +9,20 @@ const {
     setStatus
 } = require('../status.store');
 
+const {
+    cleanupRetrievalResources
+} = require('../services/retrievalCleanup.service');
+
+const RETRIEVAL_CLI_ALIAS = 'temporg';
+
 exports.retrieveMetadataInternal = async (
     refreshToken,
     instanceUrl
 ) => {
- 
+
+    let workspace;
+    let deferCleanup = false;
+
     try {
  
         console.log('STEP 1 - Generating token');
@@ -59,7 +68,7 @@ console.log(
         console.log('STEP 2 - Creating workspace');
         setStatus('Creating workspace');
  
-        const workspace =
+        workspace =
         `/tmp/workspace-${Date.now()}`;
  
         fs.mkdirSync(
@@ -169,7 +178,9 @@ console.log(
 setStatus('Full Metadata Retrieval Complete');
 
         console.log('STEP 5 COMPLETE');
- 
+
+        deferCleanup = true;
+
         return {
             workspace,
             accessToken
@@ -183,6 +194,11 @@ setStatus('Full Metadata Retrieval Complete');
         );
  
         throw error;
+    } finally {
+        await cleanupRetrievalResources({
+            workspacePath: deferCleanup ? null : workspace,
+            alias: deferCleanup ? null : RETRIEVAL_CLI_ALIAS
+        });
     }
 };
  
@@ -256,7 +272,9 @@ exports.testSfAuth = async (req, res) => {
 const path = require('path');
 
 exports.retrieveMetadata = async (req, res) => {
- 
+
+    let workspacePath = null;
+
     try {
  
         const {
@@ -265,10 +283,12 @@ exports.retrieveMetadata = async (req, res) => {
         } = req.body;
  
         const result =
-            await retrieveMetadataInternal(
+            await exports.retrieveMetadataInternal(
                 refreshToken,
                 instanceUrl
             );
+
+        workspacePath = result.workspace;
  
         return res.json({
             success: true,
@@ -285,12 +305,19 @@ exports.retrieveMetadata = async (req, res) => {
                 error.message
         });
  
+    } finally {
+        await cleanupRetrievalResources({
+            workspacePath,
+            alias: RETRIEVAL_CLI_ALIAS
+        });
     }
  
 };
  
 
 exports.retrieveAllMetadata = async (req, res) => {
+
+    let workspace = null;
 
     try {
 
@@ -323,7 +350,7 @@ exports.retrieveAllMetadata = async (req, res) => {
         console.log('Access token generated');
 
         // STEP 2
-        const workspace =
+        workspace =
             `/tmp/workspace-${Date.now()}`;
 
         console.log('Workspace:', workspace);
@@ -486,6 +513,11 @@ console.log(filesResult.stdout);
                 error.message
         });
 
+    } finally {
+        await cleanupRetrievalResources({
+            workspacePath: workspace,
+            alias: RETRIEVAL_CLI_ALIAS
+        });
     }
 
 };
