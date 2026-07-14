@@ -9,7 +9,6 @@ const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
 const deploymentExecutionService = require('./deploymentExecution.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
-const deploymentHistorySyncService = require('./deploymentHistorySync.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -374,66 +373,6 @@ async function validateDeployment({
 
     if (deploymentHistory) {
         response.deploymentHistory = deploymentHistory;
-    }
-
-    if (deploymentHistory) {
-        try {
-            const fullHistory =
-                runHistorySafely(() =>
-                    deploymentHistoryService.getHistory(historyId)
-                ) || {};
-
-            response.historySynchronization =
-                await deploymentHistorySyncService.syncDeploymentHistory({
-                    deploymentHistory: {
-                        ...fullHistory,
-                        executionMode:
-                            deploymentResult?.executionMode ?? null,
-                        cliVersion: deploymentResult?.cliVersion ?? null,
-                        cliCommand: deploymentResult?.cliCommand ?? null,
-                        deploymentMessage: deploymentResult?.message ?? null,
-                        failureDetails:
-                            deploymentResult?.failureDetails ?? null,
-                        testResults: deploymentResult?.testResults ?? null,
-                        cliCompatibility:
-                            deploymentResult?.cliCompatibility ?? null,
-                        deploymentPlanId:
-                            deploymentPackage?.deploymentPlanId ?? null,
-                        metadataComparisonId:
-                            deploymentPackage?.metadataComparisonId ?? null,
-                        sourceOrgId: deploymentPackage?.sourceOrgId ?? null,
-                        destinationOrgId: orgId ?? null
-                    },
-                    deploymentSummary:
-                        deploymentResult?.deploymentSummary ||
-                        fullHistory.deploymentSummary ||
-                        null,
-                    validationSummary:
-                        fullHistory.validationSummary || null,
-                    generatedPackage: generatedDeploymentPackage,
-                    generatedManifest,
-                    generatedWorkspace,
-                    deploymentMode,
-                    // Destination org identity for DTO only.
-                    // History sync authenticates to the APPLICATION org
-                    // (SF_APP_INSTANCE_URL / SF_APP_REFRESH_TOKEN), never destination.
-                    connectedOrg: {
-                        orgId
-                    }
-                });
-        } catch (error) {
-            console.error('HISTORY SYNCHRONIZATION ERROR');
-            console.error(error);
-
-            response.historySynchronization = {
-                success: false,
-                salesforceRecordId: null,
-                status: 'FAILED',
-                message:
-                    'Unable to synchronize deployment history to Salesforce.',
-                httpStatus: null
-            };
-        }
     }
 
     return response;
