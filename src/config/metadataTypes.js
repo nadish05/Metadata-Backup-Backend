@@ -51,6 +51,10 @@ const METADATA_TYPE_RULES = {
         extension: '.namedCredential-meta.xml',
         requiresMetaXml: false
     },
+    ExternalCredential: {
+        extension: '.externalCredential-meta.xml',
+        requiresMetaXml: false
+    },
     CustomMetadata: {
         extension: '.md-meta.xml',
         requiresMetaXml: false
