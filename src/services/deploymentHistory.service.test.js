@@ -107,9 +107,12 @@ runTest('VALIDATE mode records package, manifest, workspace, and check-only time
     });
 
     assert.strictEqual(response.status, 'SUCCESS');
-    assert.strictEqual(response.summary.deploymentMode, 'VALIDATE');
-    assert.strictEqual(response.summary.metadataCount, 1);
-    assert.strictEqual(response.summary.workspaceCreated, true);
+    assert.strictEqual(response.deploymentMode, 'VALIDATE');
+    assert.strictEqual(response.metadataSummary.metadataCount, 1);
+    assert.strictEqual(response.workspaceSummary.workspaceCreated, true);
+    assert.strictEqual(response.deploymentId, '0Af000001');
+    assert.ok(response.validationSummary);
+    assert.ok(Number.isFinite(response.durationMilliseconds));
     assert.strictEqual(response.timeline[0].stage, 'Deployment Validation Started');
     assert.strictEqual(
         response.timeline[response.timeline.length - 1].stage,
@@ -160,8 +163,9 @@ runTest('DEPLOY mode records deployment execution timeline', () => {
         }
     });
 
-    assert.strictEqual(response.summary.deploymentMode, 'DEPLOY');
-    assert.strictEqual(response.summary.componentsValidated, 1);
+    assert.strictEqual(response.deploymentMode, 'DEPLOY');
+    assert.strictEqual(response.deploymentSummary.componentsDeployed, 1);
+    assert.strictEqual(response.deploymentId, '0Af000002');
 });
 
 runTest('deployment failure is recorded as FAILED', () => {
@@ -185,7 +189,11 @@ runTest('deployment failure is recorded as FAILED', () => {
     });
 
     assert.strictEqual(response.status, 'FAILED');
-    assert.ok(response.summary.deploymentStatus);
+    assert.ok(response.deploymentSummary.deploymentStatus);
+    assert.strictEqual(
+        response.deploymentMessage,
+        'Check-only deployment validation failed.'
+    );
 });
 
 runTest('workspace blocked is recorded as BLOCKED', () => {
@@ -220,7 +228,7 @@ runTest('workspace blocked is recorded as BLOCKED', () => {
     });
 
     assert.strictEqual(response.status, 'BLOCKED');
-    assert.strictEqual(response.summary.workspaceCreated, false);
+    assert.strictEqual(response.workspaceSummary.workspaceCreated, false);
 });
 
 runTest('history service exceptions never throw to callers', () => {

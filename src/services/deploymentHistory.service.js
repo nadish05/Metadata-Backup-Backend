@@ -223,13 +223,36 @@ function buildApiResponse(history) {
     }
 
     return {
-        historyId: history.historyId,
-        status: history.status,
-        startedAt: history.startedAt,
-        completedAt: history.completedAt,
-        duration: history.duration,
+        historyId: history.historyId ?? null,
+        deploymentId: history.deploymentId ?? null,
+        deploymentMode: history.deploymentMode ?? null,
+        executionMode: history.executionMode ?? null,
+        status: history.status ?? null,
+        validationStatus: history.validationStatus ?? null,
+        startedAt: history.startedAt ?? null,
+        completedAt: history.completedAt ?? null,
+        duration: history.duration ?? null,
+        durationMilliseconds:
+            history.durationMilliseconds ??
+            resolveDurationMilliseconds(history),
+        cliVersion: history.cliVersion ?? null,
+        cliCommand: history.cliCommand ?? null,
+        deploymentMessage: history.deploymentMessage ?? null,
+        deploymentSummary: history.deploymentSummary ?? null,
+        validationSummary: history.validationSummary ?? null,
         timeline: [...(history.timeline || [])],
-        summary: buildResponseSummary(history)
+        warnings: Array.isArray(history.warnings) ? [...history.warnings] : [],
+        errors: Array.isArray(history.errors) ? [...history.errors] : [],
+        failureDetails: history.failureDetails ?? null,
+        testResults: history.testResults ?? null,
+        cliCompatibility: history.cliCompatibility ?? null,
+        metadataSummary: history.metadataSummary ?? null,
+        manifestSummary: history.manifestSummary ?? null,
+        workspaceSummary: history.workspaceSummary ?? null,
+        deploymentPlanId: history.deploymentPlanId ?? null,
+        metadataComparisonId: history.metadataComparisonId ?? null,
+        sourceOrgId: history.sourceOrgId ?? null,
+        destinationOrgId: history.destinationOrgId ?? null
     };
 }
 
@@ -246,14 +269,26 @@ function createHistory({
         const startedAt = new Date().toISOString();
         const deploymentMode = resolveDeploymentMode(deploymentPackage);
 
+        const validationSummary = buildValidationSummary({
+            deploymentReadiness,
+            metadataValidation,
+            dependencyValidation
+        });
+
         const history = {
             historyId,
             deploymentMode,
             deploymentId: null,
+            executionMode: null,
             status: 'IN_PROGRESS',
+            validationStatus: validationSummary?.overallStatus || null,
             startedAt,
             completedAt: null,
             duration: null,
+            durationMilliseconds: null,
+            cliVersion: null,
+            cliCommand: null,
+            deploymentMessage: null,
             sourceBranch:
                 deploymentPackage?.sourceBranch ||
                 deploymentPackage?.branch ||
@@ -267,15 +302,19 @@ function createHistory({
             metadataSummary: null,
             manifestSummary: null,
             workspaceSummary: null,
-            validationSummary: buildValidationSummary({
-                deploymentReadiness,
-                metadataValidation,
-                dependencyValidation
-            }),
+            validationSummary,
             deploymentSummary: null,
+            failureDetails: null,
+            testResults: null,
+            cliCompatibility: null,
             errors: [],
             warnings: collectWarnings({ deploymentReadiness }),
-            timeline: []
+            timeline: [],
+            deploymentPlanId: deploymentPackage?.deploymentPlanId || null,
+            metadataComparisonId:
+                deploymentPackage?.metadataComparisonId || null,
+            sourceOrgId: deploymentPackage?.sourceOrgId || null,
+            destinationOrgId: deploymentPackage?.destinationOrgId || null
         };
 
         appendTimeline(history, STAGES.VALIDATION_STARTED);
@@ -379,7 +418,11 @@ function completeHistory(historyId, completion = {}) {
             deploymentReadiness,
             generatedWorkspace,
             deploymentResult,
-            deploymentMode
+            deploymentMode,
+            destinationOrgId,
+            sourceOrgId,
+            deploymentPlanId,
+            metadataComparisonId
         } = completion;
 
         if (deploymentMode) {
@@ -392,6 +435,50 @@ function completeHistory(historyId, completion = {}) {
 
         if (deploymentResult?.deploymentSummary) {
             history.deploymentSummary = deploymentResult.deploymentSummary;
+        }
+
+        if (deploymentResult?.executionMode !== undefined) {
+            history.executionMode = deploymentResult.executionMode;
+        }
+
+        if (deploymentResult?.cliVersion !== undefined) {
+            history.cliVersion = deploymentResult.cliVersion;
+        }
+
+        if (deploymentResult?.cliCommand !== undefined) {
+            history.cliCommand = deploymentResult.cliCommand;
+        }
+
+        if (deploymentResult?.message !== undefined) {
+            history.deploymentMessage = deploymentResult.message;
+        }
+
+        if (deploymentResult?.failureDetails !== undefined) {
+            history.failureDetails = deploymentResult.failureDetails;
+        }
+
+        if (deploymentResult?.testResults !== undefined) {
+            history.testResults = deploymentResult.testResults;
+        }
+
+        if (deploymentResult?.cliCompatibility !== undefined) {
+            history.cliCompatibility = deploymentResult.cliCompatibility;
+        }
+
+        if (destinationOrgId !== undefined) {
+            history.destinationOrgId = destinationOrgId;
+        }
+
+        if (sourceOrgId !== undefined) {
+            history.sourceOrgId = sourceOrgId;
+        }
+
+        if (deploymentPlanId !== undefined) {
+            history.deploymentPlanId = deploymentPlanId;
+        }
+
+        if (metadataComparisonId !== undefined) {
+            history.metadataComparisonId = metadataComparisonId;
         }
 
         history.errors = collectErrors({
@@ -408,11 +495,16 @@ function completeHistory(historyId, completion = {}) {
             generatedWorkspace,
             deploymentResult
         });
+        history.validationStatus =
+            history.validationSummary?.overallStatus || null;
         history.completedAt = new Date().toISOString();
         history.duration = formatDuration(
             history.startedAt,
             history.completedAt
         );
+        history.durationMilliseconds =
+            history.durationMilliseconds ??
+            resolveDurationMilliseconds(history);
 
         appendTimeline(history, STAGES.DEPLOYMENT_COMPLETED);
 

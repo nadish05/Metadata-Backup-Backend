@@ -367,7 +367,12 @@ async function validateDeployment({
             deploymentMode,
             deploymentReadiness,
             generatedWorkspace,
-            deploymentResult
+            deploymentResult,
+            destinationOrgId: orgId ?? null,
+            sourceOrgId: deploymentPackage?.sourceOrgId ?? null,
+            deploymentPlanId: deploymentPackage?.deploymentPlanId ?? null,
+            metadataComparisonId:
+                deploymentPackage?.metadataComparisonId ?? null
         })
     );
 
