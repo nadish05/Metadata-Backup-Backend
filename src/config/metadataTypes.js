@@ -58,6 +58,10 @@ const METADATA_TYPE_RULES = {
     CustomMetadata: {
         extension: '.md-meta.xml',
         requiresMetaXml: false
+    },
+    CustomLabel: {
+        extension: '.labels-meta.xml',
+        requiresMetaXml: false
     }
 };
 
