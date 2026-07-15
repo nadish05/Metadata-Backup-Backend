@@ -5,6 +5,7 @@ const { exec } = require('child_process');
 const execAsync = util.promisify(exec);
 
 const dependencyAnalyzer = require('./deploymentReview/dependencyAnalyzer.service');
+const namedCredentialDependencyAnalyzer = require('./deploymentReview/namedCredentialDependencyAnalyzer.service');
 const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
@@ -187,10 +188,7 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
         return buildNotSupportedResult({ metadataType, filePath });
     }
 
-    if (
-        metadataType === 'NamedCredential' ||
-        metadataType === 'ExternalCredential'
-    ) {
+    if (metadataType === 'ExternalCredential') {
         return {
             metadataType,
             metadataName,
@@ -198,6 +196,33 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
             status: 'SUCCESS',
             ...buildEmptyDependencyAnalysisResult()
         };
+    }
+
+    if (metadataType === 'NamedCredential') {
+        try {
+            const content = await readRepoFile(filePath);
+
+            return {
+                metadataType,
+                metadataName,
+                filePath,
+                status: 'SUCCESS',
+                ...namedCredentialDependencyAnalyzer.analyzeNamedCredentialContent(
+                    content
+                )
+            };
+        } catch (error) {
+            return {
+                metadataType,
+                metadataName,
+                filePath,
+                status: 'FAILED',
+                error:
+                    error.stderr ||
+                    error.stdout ||
+                    error.message
+            };
+        }
     }
 
     try {
