@@ -40,6 +40,13 @@ function buildTypesXml(typeMap) {
 
     return sortedTypes
         .map((metadataType) => {
+            if (metadataType === 'CustomLabel') {
+                return `    <types>
+        <members>*</members>
+        <name>CustomLabels</name>
+    </types>`;
+            }
+
             const members = [...typeMap.get(metadataType)].sort((a, b) =>
                 a.localeCompare(b)
             );
