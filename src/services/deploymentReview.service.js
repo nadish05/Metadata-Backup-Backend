@@ -7,6 +7,7 @@ const execAsync = util.promisify(exec);
 const dependencyAnalyzer = require('./deploymentReview/dependencyAnalyzer.service');
 const namedCredentialDependencyAnalyzer = require('./deploymentReview/namedCredentialDependencyAnalyzer.service');
 const customObjectDependencyAnalyzer = require('./deploymentReview/customObjectDependencyAnalyzer.service');
+const customObjectValidationRuleAnalyzer = require('./deploymentReview/customObjectValidationRuleAnalyzer.service');
 const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
@@ -235,15 +236,57 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
         try {
             const repoFiles = await listRepoFiles();
 
+            const fieldAnalysis =
+                customObjectDependencyAnalyzer.analyzeCustomObjectFields(
+                    customObjectName,
+                    repoFiles
+                );
+
+            const validationRuleAnalysis =
+                customObjectValidationRuleAnalyzer.analyzeCustomObjectValidationRules(
+                    customObjectName,
+                    repoFiles
+                );
+
+            const requiredDependencies = [
+                ...(fieldAnalysis.dependencyAnalysis?.requiredDependencies ||
+                    []),
+                ...(validationRuleAnalysis.dependencyAnalysis
+                    ?.requiredDependencies || [])
+            ];
+
+            const dependencyKeys = new Set();
+            const dedupedRequiredDependencies = [];
+
+            for (const dependency of requiredDependencies) {
+                const key = `${dependency.type}:${dependency.name}`;
+
+                if (dependencyKeys.has(key)) {
+                    continue;
+                }
+
+                dependencyKeys.add(key);
+                dedupedRequiredDependencies.push(dependency);
+            }
+
+            dedupedRequiredDependencies.sort((a, b) =>
+                a.name.localeCompare(b.name)
+            );
+
             return {
                 metadataType,
                 metadataName: customObjectName,
                 filePath,
                 status: 'SUCCESS',
-                ...customObjectDependencyAnalyzer.analyzeCustomObjectFields(
-                    customObjectName,
-                    repoFiles
-                )
+                dependencyAnalysis: {
+                    requiredDependencies: dedupedRequiredDependencies,
+                    recommendedTestClasses:
+                        fieldAnalysis.dependencyAnalysis
+                            ?.recommendedTestClasses || [],
+                    optionalDependencies:
+                        fieldAnalysis.dependencyAnalysis
+                            ?.optionalDependencies || []
+                }
             };
         } catch (error) {
             return {
