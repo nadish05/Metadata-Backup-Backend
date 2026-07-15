@@ -9,10 +9,29 @@ const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
 
-const SUPPORTED_METADATA_TYPE = 'ApexClass';
+const APEX_REVIEW_METADATA_TYPE = 'ApexClass';
+const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
+    'ApexClass',
+    'NamedCredential',
+    'ExternalCredential'
+]);
+
+function isSupportedReviewMetadataType(metadataType) {
+    return SUPPORTED_REVIEW_METADATA_TYPES.has(metadataType);
+}
 
 function getMetadataName(filePath) {
     return path.basename(filePath, path.extname(filePath));
+}
+
+function buildEmptyDependencyAnalysisResult() {
+    return {
+        dependencyAnalysis: {
+            requiredDependencies: [],
+            recommendedTestClasses: [],
+            optionalDependencies: []
+        }
+    };
 }
 
 function normalizeSelectedMetadata(selectedMetadata) {
@@ -47,7 +66,7 @@ function normalizeDeploymentPackage(payload) {
             destinationBranch: payload.destinationBranch || payload.branch,
             selectedMetadata: [
                 {
-                    metadataType: payload.metadataType || SUPPORTED_METADATA_TYPE,
+                    metadataType: payload.metadataType || APEX_REVIEW_METADATA_TYPE,
                     filePath: payload.filePath
                 }
             ]
@@ -164,8 +183,21 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
     const { metadataType, filePath } = item;
     const metadataName = getMetadataName(filePath);
 
-    if (metadataType !== SUPPORTED_METADATA_TYPE) {
+    if (!isSupportedReviewMetadataType(metadataType)) {
         return buildNotSupportedResult({ metadataType, filePath });
+    }
+
+    if (
+        metadataType === 'NamedCredential' ||
+        metadataType === 'ExternalCredential'
+    ) {
+        return {
+            metadataType,
+            metadataName,
+            filePath,
+            status: 'SUCCESS',
+            ...buildEmptyDependencyAnalysisResult()
+        };
     }
 
     try {
@@ -213,7 +245,7 @@ async function runDeploymentReview(payload) {
     }
 
     const hasSupportedMetadata = selectedMetadata.some(
-        (item) => item.metadataType === SUPPORTED_METADATA_TYPE
+        (item) => isSupportedReviewMetadataType(item.metadataType)
     );
 
     if (!hasSupportedMetadata) {
