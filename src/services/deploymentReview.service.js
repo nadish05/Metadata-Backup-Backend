@@ -6,6 +6,7 @@ const execAsync = util.promisify(exec);
 
 const dependencyAnalyzer = require('./deploymentReview/dependencyAnalyzer.service');
 const namedCredentialDependencyAnalyzer = require('./deploymentReview/namedCredentialDependencyAnalyzer.service');
+const customObjectDependencyAnalyzer = require('./deploymentReview/customObjectDependencyAnalyzer.service');
 const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
@@ -14,7 +15,8 @@ const APEX_REVIEW_METADATA_TYPE = 'ApexClass';
 const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
     'ApexClass',
     'NamedCredential',
-    'ExternalCredential'
+    'ExternalCredential',
+    'CustomObject'
 ]);
 
 function isSupportedReviewMetadataType(metadataType) {
@@ -215,6 +217,38 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
             return {
                 metadataType,
                 metadataName,
+                filePath,
+                status: 'FAILED',
+                error:
+                    error.stderr ||
+                    error.stdout ||
+                    error.message
+            };
+        }
+    }
+
+    if (metadataType === 'CustomObject') {
+        const customObjectName =
+            customObjectDependencyAnalyzer.getCustomObjectApiName(filePath) ||
+            metadataName;
+
+        try {
+            const repoFiles = await listRepoFiles();
+
+            return {
+                metadataType,
+                metadataName: customObjectName,
+                filePath,
+                status: 'SUCCESS',
+                ...customObjectDependencyAnalyzer.analyzeCustomObjectFields(
+                    customObjectName,
+                    repoFiles
+                )
+            };
+        } catch (error) {
+            return {
+                metadataType,
+                metadataName: customObjectName,
                 filePath,
                 status: 'FAILED',
                 error:
