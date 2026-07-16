@@ -8,6 +8,7 @@ const dependencyAnalyzer = require('./deploymentReview/dependencyAnalyzer.servic
 const namedCredentialDependencyAnalyzer = require('./deploymentReview/namedCredentialDependencyAnalyzer.service');
 const customObjectDependencyAnalyzer = require('./deploymentReview/customObjectDependencyAnalyzer.service');
 const customObjectValidationRuleAnalyzer = require('./deploymentReview/customObjectValidationRuleAnalyzer.service');
+const customObjectRecordTypeAnalyzer = require('./deploymentReview/customObjectRecordTypeAnalyzer.service');
 const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
@@ -248,11 +249,19 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
                     repoFiles
                 );
 
+            const recordTypeAnalysis =
+                customObjectRecordTypeAnalyzer.analyzeCustomObjectRecordTypes(
+                    customObjectName,
+                    repoFiles
+                );
+
             const requiredDependencies = [
                 ...(fieldAnalysis.dependencyAnalysis?.requiredDependencies ||
                     []),
                 ...(validationRuleAnalysis.dependencyAnalysis
-                    ?.requiredDependencies || [])
+                    ?.requiredDependencies || []),
+                ...(recordTypeAnalysis.dependencyAnalysis?.requiredDependencies ||
+                    [])
             ];
 
             const dependencyKeys = new Set();
