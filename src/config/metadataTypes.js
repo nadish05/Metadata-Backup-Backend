@@ -47,6 +47,30 @@ const METADATA_TYPE_RULES = {
         extension: '.field-meta.xml',
         requiresMetaXml: false
     },
+    CompactLayout: {
+        extension: '.compactLayout-meta.xml',
+        requiresMetaXml: false
+    },
+    FieldSet: {
+        extension: '.fieldSet-meta.xml',
+        requiresMetaXml: false
+    },
+    ListView: {
+        extension: '.listView-meta.xml',
+        requiresMetaXml: false
+    },
+    SharingReason: {
+        extension: '.sharingReason-meta.xml',
+        requiresMetaXml: false
+    },
+    WebLink: {
+        extension: '.webLink-meta.xml',
+        requiresMetaXml: false
+    },
+    Index: {
+        extension: '.index-meta.xml',
+        requiresMetaXml: false
+    },
     NamedCredential: {
         extension: '.namedCredential-meta.xml',
         requiresMetaXml: false

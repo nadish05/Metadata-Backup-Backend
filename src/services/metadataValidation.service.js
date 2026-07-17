@@ -6,6 +6,18 @@ const { METADATA_TYPE_RULES } = require('../config/metadataTypes');
 
 const execAsync = util.promisify(exec);
 
+const CUSTOM_OBJECT_CHILD_METADATA_TYPES = new Set([
+    'CustomField',
+    'ValidationRule',
+    'RecordType',
+    'CompactLayout',
+    'FieldSet',
+    'ListView',
+    'SharingReason',
+    'WebLink',
+    'Index'
+]);
+
 function logSection(title) {
     console.log('------------------------------------');
     console.log(title);
@@ -14,6 +26,10 @@ function logSection(title) {
 
 function isSupportedMetadataType(metadataType) {
     return Boolean(METADATA_TYPE_RULES[metadataType]);
+}
+
+function isCustomObjectChildMetadataType(metadataType) {
+    return CUSTOM_OBJECT_CHILD_METADATA_TYPES.has(metadataType);
 }
 
 function extensionMatchesMetadataType(filePath, metadataType) {
@@ -57,7 +73,22 @@ function metadataNameMatchesFile(metadataType, filePath, metadataName) {
 
     const expectedName = resolveMetadataName(metadataType, filePath, null);
 
-    return resolvedName === expectedName;
+    if (!expectedName) {
+        return false;
+    }
+
+    if (resolvedName === expectedName) {
+        return true;
+    }
+
+    if (
+        isCustomObjectChildMetadataType(metadataType) &&
+        resolvedName.endsWith(`.${expectedName}`)
+    ) {
+        return true;
+    }
+
+    return false;
 }
 
 function normalizeSelectedMetadata(selectedMetadata) {
