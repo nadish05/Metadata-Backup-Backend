@@ -9,6 +9,7 @@ const namedCredentialDependencyAnalyzer = require('./deploymentReview/namedCrede
 const customObjectDependencyAnalyzer = require('./deploymentReview/customObjectDependencyAnalyzer.service');
 const customObjectValidationRuleAnalyzer = require('./deploymentReview/customObjectValidationRuleAnalyzer.service');
 const customObjectRecordTypeAnalyzer = require('./deploymentReview/customObjectRecordTypeAnalyzer.service');
+const customObjectChildMetadataAnalyzer = require('./deploymentReview/customObjectChildMetadataAnalyzer.service');
 const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
@@ -255,13 +256,21 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
                     repoFiles
                 );
 
+            const childMetadataAnalysis =
+                customObjectChildMetadataAnalyzer.analyzeCustomObjectChildMetadata(
+                    customObjectName,
+                    repoFiles
+                );
+
             const requiredDependencies = [
                 ...(fieldAnalysis.dependencyAnalysis?.requiredDependencies ||
                     []),
                 ...(validationRuleAnalysis.dependencyAnalysis
                     ?.requiredDependencies || []),
                 ...(recordTypeAnalysis.dependencyAnalysis?.requiredDependencies ||
-                    [])
+                    []),
+                ...(childMetadataAnalysis.dependencyAnalysis
+                    ?.requiredDependencies || [])
             ];
 
             const dependencyKeys = new Set();
