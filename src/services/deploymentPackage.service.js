@@ -53,19 +53,7 @@ function normalizeMetadata(selectedMetadata) {
         metadataMap.set(key, normalized);
     }
 
-    return [...metadataMap.values()].sort((a, b) => {
-        const typeCompare = String(a.metadataType || '').localeCompare(
-            String(b.metadataType || '')
-        );
-
-        if (typeCompare !== 0) {
-            return typeCompare;
-        }
-
-        return String(a.metadataName || '').localeCompare(
-            String(b.metadataName || '')
-        );
-    });
+    return [...metadataMap.values()];
 }
 
 function normalizeDependencyItem(item) {
@@ -119,6 +107,64 @@ function normalizeDependencies(requiredDependencies) {
     });
 }
 
+function shouldAutoIncludeDependency(dependency) {
+    return dependency.required === true && dependency.selected === true;
+}
+
+function dependencyToMetadataItem(dependency) {
+    return {
+        metadataType: dependency.type,
+        metadataName: dependency.name,
+        filePath: null
+    };
+}
+
+function composeMetadataWithRequiredDependencies(
+    selectedMetadata,
+    requiredDependencies
+) {
+    const selected = normalizeMetadata(selectedMetadata);
+    const metadataMap = new Map();
+    const composed = [];
+
+    for (const item of selected) {
+        const key = getMetadataUniquenessKey(item);
+
+        if (!key || metadataMap.has(key)) {
+            continue;
+        }
+
+        metadataMap.set(key, item);
+        composed.push(item);
+    }
+
+    const autoIncludeDependencies = normalizeDependencies(requiredDependencies)
+        .filter(shouldAutoIncludeDependency)
+        .sort((a, b) => {
+            const typeCompare = a.type.localeCompare(b.type);
+
+            if (typeCompare !== 0) {
+                return typeCompare;
+            }
+
+            return a.name.localeCompare(b.name);
+        });
+
+    for (const dependency of autoIncludeDependencies) {
+        const metadataItem = dependencyToMetadataItem(dependency);
+        const key = getMetadataUniquenessKey(metadataItem);
+
+        if (!key || metadataMap.has(key)) {
+            continue;
+        }
+
+        metadataMap.set(key, metadataItem);
+        composed.push(metadataItem);
+    }
+
+    return composed;
+}
+
 function resolveTestClassName(testClass) {
     if (typeof testClass === 'string') {
         return testClass;
@@ -170,10 +216,13 @@ function generateDeploymentPackage(deploymentPackage) {
         };
     }
 
-    const metadata = normalizeMetadata(deploymentPackage.selectedMetadata);
-    const dependencies = normalizeDependencies(
+    const metadata = composeMetadataWithRequiredDependencies(
+        deploymentPackage.selectedMetadata,
         deploymentPackage.requiredDependencies
     );
+    const dependencies = normalizeDependencies(
+        deploymentPackage.requiredDependencies
+    ).filter(shouldAutoIncludeDependency);
     const testClasses = normalizeTestClasses(
         deploymentPackage.selectedTestClasses
     );

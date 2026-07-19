@@ -202,6 +202,14 @@ async function validateDeployment({
             deploymentPackage
         );
 
+    const generatedDeploymentPackage =
+        deploymentPackageService.generateDeploymentPackage(deploymentPackage);
+
+    const deploymentPackageForDependencyValidation = {
+        ...deploymentPackage,
+        selectedMetadata: generatedDeploymentPackage.metadata
+    };
+
     let dependencyValidation;
 
     if (connectivityResult.deploymentValidation?.destinationConnected) {
@@ -214,7 +222,7 @@ async function validateDeployment({
                 await dependencyValidationService.validateDependencies({
                     accessToken: tokenResult.accessToken,
                     instanceUrl: resolvedInstanceUrl,
-                    deploymentPackage
+                    deploymentPackage: deploymentPackageForDependencyValidation
                 });
         } catch (error) {
             console.error('DEPENDENCY VALIDATION ERROR');
@@ -252,9 +260,6 @@ async function validateDeployment({
             dependencyValidation
         })
     );
-
-    const generatedDeploymentPackage =
-        deploymentPackageService.generateDeploymentPackage(deploymentPackage);
 
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
