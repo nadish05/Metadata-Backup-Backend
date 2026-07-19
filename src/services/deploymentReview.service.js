@@ -10,6 +10,7 @@ const customObjectDependencyAnalyzer = require('./deploymentReview/customObjectD
 const customObjectValidationRuleAnalyzer = require('./deploymentReview/customObjectValidationRuleAnalyzer.service');
 const customObjectRecordTypeAnalyzer = require('./deploymentReview/customObjectRecordTypeAnalyzer.service');
 const customObjectChildMetadataAnalyzer = require('./deploymentReview/customObjectChildMetadataAnalyzer.service');
+const customObjectFlexiPageAnalyzer = require('./deploymentReview/customObjectFlexiPageAnalyzer.service');
 const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
@@ -262,6 +263,12 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
                     repoFiles
                 );
 
+            const objectMetaXmlContent = await readRepoFile(filePath);
+            const flexiPageAnalysis =
+                customObjectFlexiPageAnalyzer.analyzeCustomObjectFlexiPages(
+                    objectMetaXmlContent
+                );
+
             const requiredDependencies = [
                 ...(fieldAnalysis.dependencyAnalysis?.requiredDependencies ||
                     []),
@@ -270,6 +277,8 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
                 ...(recordTypeAnalysis.dependencyAnalysis?.requiredDependencies ||
                     []),
                 ...(childMetadataAnalysis.dependencyAnalysis
+                    ?.requiredDependencies || []),
+                ...(flexiPageAnalysis.dependencyAnalysis
                     ?.requiredDependencies || [])
             ];
 
