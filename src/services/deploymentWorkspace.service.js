@@ -5,6 +5,9 @@ const util = require('util');
 const { exec } = require('child_process');
 
 const { METADATA_TYPE_RULES } = require('../config/metadataTypes');
+const {
+    CHILD_METADATA_CONFIG
+} = require('./deploymentReview/customObjectChildMetadataAnalyzer.service');
 
 const execAsync = util.promisify(exec);
 const mkdir = util.promisify(fs.mkdir);
@@ -192,6 +195,135 @@ function resolveCustomLabelPath(repoFiles) {
     );
 }
 
+function getChildMetadataFolder(dependencyType) {
+    const config = CHILD_METADATA_CONFIG.find(
+        (entry) => entry.dependencyType === dependencyType
+    );
+
+    return config?.folder || null;
+}
+
+function resolveObjectChildMetadataPath(
+    objectApiName,
+    childApiName,
+    repoFiles,
+    folder,
+    extension
+) {
+    if (!objectApiName || !childApiName || !folder || !extension) {
+        return null;
+    }
+
+    if (!Array.isArray(repoFiles)) {
+        return null;
+    }
+
+    const expectedFolder = `/objects/${objectApiName}/${folder}/`;
+
+    return (
+        repoFiles.find(
+            (repoFile) =>
+                repoFile.endsWith(extension) &&
+                repoFile.includes(expectedFolder) &&
+                path.basename(repoFile, extension) === childApiName
+        ) || null
+    );
+}
+
+function resolveValidationRulePath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        'validationRules',
+        METADATA_TYPE_RULES.ValidationRule.extension
+    );
+}
+
+function resolveRecordTypePath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        'recordTypes',
+        METADATA_TYPE_RULES.RecordType.extension
+    );
+}
+
+function resolveCompactLayoutPath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        getChildMetadataFolder('CompactLayout'),
+        METADATA_TYPE_RULES.CompactLayout.extension
+    );
+}
+
+function resolveFieldSetPath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        getChildMetadataFolder('FieldSet'),
+        METADATA_TYPE_RULES.FieldSet.extension
+    );
+}
+
+function resolveListViewPath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        getChildMetadataFolder('ListView'),
+        METADATA_TYPE_RULES.ListView.extension
+    );
+}
+
+function resolveSharingReasonPath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        getChildMetadataFolder('SharingReason'),
+        METADATA_TYPE_RULES.SharingReason.extension
+    );
+}
+
+function resolveWebLinkPath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        getChildMetadataFolder('WebLink'),
+        METADATA_TYPE_RULES.WebLink.extension
+    );
+}
+
+function resolveIndexPath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        getChildMetadataFolder('Index'),
+        METADATA_TYPE_RULES.Index.extension
+    );
+}
+
+function parseObjectChildName(name) {
+    if (!name || !name.includes('.')) {
+        return null;
+    }
+
+    const [objectApiName, childApiName] = name.split('.');
+
+    if (!objectApiName || !childApiName) {
+        return null;
+    }
+
+    return { objectApiName, childApiName };
+}
+
 function resolvePathByTypeAndName(type, name, repoFiles) {
     if (type === 'CustomField') {
         return resolveCustomFieldPath(name, repoFiles);
@@ -207,6 +339,94 @@ function resolvePathByTypeAndName(type, name, repoFiles) {
 
     if (type === 'CustomLabel') {
         return resolveCustomLabelPath(repoFiles);
+    }
+
+    if (type === 'ValidationRule') {
+        const parsed = parseObjectChildName(name);
+        return parsed
+            ? resolveValidationRulePath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
+    }
+
+    if (type === 'RecordType') {
+        const parsed = parseObjectChildName(name);
+        return parsed
+            ? resolveRecordTypePath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
+    }
+
+    if (type === 'CompactLayout') {
+        const parsed = parseObjectChildName(name);
+        return parsed
+            ? resolveCompactLayoutPath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
+    }
+
+    if (type === 'FieldSet') {
+        const parsed = parseObjectChildName(name);
+        return parsed
+            ? resolveFieldSetPath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
+    }
+
+    if (type === 'ListView') {
+        const parsed = parseObjectChildName(name);
+        return parsed
+            ? resolveListViewPath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
+    }
+
+    if (type === 'SharingReason') {
+        const parsed = parseObjectChildName(name);
+        return parsed
+            ? resolveSharingReasonPath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
+    }
+
+    if (type === 'WebLink') {
+        const parsed = parseObjectChildName(name);
+        return parsed
+            ? resolveWebLinkPath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
+    }
+
+    if (type === 'Index') {
+        const parsed = parseObjectChildName(name);
+        return parsed
+            ? resolveIndexPath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
     }
 
     const rule = METADATA_TYPE_RULES[type];
