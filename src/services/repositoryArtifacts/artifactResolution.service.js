@@ -277,15 +277,49 @@ async function resolveRepositoryArtifacts({
             enrichedDependencies
         });
 
+        // DEBUG ONLY — temporary diagnostics.
+        console.log('========================================');
+        console.log('ARTIFACT RESOLUTION START');
+        console.log('========================================');
+        console.log('Total Graph Nodes:');
+        console.log(graphNodes.length);
+        console.log('Total Repository Files:');
+        console.log(Array.isArray(files) ? files.length : 0);
+
         const resolvedNodes = [];
         const enrichmentByKey = new Map();
         const warnings = [];
         let artifactsFound = 0;
         let artifactsMissing = 0;
+        const resolvedList = [];
+        const unresolvedList = [];
 
         for (const node of graphNodes) {
+            if (node.metadataType === 'CustomObject') {
+                console.log('----------------------------------------');
+                console.log('Resolving CustomObject');
+                console.log('----------------------------------------');
+                console.log('Metadata Name:');
+                console.log(node.name);
+                console.log('Metadata Type:');
+                console.log(node.metadataType);
+            }
+
             const enriched = enrichNode(node, files);
             const key = getNodeKey(enriched);
+
+            if (node.metadataType === 'CustomObject') {
+                console.log('----------------------------------------');
+                console.log('Resolver decision');
+                console.log('----------------------------------------');
+                console.log('Resolved:', enriched.artifactResolved === true);
+                console.log('Resolved Path:');
+                console.log(enriched.filePath);
+                console.log('sourceExists:');
+                console.log(enriched.sourceExists);
+                console.log('artifactResolved:');
+                console.log(enriched.artifactResolved);
+            }
 
             resolvedNodes.push(enriched);
 
@@ -295,8 +329,12 @@ async function resolveRepositoryArtifacts({
 
             if (enriched.artifactResolved) {
                 artifactsFound += 1;
+                resolvedList.push(`${enriched.metadataType}:${enriched.name}`);
             } else {
                 artifactsMissing += 1;
+                unresolvedList.push(
+                    `${enriched.metadataType}:${enriched.name}`
+                );
                 warnings.push(
                     `Source artifact not found for ${enriched.metadataType}:${enriched.name}`
                 );
@@ -314,6 +352,13 @@ async function resolveRepositoryArtifacts({
             warnings
         };
 
+        console.log('========================================');
+        console.log('ARTIFACT RESOLUTION SUMMARY');
+        console.log('========================================');
+        console.log('Resolved:');
+        console.log(resolvedList.length ? resolvedList : '(none)');
+        console.log('Unresolved:');
+        console.log(unresolvedList.length ? unresolvedList : '(none)');
         console.log('Nodes resolved:', summary.nodesResolved);
         console.log('Artifacts found:', summary.artifactsFound);
         console.log('Artifacts missing:', summary.artifactsMissing);

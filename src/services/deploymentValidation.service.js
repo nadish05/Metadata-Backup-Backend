@@ -551,6 +551,42 @@ async function validateDeployment({
         resolvedRequiredDependencies = enrichedRequiredDependencies;
     }
 
+    // DEBUG ONLY — temporary diagnostics before Compatibility.
+    {
+        const comparisonNodes = [
+            ...(artifactEnrichedSelectedMetadata || []),
+            ...(discoveredReferences || []),
+            ...(enrichedRequiredDependencies || []),
+            ...(resolvedRequiredDependencies || [])
+        ].filter((item) => {
+            const name = item?.metadataName || item?.name;
+            const type = item?.metadataType || item?.type;
+            return (
+                name === 'Metadata_Comparison__c' ||
+                (type === 'CustomObject' && name === 'Metadata_Comparison__c')
+            );
+        });
+
+        console.log('========================================');
+        console.log('Artifact Status');
+        console.log('========================================');
+        console.log('Metadata_Comparison__c');
+
+        if (!comparisonNodes.length) {
+            console.log('(not found in enriched graph collections)');
+        } else {
+            for (const node of comparisonNodes) {
+                console.log('artifactResolved');
+                console.log(node.artifactResolved);
+                console.log('sourceExists');
+                console.log(node.sourceExists);
+                console.log('filePath');
+                console.log(node.filePath);
+                console.log('----------------------------------------');
+            }
+        }
+    }
+
     try {
         deploymentCompatibility =
             deploymentCompatibilityAnalyzerService.analyzeDeploymentCompatibility(
@@ -738,6 +774,34 @@ async function validateDeployment({
                 finding.status === 'BLOCK' ||
                 finding.blocking === true)
     );
+
+    // DEBUG ONLY — temporary diagnostics before Workspace.
+    {
+        const workspaceCandidates = [
+            ...(generatedDeploymentPackage?.metadata || []),
+            ...(generatedDeploymentPackage?.dependencies || [])
+        ].filter((item) => {
+            const name = item?.metadataName || item?.name;
+            return name === 'Metadata_Comparison__c';
+        });
+
+        console.log('========================================');
+        console.log('Workspace Input');
+        console.log('========================================');
+        console.log('Metadata_Comparison__c');
+
+        if (!workspaceCandidates.length) {
+            console.log('(not present in generated deployment package)');
+        } else {
+            for (const node of workspaceCandidates) {
+                console.log('filePath');
+                console.log(node.filePath);
+                console.log('artifactResolved');
+                console.log(node.artifactResolved);
+                console.log('----------------------------------------');
+            }
+        }
+    }
 
     let generatedWorkspace;
 
