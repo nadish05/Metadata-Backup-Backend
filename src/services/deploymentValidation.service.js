@@ -13,6 +13,7 @@ const metadataCompatibilityService = require('./metadataCompatibility/metadataCo
 const dependencyResolutionService = require('./dependencyResolution/dependencyResolution.service');
 const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
 const referenceDiscoveryService = require('./dependencyResolution/referenceDiscovery.service');
+const graphExpansionService = require('./dependencyResolution/graphExpansion/graphExpansion.service');
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
 
@@ -364,6 +365,106 @@ async function validateDeployment({
             warnings: [
                 error.message ||
                     'Reference discovery failed; continuing without references.'
+            ]
+        };
+    }
+
+    try {
+        const expansionResult = await graphExpansionService.expandMetadataGraph(
+            {
+                selectedMetadata: deploymentPackage.selectedMetadata,
+                discoveredRelationships,
+                discoveredReferences,
+                enrichedDependencies: enrichedRequiredDependencies,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            }
+        );
+
+        const expansionReferences =
+            expansionResult.discoveredReferences || [];
+        const expansionDependencies =
+            expansionResult.discoveredDependencies || [];
+
+        if (expansionReferences.length) {
+            const referenceKeys = new Set(
+                discoveredReferences.map(
+                    (item) =>
+                        item.id ||
+                        `${item.metadataType || item.type}:${item.name}`
+                )
+            );
+
+            for (const reference of expansionReferences) {
+                const key =
+                    reference.id ||
+                    `${reference.metadataType || reference.type}:${reference.name}`;
+
+                if (referenceKeys.has(key)) {
+                    continue;
+                }
+
+                referenceKeys.add(key);
+                discoveredReferences.push(reference);
+            }
+
+            referenceSummary = {
+                ...referenceSummary,
+                referencesDiscovered: discoveredReferences.length,
+                blockingReferences: discoveredReferences.filter(
+                    (item) => item.blocking
+                ).length,
+                deployableReferences: discoveredReferences.filter(
+                    (item) => item.deployable
+                ).length,
+                warnings: [
+                    ...(referenceSummary.warnings || []),
+                    ...(expansionResult.warnings || [])
+                ]
+            };
+        }
+
+        if (expansionDependencies.length) {
+            const dependencyKeys = new Set(
+                (enrichedRequiredDependencies || []).map(
+                    (item) =>
+                        `${item.type || item.metadataType}:${item.name}`
+                )
+            );
+
+            for (const dependency of expansionDependencies) {
+                const key = `${dependency.type || dependency.metadataType}:${dependency.name}`;
+
+                if (dependencyKeys.has(key)) {
+                    continue;
+                }
+
+                dependencyKeys.add(key);
+                enrichedRequiredDependencies.push(dependency);
+            }
+        }
+
+        if (expansionResult.summary) {
+            graphExpansionSummary = {
+                ...graphExpansionSummary,
+                ...expansionResult.summary,
+                warnings: [
+                    ...(graphExpansionSummary.warnings || []),
+                    ...(expansionResult.summary.warnings || [])
+                ]
+            };
+        }
+    } catch (error) {
+        console.error('METADATA GRAPH EXPANSION ERROR');
+        console.error(error);
+
+        graphExpansionSummary = {
+            ...graphExpansionSummary,
+            warnings: [
+                ...(graphExpansionSummary.warnings || []),
+                error.message ||
+                    'Metadata graph expansion failed; continuing with existing discoveries.'
             ]
         };
     }
