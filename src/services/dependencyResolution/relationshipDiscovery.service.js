@@ -4,6 +4,7 @@ const path = require('path');
 const { exec } = require('child_process');
 
 const { getRegisteredDiscoverers } = require('./relationshipRegistry');
+const deploymentReviewService = require('../deploymentReview.service');
 
 const execAsync = util.promisify(exec);
 
@@ -264,6 +265,170 @@ function relationshipToScanTarget(relationship) {
     };
 }
 
+function isReviewableDeployableMetadata(item) {
+    const metadataType = item?.metadataType || item?.type;
+
+    return deploymentReviewService.isSupportedReviewMetadataType(metadataType);
+}
+
+function summarizeReviewDependencies(requiredDependencies) {
+    const counts = {};
+
+    for (const dependency of requiredDependencies || []) {
+        const type = dependency.type || 'Unknown';
+        counts[type] = (counts[type] || 0) + 1;
+    }
+
+    return counts;
+}
+
+function logReviewMerge(metadataLabel, requiredDependencies) {
+    const counts = summarizeReviewDependencies(requiredDependencies);
+    const entries = Object.entries(counts);
+
+    if (!entries.length) {
+        console.log('Added');
+        console.log('(none)');
+        return;
+    }
+
+    console.log('Added');
+
+    for (const [type, count] of entries) {
+        console.log(`${count} ${type}${count === 1 ? '' : 's'}`);
+    }
+}
+
+async function reviewNewlyDiscoveredMetadata({
+    newlyDiscovered,
+    reviewedMetadata,
+    readRepoFile,
+    listRepoFiles,
+    relationshipKeys,
+    allRelationships
+}) {
+    let reviewsExecuted = 0;
+    let reviewsSkipped = 0;
+    const warnings = [];
+    const reviewFrontierAdditions = [];
+
+    for (const discovered of newlyDiscovered) {
+        const metadataType = discovered.metadataType || discovered.type;
+        const metadataName = discovered.name;
+        const key = getDependencyKey({
+            metadataType,
+            metadataName: metadataName
+        });
+
+        if (!key) {
+            continue;
+        }
+
+        if (!isReviewableDeployableMetadata(discovered)) {
+            reviewsSkipped += 1;
+            continue;
+        }
+
+        if (reviewedMetadata.has(key)) {
+            reviewsSkipped += 1;
+            console.log('Skipping Deployment Review (already reviewed)');
+            console.log(key);
+            continue;
+        }
+
+        reviewedMetadata.add(key);
+
+        logSection('Deployment Review Started');
+        console.log(metadataName);
+        console.log('Type:', metadataType);
+
+        try {
+            const reviewResult =
+                await deploymentReviewService.reviewDeployableMetadataItems({
+                    items: [
+                        {
+                            metadataType,
+                            metadataName,
+                            name: metadataName,
+                            filePath: discovered.filePath || null
+                        }
+                    ],
+                    readRepoFile,
+                    listRepoFiles
+                });
+
+            reviewsExecuted += reviewResult.reviewsExecuted || 0;
+            reviewsSkipped += reviewResult.reviewsSkipped || 0;
+            warnings.push(...(reviewResult.warnings || []));
+
+            console.log('Deployment Review Complete');
+            logReviewMerge(metadataName, reviewResult.requiredDependencies);
+            console.log('Merged into Deployment Graph');
+
+            for (const dependency of reviewResult.requiredDependencies || []) {
+                const dependencyKey = getDependencyKey(dependency);
+
+                if (!dependencyKey) {
+                    continue;
+                }
+
+                const graphItem = {
+                    name: dependency.name,
+                    type: dependency.type,
+                    metadataType: dependency.type,
+                    relationship: dependency.relationship || 'DeploymentReview',
+                    required: dependency.required !== false,
+                    selected: dependency.selected !== false,
+                    discoveredBy: 'DeploymentReview',
+                    sourceMetadata: metadataName,
+                    sourceField: dependency.sourceField || null,
+                    discoveryMethod: 'deploymentReview',
+                    reason:
+                        dependency.reason ||
+                        `Discovered by Deployment Review of ${metadataName}.`,
+                    depth: (discovered.depth || 1) + 1
+                };
+
+                if (!relationshipKeys.has(dependencyKey)) {
+                    relationshipKeys.add(dependencyKey);
+                    allRelationships.push(graphItem);
+                }
+
+                // CustomObjects found via review (e.g. Apex analysis) can enter
+                // the existing Relationship Discovery frontier.
+                if (
+                    dependency.type === 'CustomObject' &&
+                    !reviewedMetadata.has(dependencyKey)
+                ) {
+                    const scanTarget = relationshipToScanTarget({
+                        name: dependency.name,
+                        metadataType: 'CustomObject'
+                    });
+
+                    if (scanTarget) {
+                        reviewFrontierAdditions.push(scanTarget);
+                    }
+                }
+            }
+        } catch (error) {
+            warnings.push(
+                `Deployment Review failed for ${key}: ${
+                    error?.message || 'unknown error'
+                }`
+            );
+            console.log('Deployment Review Failed');
+            console.log(error?.message || error);
+        }
+    }
+
+    return {
+        reviewsExecuted,
+        reviewsSkipped,
+        warnings,
+        reviewFrontierAdditions
+    };
+}
+
 async function runDiscoverersForFrontier({
     frontier,
     discoverers,
@@ -300,26 +465,41 @@ async function runDiscoverersForFrontier({
 
 /**
  * Expand the dependency graph until no new discoverable metadata appears.
+ * After each discovery batch, newly discovered deployable metadata receives
+ * the same Deployment Review as user-selected metadata.
  */
 async function discoverUntilStable({
     selectedMetadata,
     discoverers,
     repoFiles,
-    readRepoFile
+    readRepoFile,
+    listRepoFiles
 }) {
     const allRelationships = [];
     const relationshipKeys = new Set();
     const visitedMetadata = new Set();
+    const reviewedMetadata = new Set();
     const warnings = [];
     let metadataScanned = 0;
     let filesScanned = 0;
     let iterations = 0;
     let graphDepth = 0;
     let newDependencies = 0;
+    let deploymentReviewsExecuted = 0;
+    let deploymentReviewsSkipped = 0;
 
     let frontier = (selectedMetadata || [])
         .map(toScanTarget)
         .filter(Boolean);
+
+    // User-selected metadata is reviewed upstream; do not re-review here.
+    for (const item of frontier) {
+        const key = getDependencyKey(item);
+
+        if (key) {
+            reviewedMetadata.add(key);
+        }
+    }
 
     while (frontier.length > 0 && graphDepth < MAX_GRAPH_DEPTH) {
         const unscannedFrontier = [];
@@ -376,9 +556,27 @@ async function discoverUntilStable({
             newRelationships: newlyDiscovered
         });
 
-        frontier = newlyDiscovered
+        const reviewResult = await reviewNewlyDiscoveredMetadata({
+            newlyDiscovered,
+            reviewedMetadata,
+            readRepoFile,
+            listRepoFiles: listRepoFiles || (async () => repoFiles),
+            relationshipKeys,
+            allRelationships
+        });
+
+        deploymentReviewsExecuted += reviewResult.reviewsExecuted || 0;
+        deploymentReviewsSkipped += reviewResult.reviewsSkipped || 0;
+        warnings.push(...(reviewResult.warnings || []));
+
+        const relationshipFrontier = newlyDiscovered
             .map(relationshipToScanTarget)
             .filter(Boolean);
+
+        frontier = [
+            ...relationshipFrontier,
+            ...(reviewResult.reviewFrontierAdditions || [])
+        ];
     }
 
     if (graphDepth >= MAX_GRAPH_DEPTH && frontier.length > 0) {
@@ -387,8 +585,13 @@ async function discoverUntilStable({
         );
     }
 
+    console.log('Discovery Complete');
     console.log('Graph expansion iterations:', iterations);
     console.log('Graph depth:', graphDepth);
+    console.log('Deployment Graph Size:', allRelationships.length);
+    console.log('Objects Reviewed / Visited:', visitedMetadata.size);
+    console.log('Deployment Reviews Executed:', deploymentReviewsExecuted);
+    console.log('Skipped Reviews:', deploymentReviewsSkipped);
     console.log('Metadata nodes visited:', visitedMetadata.size);
     console.log('New dependencies:', newDependencies);
     logSection('Metadata Graph Expansion Summary');
@@ -405,7 +608,12 @@ async function discoverUntilStable({
             relationships: allRelationships.length,
             newDependencies,
             warnings
-        })
+        }),
+        deploymentReviewSummary: {
+            reviewsExecuted: deploymentReviewsExecuted,
+            reviewsSkipped: deploymentReviewsSkipped,
+            objectsReviewed: reviewedMetadata.size
+        }
     };
 }
 
@@ -554,7 +762,8 @@ async function discoverRelationships({
                     selectedMetadata,
                     discoverers,
                     repoFiles,
-                    readRepoFile
+                    readRepoFile,
+                    listRepoFiles
                 });
 
                 const relationships = expansionResult.relationships;

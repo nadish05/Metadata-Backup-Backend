@@ -23,12 +23,51 @@ const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
     'CustomObject'
 ]);
 
+const { METADATA_TYPE_RULES } = require('../config/metadataTypes');
+
 function isSupportedReviewMetadataType(metadataType) {
     return SUPPORTED_REVIEW_METADATA_TYPES.has(metadataType);
 }
 
 function getMetadataName(filePath) {
     return path.basename(filePath, path.extname(filePath));
+}
+
+function normalizePath(filePath) {
+    return String(filePath || '').replace(/\\/g, '/');
+}
+
+/**
+ * Resolve a repository file path for a deployable metadata item.
+ * Supports items discovered without an explicit filePath.
+ */
+function resolveMetadataFilePath(metadataType, metadataName, repoFiles) {
+    if (!metadataType || !metadataName || !Array.isArray(repoFiles)) {
+        return null;
+    }
+
+    const name = String(metadataName).trim();
+    const normalizedFiles = repoFiles.map(normalizePath);
+
+    if (metadataType === 'CustomObject') {
+        const expectedSuffix = `/objects/${name}/${name}.object-meta.xml`;
+        return (
+            normalizedFiles.find((file) => file.endsWith(expectedSuffix)) ||
+            null
+        );
+    }
+
+    const rule = METADATA_TYPE_RULES[metadataType];
+
+    if (!rule?.extension) {
+        return null;
+    }
+
+    const expectedEnding = `/${name}${rule.extension}`;
+
+    return (
+        normalizedFiles.find((file) => file.endsWith(expectedEnding)) || null
+    );
 }
 
 function buildEmptyDependencyAnalysisResult() {
@@ -389,27 +428,134 @@ async function runDeploymentReview(payload) {
     return withClonedRepository(
         { repoUrl, branch: sourceBranch },
         async (readRepoFile, listRepoFiles) => {
-            const deploymentReview = [];
-
-            for (const item of selectedMetadata) {
-                const result = await processMetadataItem(
-                    item,
-                    readRepoFile,
-                    listRepoFiles
-                );
-
-                deploymentReview.push(result);
-            }
+            const reviewResult = await reviewDeployableMetadataItems({
+                items: selectedMetadata,
+                readRepoFile,
+                listRepoFiles
+            });
 
             return {
                 success: true,
-                deploymentReview
+                deploymentReview: reviewResult.deploymentReview
             };
         }
     );
 }
 
+/**
+ * Reusable Deployment Review for arbitrary deployable metadata items.
+ * Used by both the original user-selection review and Relationship Discovery.
+ *
+ * @param {{
+ *   items: Array<{ metadataType?: string, type?: string, metadataName?: string, name?: string, filePath?: string }>,
+ *   readRepoFile: Function,
+ *   listRepoFiles: Function
+ * }} options
+ */
+async function reviewDeployableMetadataItems({
+    items,
+    readRepoFile,
+    listRepoFiles
+}) {
+    const deploymentReview = [];
+    const aggregatedDependencies = [];
+    const dependencyKeys = new Set();
+    const warnings = [];
+    let reviewsExecuted = 0;
+    let reviewsSkipped = 0;
+
+    if (!Array.isArray(items) || !items.length) {
+        return {
+            deploymentReview,
+            requiredDependencies: aggregatedDependencies,
+            reviewsExecuted,
+            reviewsSkipped,
+            warnings
+        };
+    }
+
+    const repoFiles = await listRepoFiles();
+
+    for (const item of items) {
+        const metadataType = item?.metadataType || item?.type || null;
+        const metadataName = item?.metadataName || item?.name || null;
+        let filePath = item?.filePath ? normalizePath(item.filePath) : null;
+
+        if (!filePath && metadataType && metadataName) {
+            filePath = resolveMetadataFilePath(
+                metadataType,
+                metadataName,
+                repoFiles
+            );
+        }
+
+        if (!metadataType || !filePath) {
+            reviewsSkipped += 1;
+            warnings.push(
+                `Unable to resolve review file path for ${metadataType || 'Unknown'}:${metadataName || 'Unknown'}`
+            );
+            continue;
+        }
+
+        if (!isSupportedReviewMetadataType(metadataType)) {
+            reviewsSkipped += 1;
+            deploymentReview.push(
+                buildNotSupportedResult({ metadataType, filePath })
+            );
+            continue;
+        }
+
+        const result = await processMetadataItem(
+            { metadataType, filePath },
+            readRepoFile,
+            listRepoFiles
+        );
+
+        reviewsExecuted += 1;
+        deploymentReview.push(result);
+
+        const requiredDependencies =
+            result?.dependencyAnalysis?.requiredDependencies || [];
+
+        for (const dependency of requiredDependencies) {
+            if (!dependency?.name || !dependency?.type) {
+                continue;
+            }
+
+            const key = `${dependency.type}:${dependency.name}`;
+
+            if (dependencyKeys.has(key)) {
+                continue;
+            }
+
+            dependencyKeys.add(key);
+            aggregatedDependencies.push({
+                ...dependency,
+                sourceMetadata:
+                    result.metadataName || metadataName || dependency.sourceMetadata,
+                discoveredBy: 'DeploymentReview',
+                discoveryMethod: 'deploymentReview',
+                reason:
+                    dependency.reason ||
+                    `Discovered by Deployment Review of ${result.metadataName || metadataName}.`
+            });
+        }
+    }
+
+    return {
+        deploymentReview,
+        requiredDependencies: aggregatedDependencies,
+        reviewsExecuted,
+        reviewsSkipped,
+        warnings
+    };
+}
+
 module.exports = {
     runDeploymentReview,
-    reviewSingleMetadataItem
+    reviewSingleMetadataItem,
+    reviewDeployableMetadataItems,
+    resolveMetadataFilePath,
+    isSupportedReviewMetadataType,
+    SUPPORTED_REVIEW_METADATA_TYPES
 };
