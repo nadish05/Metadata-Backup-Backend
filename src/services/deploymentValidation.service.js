@@ -14,6 +14,7 @@ const dependencyResolutionService = require('./dependencyResolution/dependencyRe
 const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
 const referenceDiscoveryService = require('./dependencyResolution/referenceDiscovery.service');
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
+const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -254,6 +255,19 @@ async function validateDeployment({
         blockingReferences: 0,
         deployableReferences: 0
     };
+    let deploymentCompatibility = {
+        overallCompatibility: 'PASS',
+        findings: [],
+        summary: {
+            rulesExecuted: 0,
+            findings: 0,
+            warnings: 0,
+            blockers: 0,
+            metadataChecked: 0
+        }
+    };
+    let compatibilitySummary = deploymentCompatibility.summary;
+    let compatibilityFindings = [];
     let resolvedRequiredDependencies =
         deploymentPackage.requiredDependencies || [];
     let enrichedRequiredDependencies =
@@ -384,6 +398,54 @@ async function validateDeployment({
             ]
         };
         resolvedRequiredDependencies = enrichedRequiredDependencies;
+    }
+
+    try {
+        deploymentCompatibility =
+            deploymentCompatibilityAnalyzerService.analyzeDeploymentCompatibility(
+                {
+                    selectedMetadata: deploymentPackage.selectedMetadata,
+                    discoveredRelationships,
+                    discoveredReferences,
+                    resolvedDependencies: resolvedRequiredDependencies
+                }
+            );
+        compatibilitySummary =
+            deploymentCompatibility.summary || compatibilitySummary;
+        compatibilityFindings = deploymentCompatibility.findings || [];
+    } catch (error) {
+        console.error('DEPLOYMENT COMPATIBILITY ANALYZER ERROR');
+        console.error(error);
+
+        deploymentCompatibility = {
+            overallCompatibility: 'WARNING',
+            findings: [],
+            summary: {
+                rulesExecuted: 0,
+                findings: 0,
+                warnings: 1,
+                blockers: 0,
+                metadataChecked: 0
+            }
+        };
+        compatibilitySummary = deploymentCompatibility.summary;
+        compatibilityFindings = [
+            {
+                id: 'analyzer:ERROR',
+                metadataName: null,
+                metadataType: null,
+                ruleId: 'analyzer',
+                severity: 'WARNING',
+                status: 'WARNING',
+                reason:
+                    error.message ||
+                    'Deployment compatibility analysis failed.',
+                requiredBy: null,
+                recommendedAction: 'Review analyzer logs and retry analysis.',
+                blocking: false,
+                source: 'DeploymentCompatibilityAnalyzer'
+            }
+        ];
     }
 
     try {
@@ -605,6 +667,9 @@ async function validateDeployment({
         dependencyExplorer,
         relationshipTree,
         graphStatistics,
+        deploymentCompatibility,
+        compatibilitySummary,
+        compatibilityFindings,
         dependencyResolutionSummary
     };
 
