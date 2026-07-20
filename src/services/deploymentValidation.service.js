@@ -11,6 +11,7 @@ const deploymentExecutionService = require('./deploymentExecution.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
 const metadataCompatibilityService = require('./metadataCompatibility/metadataCompatibility.service');
 const dependencyResolutionService = require('./dependencyResolution/dependencyResolution.service');
+const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -212,7 +213,18 @@ async function validateDeployment({
         block: 0,
         warnings: []
     };
+    let relationshipDiscoverySummary = {
+        metadataScanned: 0,
+        filesScanned: 0,
+        relationshipsDiscovered: 0,
+        lookupRelationships: 0,
+        masterDetailRelationships: 0,
+        warnings: []
+    };
+    let discoveredRelationships = [];
     let resolvedRequiredDependencies =
+        deploymentPackage.requiredDependencies || [];
+    let enrichedRequiredDependencies =
         deploymentPackage.requiredDependencies || [];
 
     let accessTokenForDownstream = null;
@@ -230,9 +242,46 @@ async function validateDeployment({
     }
 
     try {
+        const discoveryResult =
+            await relationshipDiscoveryService.discoverRelationships({
+                selectedMetadata: deploymentPackage.selectedMetadata,
+                requiredDependencies: deploymentPackage.requiredDependencies,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            });
+
+        enrichedRequiredDependencies =
+            discoveryResult.enrichedDependencies ||
+            enrichedRequiredDependencies;
+        relationshipDiscoverySummary =
+            discoveryResult.summary || relationshipDiscoverySummary;
+        discoveredRelationships =
+            discoveryResult.discoveredRelationships || [];
+    } catch (error) {
+        console.error('RELATIONSHIP DISCOVERY ERROR');
+        console.error(error);
+
+        relationshipDiscoverySummary = {
+            metadataScanned: 0,
+            filesScanned: 0,
+            relationshipsDiscovered: 0,
+            lookupRelationships: 0,
+            masterDetailRelationships: 0,
+            warnings: [
+                error.message ||
+                    'Relationship discovery failed; continuing with existing dependencies.'
+            ]
+        };
+        discoveredRelationships = [];
+        enrichedRequiredDependencies =
+            deploymentPackage.requiredDependencies || [];
+    }
+
+    try {
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
-                requiredDependencies: deploymentPackage.requiredDependencies,
+                requiredDependencies: enrichedRequiredDependencies,
                 selectedMetadata: deploymentPackage.selectedMetadata,
                 accessToken: accessTokenForDownstream,
                 instanceUrl: resolvedInstanceUrl
@@ -258,8 +307,7 @@ async function validateDeployment({
                     'Dependency resolution failed; using original dependencies.'
             ]
         };
-        resolvedRequiredDependencies =
-            deploymentPackage.requiredDependencies || [];
+        resolvedRequiredDependencies = enrichedRequiredDependencies;
     }
 
     const deploymentPackageWithResolvedDependencies = {
@@ -445,6 +493,8 @@ async function validateDeployment({
         generatedManifest,
         generatedWorkspace,
         compatibilitySummary,
+        relationshipDiscoverySummary,
+        discoveredRelationships,
         dependencyResolutionSummary
     };
 
