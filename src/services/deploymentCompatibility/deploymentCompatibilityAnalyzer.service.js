@@ -76,6 +76,125 @@ function resolveOverallCompatibility(findings) {
     return 'PASS';
 }
 
+function findNodeContext(finding, context) {
+    const metadataType = finding?.metadataType || null;
+    const metadataName = finding?.metadataName || null;
+
+    if (!metadataType || !metadataName) {
+        return {
+            deployDecision: null,
+            artifactResolved: null,
+            sourceExists: null
+        };
+    }
+
+    const collections = [
+        ...(context.resolvedDependencies || []),
+        ...(context.selectedMetadata || []),
+        ...(context.discoveredReferences || []),
+        ...(context.discoveredRelationships || [])
+    ];
+
+    const match = collections.find((item) => {
+        const type = item?.metadataType || item?.type;
+        const name = item?.metadataName || item?.name;
+        return type === metadataType && name === metadataName;
+    });
+
+    return {
+        deployDecision: match?.action || null,
+        artifactResolved:
+            match?.artifactResolved != null ? match.artifactResolved : null,
+        sourceExists: match?.sourceExists != null ? match.sourceExists : null
+    };
+}
+
+function isBlockingFinding(finding) {
+    return (
+        finding?.status === STATUS.BLOCK ||
+        finding?.status === STATUS.FAIL ||
+        finding?.blocking === true
+    );
+}
+
+/**
+ * DEBUG ONLY — temporary diagnostics for Compatibility BLOCKED root cause.
+ * Does not change findings or overall compatibility.
+ */
+function logCompatibilityDiagnostics(findings, context, overallCompatibility) {
+    for (const finding of findings) {
+        const nodeContext = findNodeContext(finding, context);
+
+        console.log('----------------------------------------');
+        console.log('Compatibility Evaluation');
+        console.log('----------------------------------------');
+        console.log('Metadata Type:');
+        console.log(finding.metadataType);
+        console.log('Metadata Name:');
+        console.log(finding.metadataName);
+        console.log('Deploy Decision:');
+        console.log(nodeContext.deployDecision);
+        console.log('artifactResolved:');
+        console.log(nodeContext.artifactResolved);
+        console.log('sourceExists:');
+        console.log(nodeContext.sourceExists);
+        console.log('Blocking:');
+        console.log(isBlockingFinding(finding));
+        console.log('Reason:');
+        console.log(finding.reason);
+    }
+
+    const blockingFindings = findings.filter(isBlockingFinding);
+
+    console.log('========================================');
+    console.log('COMPATIBILITY SUMMARY');
+    console.log('========================================');
+    console.log('Blocking Nodes:');
+
+    if (!blockingFindings.length) {
+        console.log('(none)');
+    } else {
+        for (const finding of blockingFindings) {
+            const nodeContext = findNodeContext(finding, context);
+
+            console.log('metadataType');
+            console.log(finding.metadataType);
+            console.log('metadataName');
+            console.log(finding.metadataName);
+            console.log('deployDecision');
+            console.log(nodeContext.deployDecision);
+            console.log('artifactResolved');
+            console.log(nodeContext.artifactResolved);
+            console.log('sourceExists');
+            console.log(nodeContext.sourceExists);
+            console.log('ruleName');
+            console.log(finding.ruleId);
+            console.log('reason');
+            console.log(finding.reason);
+            console.log('----------------------------------------');
+        }
+    }
+
+    console.log('Deployment blocked because of:');
+
+    if (
+        overallCompatibility === 'BLOCKED' ||
+        overallCompatibility === 'FAILED'
+    ) {
+        if (!blockingFindings.length) {
+            console.log('(no blocking findings found)');
+        } else {
+            for (const finding of blockingFindings) {
+                console.log(
+                    `${finding.metadataType}:${finding.metadataName}`
+                );
+            }
+        }
+    } else {
+        console.log('(not blocked)');
+    }
+}
+
 function logFindings(findings, summary, overallCompatibility) {
     console.log('Metadata checked:', summary.metadataChecked);
     console.log('Rules executed:', summary.rulesExecuted);
@@ -181,6 +300,7 @@ function analyzeDeploymentCompatibility({
     const overallCompatibility = resolveOverallCompatibility(findings);
 
     console.log('Rules registered:', rules.map((rule) => rule.id).join(', '));
+    logCompatibilityDiagnostics(findings, context, overallCompatibility);
     logFindings(findings, summary, overallCompatibility);
 
     return {
