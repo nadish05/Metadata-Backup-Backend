@@ -1,6 +1,10 @@
 const path = require('path');
 
 const { buildGraphNodeId } = require('../graphId');
+const {
+    isSalesforceSystemField,
+    isDeployableField
+} = require('../../../utils/salesforceSystemFields.util');
 
 const FLEXIPAGE_SUFFIX = '.flexipage-meta.xml';
 const DISCOVERER_ID = 'FlexiPageReferenceDiscoverer';
@@ -94,10 +98,6 @@ function resolveFlexiPageFilePath(item, repoFiles) {
     );
 }
 
-function isCustomFieldApiName(fieldApiName) {
-    return /__c$/i.test(String(fieldApiName || ''));
-}
-
 function isStandardManagedComponent(componentName) {
     const normalized = String(componentName || '').trim();
 
@@ -177,7 +177,12 @@ function discoverFieldReferences(flexiPageXml, sourceMetadata, sobjectType, dept
             continue;
         }
 
-        const isCustom = isCustomFieldApiName(fieldApiName);
+        // Salesforce-managed system fields must never enter the deployment graph.
+        if (isSalesforceSystemField(fieldApiName)) {
+            continue;
+        }
+
+        const deployable = isDeployableField(fieldApiName);
         const qualifiedName = sobjectType
             ? `${sobjectType}.${fieldApiName}`
             : fieldApiName;
@@ -191,8 +196,8 @@ function discoverFieldReferences(flexiPageXml, sourceMetadata, sobjectType, dept
                 referenceType: 'Field',
                 depth,
                 reason: 'Referenced by FlexiPage.',
-                deployable: isCustom,
-                blocking: isCustom,
+                deployable,
+                blocking: deployable,
                 sobjectType
             })
         );

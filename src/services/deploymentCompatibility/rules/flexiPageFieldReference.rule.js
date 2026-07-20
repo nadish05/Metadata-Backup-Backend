@@ -30,6 +30,13 @@ const flexiPageFieldReferenceRule = {
         );
 
         for (const reference of references) {
+            // Trust Reference Discovery classification. Non-deployable /
+            // non-blocking field refs (e.g. Salesforce system fields) must
+            // never become compatibility blockers or recommendations.
+            if (reference.deployable !== true || reference.blocking !== true) {
+                continue;
+            }
+
             const available = context.availability.isAvailable(
                 'CustomField',
                 reference.name
