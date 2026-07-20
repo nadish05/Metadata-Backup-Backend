@@ -10,6 +10,7 @@ const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
 const deploymentExecutionService = require('./deploymentExecution.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
 const metadataCompatibilityService = require('./metadataCompatibility/metadataCompatibility.service');
+const dependencyResolutionService = require('./dependencyResolution/dependencyResolution.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -203,39 +204,110 @@ async function validateDeployment({
             deploymentPackage
         );
 
+    let dependencyResolutionSummary = {
+        analyzed: 0,
+        deploy: 0,
+        reference: 0,
+        skip: 0,
+        block: 0,
+        warnings: []
+    };
+    let resolvedRequiredDependencies =
+        deploymentPackage.requiredDependencies || [];
+
+    let accessTokenForDownstream = null;
+    let resolvedInstanceUrl = instanceUrl;
+
+    if (connectivityResult.deploymentValidation?.destinationConnected) {
+        try {
+            const tokenResult = await refreshAccessToken(refreshToken);
+            accessTokenForDownstream = tokenResult.accessToken;
+            resolvedInstanceUrl = tokenResult.instanceUrl || instanceUrl;
+        } catch (error) {
+            console.error('DEPENDENCY RESOLUTION TOKEN ERROR');
+            console.error(error);
+        }
+    }
+
+    try {
+        const resolutionResult =
+            await dependencyResolutionService.resolveDependencies({
+                requiredDependencies: deploymentPackage.requiredDependencies,
+                selectedMetadata: deploymentPackage.selectedMetadata,
+                accessToken: accessTokenForDownstream,
+                instanceUrl: resolvedInstanceUrl
+            });
+
+        resolvedRequiredDependencies =
+            resolutionResult.resolvedDependencies ||
+            resolvedRequiredDependencies;
+        dependencyResolutionSummary =
+            resolutionResult.summary || dependencyResolutionSummary;
+    } catch (error) {
+        console.error('DEPENDENCY RESOLUTION ERROR');
+        console.error(error);
+
+        dependencyResolutionSummary = {
+            analyzed: 0,
+            deploy: 0,
+            reference: 0,
+            skip: 0,
+            block: 0,
+            warnings: [
+                error.message ||
+                    'Dependency resolution failed; using original dependencies.'
+            ]
+        };
+        resolvedRequiredDependencies =
+            deploymentPackage.requiredDependencies || [];
+    }
+
+    const deploymentPackageWithResolvedDependencies = {
+        ...deploymentPackage,
+        requiredDependencies: resolvedRequiredDependencies
+    };
+
     const generatedDeploymentPackage =
-        deploymentPackageService.generateDeploymentPackage(deploymentPackage);
+        deploymentPackageService.generateDeploymentPackage(
+            deploymentPackageWithResolvedDependencies
+        );
 
     const deploymentPackageForDependencyValidation = {
-        ...deploymentPackage,
+        ...deploymentPackageWithResolvedDependencies,
         selectedMetadata: generatedDeploymentPackage.metadata
     };
 
     let dependencyValidation;
 
     if (connectivityResult.deploymentValidation?.destinationConnected) {
-        try {
-            const tokenResult = await refreshAccessToken(refreshToken);
-            const resolvedInstanceUrl =
-                tokenResult.instanceUrl || instanceUrl;
-
-            dependencyValidation =
-                await dependencyValidationService.validateDependencies({
-                    accessToken: tokenResult.accessToken,
-                    instanceUrl: resolvedInstanceUrl,
-                    deploymentPackage: deploymentPackageForDependencyValidation
-                });
-        } catch (error) {
-            console.error('DEPENDENCY VALIDATION ERROR');
-            console.error(error);
-
+        if (!accessTokenForDownstream) {
             dependencyValidation = {
                 overallStatus: 'BLOCKED',
                 results: [],
                 message:
-                    error.message ||
                     'Unable to validate dependencies in destination org.'
             };
+        } else {
+            try {
+                dependencyValidation =
+                    await dependencyValidationService.validateDependencies({
+                        accessToken: accessTokenForDownstream,
+                        instanceUrl: resolvedInstanceUrl,
+                        deploymentPackage:
+                            deploymentPackageForDependencyValidation
+                    });
+            } catch (error) {
+                console.error('DEPENDENCY VALIDATION ERROR');
+                console.error(error);
+
+                dependencyValidation = {
+                    overallStatus: 'BLOCKED',
+                    results: [],
+                    message:
+                        error.message ||
+                        'Unable to validate dependencies in destination org.'
+                };
+            }
         }
     } else {
         dependencyValidation = {
@@ -243,6 +315,19 @@ async function validateDeployment({
             results: [],
             message:
                 'Destination org not connected. Dependency validation skipped.'
+        };
+    }
+
+    if (
+        dependencyResolutionSummary.block > 0 &&
+        dependencyValidation?.overallStatus !== 'BLOCKED'
+    ) {
+        dependencyValidation = {
+            ...dependencyValidation,
+            overallStatus: 'BLOCKED',
+            message:
+                dependencyValidation?.message ||
+                'Dependency resolution blocked one or more dependencies.'
         };
     }
 
@@ -359,7 +444,8 @@ async function validateDeployment({
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
-        compatibilitySummary
+        compatibilitySummary,
+        dependencyResolutionSummary
     };
 
     if (deploymentMode === 'DEPLOY') {

@@ -61,12 +61,39 @@ function normalizeDependencyItem(item) {
         return null;
     }
 
-    return {
+    const normalized = {
         name: item.name,
         type: item.type,
         required: item.required !== false,
         selected: item.selected !== false
     };
+
+    // Preserve resolved actions from Dependency Resolution Engine when present.
+    if (item.action) {
+        normalized.action = item.action;
+    }
+
+    if (item.destinationState) {
+        normalized.destinationState = item.destinationState;
+    }
+
+    if (item.relationship) {
+        normalized.relationship = item.relationship;
+    }
+
+    if (item.reason) {
+        normalized.reason = item.reason;
+    }
+
+    if (item.source) {
+        normalized.source = item.source;
+    }
+
+    if (typeof item.editable === 'boolean') {
+        normalized.editable = item.editable;
+    }
+
+    return normalized;
 }
 
 function getDependencyUniquenessKey(item) {
@@ -108,6 +135,15 @@ function normalizeDependencies(requiredDependencies) {
 }
 
 function shouldAutoIncludeDependency(dependency) {
+    // Action-aware path: only DEPLOY decisions are auto-included.
+    // REFERENCE / SKIP / BLOCK / MERGE are never included.
+    // Dependencies without an action keep the legacy required && selected rule.
+    if (dependency.action) {
+        return (
+            dependency.action === 'DEPLOY' && dependency.selected === true
+        );
+    }
+
     return dependency.required === true && dependency.selected === true;
 }
 
