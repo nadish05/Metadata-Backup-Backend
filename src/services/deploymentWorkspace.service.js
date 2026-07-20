@@ -4,7 +4,7 @@ const path = require('path');
 const util = require('util');
 const { exec } = require('child_process');
 
-const { METADATA_TYPE_RULES } = require('../config/metadataTypes');
+const { METADATA_TYPE_RULES, isBundleMetadataType, getMetadataTypeRule } = require('../config/metadataTypes');
 const {
     CHILD_METADATA_CONFIG
 } = require('./deploymentReview/customObjectChildMetadataAnalyzer.service');
@@ -324,7 +324,66 @@ function parseObjectChildName(name) {
     return { objectApiName, childApiName };
 }
 
+/**
+ * Resolve the bundle directory for any BUNDLE metadata type.
+ * Example: LightningComponentBundle "foo" → .../lwc/foo
+ */
+function resolveBundleDirectoryPath(metadataType, name, repoFiles) {
+    const rule = getMetadataTypeRule(metadataType);
+
+    if (!rule || !isBundleMetadataType(metadataType) || !name) {
+        return null;
+    }
+
+    const folder = rule.folder;
+    const marker = `/${folder}/${name}/`;
+
+    const match = repoFiles.find((repoFile) =>
+        repoFile.replace(/\\/g, '/').includes(marker)
+    );
+
+    if (!match) {
+        return null;
+    }
+
+    const normalized = match.replace(/\\/g, '/');
+    const markerIndex = normalized.indexOf(marker);
+
+    return normalized.slice(0, markerIndex + marker.length - 1);
+}
+
+/**
+ * List every repository file that belongs to a bundle directory.
+ */
+function listBundleFiles(bundleDirectoryPath, repoFiles) {
+    if (!bundleDirectoryPath || !Array.isArray(repoFiles)) {
+        return [];
+    }
+
+    const prefix = `${bundleDirectoryPath.replace(/\\/g, '/')}/`;
+
+    return repoFiles
+        .map((repoFile) => repoFile.replace(/\\/g, '/'))
+        .filter((repoFile) => repoFile.startsWith(prefix));
+}
+
+function extractBundleNameFromPath(filePath, folder) {
+    const normalized = String(filePath || '').replace(/\\/g, '/');
+    const marker = `/${folder}/`;
+    const markerIndex = normalized.indexOf(marker);
+
+    if (markerIndex === -1) {
+        return null;
+    }
+
+    return normalized.slice(markerIndex + marker.length).split('/')[0] || null;
+}
+
 function resolvePathByTypeAndName(type, name, repoFiles) {
+    if (isBundleMetadataType(type)) {
+        return resolveBundleDirectoryPath(type, name, repoFiles);
+    }
+
     if (type === 'CustomField') {
         return resolveCustomFieldPath(name, repoFiles);
     }
@@ -447,6 +506,19 @@ function resolvePathByTypeAndName(type, name, repoFiles) {
 }
 
 function resolveMetadataItemPath(item, repoFiles) {
+    if (isBundleMetadataType(item?.metadataType)) {
+        const rule = getMetadataTypeRule(item.metadataType);
+        const bundleName =
+            item.metadataName ||
+            extractBundleNameFromPath(item.filePath, rule?.folder);
+
+        return resolveBundleDirectoryPath(
+            item.metadataType,
+            bundleName,
+            repoFiles
+        );
+    }
+
     if (item?.filePath) {
         return item.filePath.replace(/\\/g, '/');
     }
@@ -462,7 +534,11 @@ function resolveMetadataItemPath(item, repoFiles) {
     return null;
 }
 
-function getFilesToCopy(filePath, metadataType) {
+function getFilesToCopy(filePath, metadataType, repoFiles = []) {
+    if (isBundleMetadataType(metadataType)) {
+        return listBundleFiles(filePath, repoFiles);
+    }
+
     const files = [filePath];
     const rule = METADATA_TYPE_RULES[metadataType];
 
@@ -537,10 +613,16 @@ async function copyMetadataItems({
 
         const filesToCopy = getFilesToCopy(
             resolvedPath,
-            item.metadataType
+            item.metadataType,
+            repoFiles
         );
         let itemCopied = false;
         let itemMissing = false;
+
+        if (!filesToCopy.length) {
+            missingFiles.push(missingLabel);
+            continue;
+        }
 
         for (const filePath of filesToCopy) {
             const copied = await copyRepositoryFile({
@@ -603,10 +685,16 @@ async function copyDependencyItems({
 
         const filesToCopy = getFilesToCopy(
             resolvedPath,
-            dependency.type
+            dependency.type,
+            repoFiles
         );
         let itemCopied = false;
         let itemMissing = false;
+
+        if (!filesToCopy.length) {
+            missingFiles.push(missingLabel);
+            continue;
+        }
 
         for (const filePath of filesToCopy) {
             const copied = await copyRepositoryFile({

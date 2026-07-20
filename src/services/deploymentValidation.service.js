@@ -372,6 +372,7 @@ async function validateDeployment({
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
                 requiredDependencies: enrichedRequiredDependencies,
+                discoveredReferences,
                 selectedMetadata: deploymentPackage.selectedMetadata,
                 accessToken: accessTokenForDownstream,
                 instanceUrl: resolvedInstanceUrl

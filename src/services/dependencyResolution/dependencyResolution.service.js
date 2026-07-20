@@ -62,6 +62,49 @@ function normalizeDependencyList(requiredDependencies) {
     return [...dependencyMap.values()];
 }
 
+/**
+ * Fold deployable, blocking discovered references into the dependency list.
+ * Same resolution path as every other required dependency — no separate layer.
+ */
+function mergeDeployableReferences(
+    requiredDependencies = [],
+    discoveredReferences = []
+) {
+    if (!Array.isArray(discoveredReferences) || !discoveredReferences.length) {
+        return requiredDependencies;
+    }
+
+    const merged = [...(requiredDependencies || [])];
+
+    for (const reference of discoveredReferences) {
+        if (reference?.deployable !== true || reference?.blocking !== true) {
+            continue;
+        }
+
+        const name = reference.name;
+        const type = reference.metadataType || reference.type;
+
+        if (!name || !type) {
+            continue;
+        }
+
+        merged.push({
+            name,
+            type,
+            required: true,
+            selected: true,
+            relationship:
+                reference.referenceType || reference.relationship || null,
+            reason:
+                reference.reason ||
+                'Deployable reference discovered during metadata reference discovery.',
+            source: reference.discoveredBy || 'REFERENCE_DISCOVERY'
+        });
+    }
+
+    return merged;
+}
+
 function createDefaultDecision(dependency) {
     const required = dependency.required !== false;
     const selected = dependency.selected !== false;
@@ -247,8 +290,12 @@ function logResolutionResults(decisions, summary) {
  * Resolve dependency deployment actions.
  * Produces decisions only. Does not modify GitHub, workspace, or packages.
  *
+ * Deployable, blocking discovered references participate in the same
+ * dependency list and decision flow as requiredDependencies.
+ *
  * @param {{
  *   requiredDependencies?: Array,
+ *   discoveredReferences?: Array,
  *   selectedMetadata?: Array,
  *   accessToken?: string,
  *   instanceUrl?: string
@@ -256,13 +303,16 @@ function logResolutionResults(decisions, summary) {
  */
 async function resolveDependencies({
     requiredDependencies,
+    discoveredReferences,
     selectedMetadata,
     accessToken,
     instanceUrl
 } = {}) {
     logSection('Dependency Resolution Engine');
 
-    const dependencies = normalizeDependencyList(requiredDependencies);
+    const dependencies = normalizeDependencyList(
+        mergeDeployableReferences(requiredDependencies, discoveredReferences)
+    );
     const resolvers = getRegisteredResolvers();
     const selectedMetadataKeys = buildSelectedMetadataKeys(selectedMetadata);
 
@@ -314,6 +364,7 @@ async function resolveDependencies({
 
 module.exports = {
     resolveDependencies,
+    mergeDeployableReferences,
     ACTIONS,
     DESTINATION_STATES
 };

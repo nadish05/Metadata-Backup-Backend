@@ -2,7 +2,12 @@ const util = require('util');
 const path = require('path');
 const { exec } = require('child_process');
 
-const { METADATA_TYPE_RULES } = require('../config/metadataTypes');
+const {
+    METADATA_TYPE_RULES,
+    METADATA_KINDS,
+    isBundleMetadataType,
+    getMetadataTypeRule
+} = require('../config/metadataTypes');
 
 const execAsync = util.promisify(exec);
 
@@ -24,6 +29,10 @@ function logSection(title) {
     console.log('------------------------------------');
 }
 
+function normalizePath(filePath) {
+    return String(filePath || '').replace(/\\/g, '/');
+}
+
 function isSupportedMetadataType(metadataType) {
     return Boolean(METADATA_TYPE_RULES[metadataType]);
 }
@@ -32,11 +41,70 @@ function isCustomObjectChildMetadataType(metadataType) {
     return CUSTOM_OBJECT_CHILD_METADATA_TYPES.has(metadataType);
 }
 
+function extractBundleNameFromPath(filePath, folder) {
+    const normalized = normalizePath(filePath);
+    const marker = `/${folder}/`;
+    const markerIndex = normalized.indexOf(marker);
+
+    if (markerIndex === -1) {
+        return null;
+    }
+
+    const afterFolder = normalized.slice(markerIndex + marker.length);
+    const bundleName = afterFolder.split('/')[0];
+
+    return bundleName || null;
+}
+
+function resolveBundleDescriptorPath(metadataType, metadataName, filePath) {
+    const rule = getMetadataTypeRule(metadataType);
+
+    if (!rule || rule.kind !== METADATA_KINDS.BUNDLE) {
+        return null;
+    }
+
+    const name =
+        metadataName ||
+        extractBundleNameFromPath(filePath, rule.folder);
+
+    if (!name) {
+        return null;
+    }
+
+    const descriptorFileName = `${name}${rule.descriptorExtension}`;
+    const normalizedFilePath = normalizePath(filePath);
+
+    if (normalizedFilePath) {
+        if (normalizedFilePath.endsWith(descriptorFileName)) {
+            return normalizedFilePath;
+        }
+
+        const marker = `/${rule.folder}/${name}/`;
+        const markerIndex = normalizedFilePath.indexOf(marker);
+
+        if (markerIndex !== -1) {
+            return (
+                normalizedFilePath.slice(0, markerIndex + marker.length) +
+                descriptorFileName
+            );
+        }
+    }
+
+    return `force-app/main/default/${rule.folder}/${name}/${descriptorFileName}`;
+}
+
 function extensionMatchesMetadataType(filePath, metadataType) {
     const rule = METADATA_TYPE_RULES[metadataType];
 
     if (!rule || !filePath) {
         return false;
+    }
+
+    if (rule.kind === METADATA_KINDS.BUNDLE) {
+        const normalized = normalizePath(filePath);
+        const name = extractBundleNameFromPath(normalized, rule.folder);
+
+        return Boolean(name) && normalized.includes(`/${rule.folder}/${name}/`);
     }
 
     return filePath.endsWith(rule.extension);
@@ -52,6 +120,10 @@ function resolveMetadataName(metadataType, filePath, metadataName) {
     }
 
     const rule = METADATA_TYPE_RULES[metadataType];
+
+    if (rule?.kind === METADATA_KINDS.BUNDLE) {
+        return extractBundleNameFromPath(filePath, rule.folder);
+    }
 
     if (rule?.extension) {
         return path.basename(filePath, rule.extension);
@@ -166,8 +238,55 @@ async function fileExistsInRepository(readRepoFile, filePath) {
     }
 }
 
+async function validateBundleMetadataItem(item, readRepoFile) {
+    const { metadataType, metadataName, filePath } = item;
+    const rule = getMetadataTypeRule(metadataType);
+    const validMetadataType = isSupportedMetadataType(metadataType);
+    const resolvedName =
+        resolveMetadataName(metadataType, filePath, metadataName) ||
+        metadataName ||
+        null;
+
+    const descriptorPath = resolveBundleDescriptorPath(
+        metadataType,
+        resolvedName,
+        filePath
+    );
+
+    const pathLooksLikeBundle = Boolean(
+        (filePath &&
+            rule &&
+            normalizePath(filePath).includes(`/${rule.folder}/`)) ||
+            resolvedName
+    );
+
+    const existsInSource = descriptorPath
+        ? await fileExistsInRepository(readRepoFile, descriptorPath)
+        : false;
+
+    const readyForManifest = existsInSource === true;
+    const status =
+        validMetadataType && pathLooksLikeBundle && readyForManifest
+            ? 'PASS'
+            : 'BLOCKED';
+
+    return {
+        metadataName: resolvedName,
+        metadataType,
+        existsInSource,
+        validMetadataType,
+        validFilePath: pathLooksLikeBundle,
+        readyForManifest,
+        status
+    };
+}
+
 async function validateMetadataItem(item, readRepoFile) {
     const { metadataType, metadataName, filePath } = item;
+
+    if (isBundleMetadataType(metadataType)) {
+        return validateBundleMetadataItem(item, readRepoFile);
+    }
 
     const validMetadataType = isSupportedMetadataType(metadataType);
     const validFilePath =
@@ -262,10 +381,12 @@ async function validateMetadataPackage(deploymentPackage) {
             metadataType: item.metadataType,
             existsInSource: false,
             validMetadataType: isSupportedMetadataType(item.metadataType),
-            validFilePath: extensionMatchesMetadataType(
-                item.filePath,
-                item.metadataType
-            ),
+            validFilePath: isBundleMetadataType(item.metadataType)
+                ? Boolean(item.metadataName || item.filePath)
+                : extensionMatchesMetadataType(
+                      item.filePath,
+                      item.metadataType
+                  ),
             readyForManifest: false,
             status: 'BLOCKED'
         }));
@@ -308,5 +429,7 @@ async function validateMetadataPackage(deploymentPackage) {
 module.exports = {
     validateMetadataPackage,
     isSupportedMetadataType,
-    extensionMatchesMetadataType
+    extensionMatchesMetadataType,
+    isBundleMetadataType,
+    resolveBundleDescriptorPath
 };
