@@ -14,6 +14,7 @@ const dependencyResolutionService = require('./dependencyResolution/dependencyRe
 const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
 const referenceDiscoveryService = require('./dependencyResolution/referenceDiscovery.service');
 const graphExpansionService = require('./dependencyResolution/graphExpansion/graphExpansion.service');
+const artifactResolutionService = require('./repositoryArtifacts/artifactResolution.service');
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
 
@@ -469,12 +470,60 @@ async function validateDeployment({
         };
     }
 
+    let artifactEnrichedSelectedMetadata =
+        deploymentPackage.selectedMetadata || [];
+    let artifactResolutionSummary = {
+        nodesResolved: 0,
+        artifactsFound: 0,
+        artifactsMissing: 0,
+        warnings: []
+    };
+
+    try {
+        const artifactResult =
+            await artifactResolutionService.resolveRepositoryArtifacts({
+                selectedMetadata: deploymentPackage.selectedMetadata,
+                discoveredRelationships,
+                discoveredReferences,
+                enrichedDependencies: enrichedRequiredDependencies,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            });
+
+        artifactEnrichedSelectedMetadata =
+            artifactResult.selectedMetadata ||
+            artifactEnrichedSelectedMetadata;
+        discoveredRelationships =
+            artifactResult.discoveredRelationships || discoveredRelationships;
+        discoveredReferences =
+            artifactResult.discoveredReferences || discoveredReferences;
+        enrichedRequiredDependencies =
+            artifactResult.enrichedDependencies ||
+            enrichedRequiredDependencies;
+        artifactResolutionSummary =
+            artifactResult.summary || artifactResolutionSummary;
+    } catch (error) {
+        console.error('REPOSITORY ARTIFACT RESOLUTION ERROR');
+        console.error(error);
+
+        artifactResolutionSummary = {
+            nodesResolved: 0,
+            artifactsFound: 0,
+            artifactsMissing: 0,
+            warnings: [
+                error.message ||
+                    'Repository artifact resolution failed; continuing without artifact paths.'
+            ]
+        };
+    }
+
     try {
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
                 requiredDependencies: enrichedRequiredDependencies,
                 discoveredReferences,
-                selectedMetadata: deploymentPackage.selectedMetadata,
+                selectedMetadata: artifactEnrichedSelectedMetadata,
                 accessToken: accessTokenForDownstream,
                 instanceUrl: resolvedInstanceUrl
             });
@@ -506,7 +555,7 @@ async function validateDeployment({
         deploymentCompatibility =
             deploymentCompatibilityAnalyzerService.analyzeDeploymentCompatibility(
                 {
-                    selectedMetadata: deploymentPackage.selectedMetadata,
+                    selectedMetadata: artifactEnrichedSelectedMetadata,
                     discoveredRelationships,
                     discoveredReferences,
                     resolvedDependencies: resolvedRequiredDependencies
@@ -553,7 +602,7 @@ async function validateDeployment({
     try {
         const explorerResult =
             dependencyExplorerService.buildDependencyExplorer({
-                selectedMetadata: deploymentPackage.selectedMetadata,
+                selectedMetadata: artifactEnrichedSelectedMetadata,
                 discoveredRelationships,
                 discoveredReferences,
                 resolvedDependencies: resolvedRequiredDependencies,
@@ -580,6 +629,7 @@ async function validateDeployment({
 
     const deploymentPackageWithResolvedDependencies = {
         ...deploymentPackage,
+        selectedMetadata: artifactEnrichedSelectedMetadata,
         requiredDependencies: resolvedRequiredDependencies
     };
 
@@ -681,14 +731,56 @@ async function validateDeployment({
         })
     );
 
-    const generatedWorkspace =
-        await deploymentWorkspaceService.buildDeploymentWorkspace({
-            generatedDeploymentPackage,
-            generatedManifest,
-            repoUrl: deploymentPackage.repoUrl,
-            sourceBranch:
-                deploymentPackage.sourceBranch || deploymentPackage.branch
-        });
+    const artifactCompatibilityBlocked = (compatibilityFindings || []).some(
+        (finding) =>
+            finding.ruleId === 'artifact.exists' &&
+            (finding.status === 'FAIL' ||
+                finding.status === 'BLOCK' ||
+                finding.blocking === true)
+    );
+
+    let generatedWorkspace;
+
+    if (artifactCompatibilityBlocked) {
+        const missingArtifacts = (compatibilityFindings || [])
+            .filter(
+                (finding) =>
+                    finding.ruleId === 'artifact.exists' &&
+                    (finding.status === 'FAIL' ||
+                        finding.status === 'BLOCK' ||
+                        finding.blocking === true)
+            )
+            .map((finding) => finding.metadataName)
+            .filter(Boolean);
+
+        generatedWorkspace = {
+            workspacePath: null,
+            workspaceCreated: false,
+            packageXmlWritten: false,
+            metadataCopied: 0,
+            dependenciesCopied: 0,
+            copiedFiles: 0,
+            workspaceSize: '0 B',
+            missingFiles: missingArtifacts,
+            status: 'BLOCKED',
+            skippedReason:
+                'Workspace skipped because one or more source artifacts are missing from the selected source branch.'
+        };
+
+        console.log(
+            'Workspace Builder skipped due to missing source artifacts:',
+            missingArtifacts
+        );
+    } else {
+        generatedWorkspace =
+            await deploymentWorkspaceService.buildDeploymentWorkspace({
+                generatedDeploymentPackage,
+                generatedManifest,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            });
+    }
 
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {

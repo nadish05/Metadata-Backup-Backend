@@ -8,9 +8,11 @@ const lightningComponentReferenceRule = require('./rules/lightningComponentRefer
 const actionOverrideReferenceRule = require('./rules/actionOverrideReference.rule');
 const lookupTargetRule = require('./rules/lookupTarget.rule');
 const masterDetailTargetRule = require('./rules/masterDetailTarget.rule');
+const artifactExistsRule = require('./rules/artifactExists.rule');
 
 function getRegisteredCompatibilityRules() {
     return [
+        artifactExistsRule,
         flexiPageFieldReferenceRule,
         lightningComponentReferenceRule,
         actionOverrideReferenceRule,

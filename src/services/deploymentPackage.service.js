@@ -14,7 +14,9 @@ function normalizeMetadataItem(item) {
     return {
         metadataType,
         metadataName,
-        filePath
+        filePath,
+        sourceExists: item.sourceExists,
+        artifactResolved: item.artifactResolved
     };
 }
 
@@ -93,6 +95,18 @@ function normalizeDependencyItem(item) {
         normalized.editable = item.editable;
     }
 
+    if (item.filePath) {
+        normalized.filePath = item.filePath;
+    }
+
+    if (typeof item.sourceExists === 'boolean') {
+        normalized.sourceExists = item.sourceExists;
+    }
+
+    if (typeof item.artifactResolved === 'boolean') {
+        normalized.artifactResolved = item.artifactResolved;
+    }
+
     return normalized;
 }
 
@@ -151,7 +165,9 @@ function dependencyToMetadataItem(dependency) {
     return {
         metadataType: dependency.type,
         metadataName: dependency.name,
-        filePath: null
+        filePath: dependency.filePath || null,
+        sourceExists: dependency.sourceExists,
+        artifactResolved: dependency.artifactResolved
     };
 }
 

@@ -98,7 +98,10 @@ function mergeDeployableReferences(
             reason:
                 reference.reason ||
                 'Deployable reference discovered during metadata reference discovery.',
-            source: reference.discoveredBy || 'REFERENCE_DISCOVERY'
+            source: reference.discoveredBy || 'REFERENCE_DISCOVERY',
+            filePath: reference.filePath || null,
+            sourceExists: reference.sourceExists,
+            artifactResolved: reference.artifactResolved
         });
     }
 
@@ -349,7 +352,19 @@ async function resolveDependencies({
             ? resolver.resolve(dependency, context)
             : createDefaultDecision(dependency);
 
-        decisions.push(decision);
+        // Preserve repository artifact enrichment for Workspace / Compatibility.
+        decisions.push({
+            ...decision,
+            filePath: dependency.filePath || decision.filePath || null,
+            sourceExists:
+                dependency.sourceExists != null
+                    ? dependency.sourceExists
+                    : decision.sourceExists,
+            artifactResolved:
+                dependency.artifactResolved != null
+                    ? dependency.artifactResolved
+                    : decision.artifactResolved
+        });
     }
 
     const summary = buildSummary(decisions, warnings);

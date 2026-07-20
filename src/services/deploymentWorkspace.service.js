@@ -505,33 +505,37 @@ function resolvePathByTypeAndName(type, name, repoFiles) {
     );
 }
 
-function resolveMetadataItemPath(item, repoFiles) {
-    if (isBundleMetadataType(item?.metadataType)) {
-        const rule = getMetadataTypeRule(item.metadataType);
-        const bundleName =
-            item.metadataName ||
-            extractBundleNameFromPath(item.filePath, rule?.folder);
+function resolveCopyPath(item, repoFiles) {
+    const metadataType = item?.metadataType || item?.type || null;
+    const name = item?.metadataName || item?.name || null;
 
-        return resolveBundleDirectoryPath(
-            item.metadataType,
-            bundleName,
-            repoFiles
-        );
+    // Artifact Resolution already ran — do not re-lookup by type/name.
+    if (item?.artifactResolved === false) {
+        return null;
     }
 
     if (item?.filePath) {
-        return item.filePath.replace(/\\/g, '/');
+        return String(item.filePath).replace(/\\/g, '/');
     }
 
-    if (item?.metadataType && item?.metadataName) {
-        return resolvePathByTypeAndName(
-            item.metadataType,
-            item.metadataName,
-            repoFiles
-        );
+    if (item?.artifactResolved === true) {
+        return null;
+    }
+
+    // Legacy fallback only when artifact resolution did not evaluate the node.
+    if (isBundleMetadataType(metadataType)) {
+        return resolveBundleDirectoryPath(metadataType, name, repoFiles);
+    }
+
+    if (metadataType && name) {
+        return resolvePathByTypeAndName(metadataType, name, repoFiles);
     }
 
     return null;
+}
+
+function resolveMetadataItemPath(item, repoFiles) {
+    return resolveCopyPath(item, repoFiles);
 }
 
 function getFilesToCopy(filePath, metadataType, repoFiles = []) {
@@ -667,9 +671,16 @@ async function copyDependencyItems({
     let dependenciesCopied = 0;
 
     for (const dependency of dependencies) {
-        const resolvedPath = resolvePathByTypeAndName(
-            dependency.type,
-            dependency.name,
+        const resolvedPath = resolveCopyPath(
+            {
+                metadataType: dependency.type,
+                metadataName: dependency.name,
+                type: dependency.type,
+                name: dependency.name,
+                filePath: dependency.filePath || null,
+                artifactResolved: dependency.artifactResolved,
+                sourceExists: dependency.sourceExists
+            },
             repoFiles
         );
         const missingLabel = getMissingFileLabel(
