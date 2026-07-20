@@ -9,6 +9,7 @@ const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
 const deploymentExecutionService = require('./deploymentExecution.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
+const metadataCompatibilityService = require('./metadataCompatibility/metadataCompatibility.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -305,6 +306,24 @@ async function validateDeployment({
         })
     );
 
+    let compatibilitySummary;
+
+    if (generatedWorkspace.status === 'READY') {
+        compatibilitySummary =
+            await metadataCompatibilityService.processWorkspace({
+                workspacePath: generatedWorkspace.workspacePath
+            });
+    } else {
+        compatibilitySummary = {
+            status: 'SKIPPED',
+            rulesExecuted: [],
+            filesModified: [],
+            warnings: [
+                'Workspace not READY; compatibility processing skipped'
+            ]
+        };
+    }
+
     const deploymentMode = resolveDeploymentMode(deploymentPackage);
 
     logSection('Deployment Mode Selected');
@@ -339,7 +358,8 @@ async function validateDeployment({
         deploymentReadiness,
         generatedDeploymentPackage,
         generatedManifest,
-        generatedWorkspace
+        generatedWorkspace,
+        compatibilitySummary
     };
 
     if (deploymentMode === 'DEPLOY') {
