@@ -150,38 +150,123 @@ function extractObjectContextNames(cleanedContent) {
     return objectNames;
 }
 
+/**
+ * Map local Apex variable names to their CustomObject types.
+ * Example: "Comparison_Result__c row" → row => Comparison_Result__c
+ */
+function extractVariableObjectTypes(cleanedContent) {
+    const variableTypes = new Map();
+
+    const patterns = [
+        /\b([A-Za-z0-9_]+__c)\s+([a-zA-Z][A-Za-z0-9_]*)\b/g,
+        /\bfor\s*\(\s*([A-Za-z0-9_]+__c)\s+([a-zA-Z][A-Za-z0-9_]*)\s*:/gi
+    ];
+
+    for (const pattern of patterns) {
+        for (const match of cleanedContent.matchAll(pattern)) {
+            const objectType = match[1];
+            const variableName = match[2];
+
+            if (!variableTypes.has(variableName)) {
+                variableTypes.set(variableName, objectType);
+            }
+        }
+    }
+
+    return variableTypes;
+}
+
+/**
+ * Qualify SOQL SELECT __c fields with the query's FROM object.
+ * Example: [SELECT Metadata_Comparison__c FROM Comparison_Result__c]
+ *       → Comparison_Result__c.Metadata_Comparison__c
+ */
+function extractSoqlQualifiedFields(cleanedContent) {
+    const qualifiedFields = new Set();
+    const soqlBlocks = cleanedContent.matchAll(/\[([\s\S]*?)\]/g);
+
+    for (const block of soqlBlocks) {
+        const query = block[1];
+
+        if (!/\bSELECT\b/i.test(query) || !/\bFROM\b/i.test(query)) {
+            continue;
+        }
+
+        const fromMatch = query.match(/\bFROM\s+([A-Za-z0-9_]+__c)\b/i);
+
+        if (!fromMatch) {
+            continue;
+        }
+
+        const objectName = fromMatch[1];
+        const selectMatch = query.match(/\bSELECT\s+([\s\S]*?)\s+FROM\b/i);
+
+        if (!selectMatch) {
+            continue;
+        }
+
+        const fieldTokens = selectMatch[1].match(/\b[A-Za-z0-9_]+__c\b/g) || [];
+
+        for (const fieldName of fieldTokens) {
+            if (fieldName !== objectName) {
+                qualifiedFields.add(`${objectName}.${fieldName}`);
+            }
+        }
+    }
+
+    return qualifiedFields;
+}
+
 function classifyCustomObjectsAndFields(cleanedContent) {
+    const objectNames = extractObjectContextNames(cleanedContent);
+    const customObjects = [];
+    // Salesforce CustomField identity is always ObjectApiName.FieldApiName.
+    // Never emit bare __c field tokens — that loses parent context.
+    const customFields = new Set();
+
+    // 1) Preserve Object__c.Field__c references as fully qualified identities.
+    for (const match of cleanedContent.matchAll(
+        /\b([A-Za-z0-9_]+__c)\.([A-Za-z0-9_]+__c)\b/g
+    )) {
+        customFields.add(`${match[1]}.${match[2]}`);
+    }
+
+    // 2) Qualify variable.Field__c using declared variable object types.
+    const variableTypes = extractVariableObjectTypes(cleanedContent);
+
+    for (const match of cleanedContent.matchAll(
+        /\b([A-Za-z][A-Za-z0-9_]*)\.([A-Za-z0-9_]+__c)\b/g
+    )) {
+        const receiver = match[1];
+        const fieldName = match[2];
+
+        // Object__c.Field__c already handled above.
+        if (/__c$/i.test(receiver)) {
+            continue;
+        }
+
+        const objectType = variableTypes.get(receiver);
+
+        if (objectType) {
+            customFields.add(`${objectType}.${fieldName}`);
+        }
+    }
+
+    // 3) Qualify SOQL SELECT fields with the FROM object.
+    for (const qualifiedField of extractSoqlQualifiedFields(cleanedContent)) {
+        customFields.add(qualifiedField);
+    }
+
+    // 4) Remaining __c tokens with object context are CustomObjects.
+    //    Unqualified __c tokens are NOT CustomFields (invalid identity).
     const allTokens = uniqueSorted(
         cleanedContent.match(/\b[A-Za-z0-9_]+__c\b/g) || []
     );
 
-    const dottedFieldRefs =
-        cleanedContent.match(
-            /\b([A-Za-z0-9_]+__c)\.([A-Za-z0-9_]+__c)\b/g
-        ) || [];
-
-    const customFields = new Set(dottedFieldRefs);
-
-    dottedFieldRefs.forEach((fieldRef) => {
-        customFields.add(fieldRef.split('.')[1]);
-    });
-
-    const dotFieldNames = (
-        cleanedContent.match(/\.([A-Za-z0-9_]+__c)\b/g) || []
-    ).map((match) => match.slice(1));
-
-    dotFieldNames.forEach((name) => customFields.add(name));
-
-    const objectNames = extractObjectContextNames(cleanedContent);
-    const customObjects = [];
-
     allTokens.forEach((token) => {
         if (objectNames.has(token)) {
             customObjects.push(token);
-            return;
         }
-
-        customFields.add(token);
     });
 
     return {
