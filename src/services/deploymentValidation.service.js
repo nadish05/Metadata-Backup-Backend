@@ -605,8 +605,6 @@ async function validateDeployment({
         })
     );
 
-    let compatibilitySummary;
-
     if (generatedWorkspace.status === 'READY') {
         compatibilitySummary =
             await metadataCompatibilityService.processWorkspace({
