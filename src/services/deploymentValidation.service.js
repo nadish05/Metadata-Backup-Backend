@@ -12,6 +12,8 @@ const deploymentHistoryService = require('./deploymentHistory.service');
 const metadataCompatibilityService = require('./metadataCompatibility/metadataCompatibility.service');
 const dependencyResolutionService = require('./dependencyResolution/dependencyResolution.service');
 const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
+const referenceDiscoveryService = require('./dependencyResolution/referenceDiscovery.service');
+const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -230,6 +232,28 @@ async function validateDeployment({
         warnings: []
     };
     let discoveredRelationships = [];
+    let discoveredReferences = [];
+    let referenceSummary = {
+        referencesDiscovered: 0,
+        byType: {},
+        blockingReferences: 0,
+        deployableReferences: 0,
+        warnings: []
+    };
+    let dependencyExplorer = {
+        nodes: [],
+        edges: [],
+        warnings: []
+    };
+    let relationshipTree = [];
+    let graphStatistics = {
+        totalNodes: 0,
+        relationships: 0,
+        referenceCount: 0,
+        graphDepth: 0,
+        blockingReferences: 0,
+        deployableReferences: 0
+    };
     let resolvedRequiredDependencies =
         deploymentPackage.requiredDependencies || [];
     let enrichedRequiredDependencies =
@@ -300,6 +324,37 @@ async function validateDeployment({
     }
 
     try {
+        const referenceResult =
+            await referenceDiscoveryService.discoverReferences({
+                selectedMetadata: deploymentPackage.selectedMetadata,
+                discoveredRelationships,
+                enrichedDependencies: enrichedRequiredDependencies,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            });
+
+        discoveredReferences = referenceResult.discoveredReferences || [];
+        referenceSummary =
+            referenceResult.referenceSummary || referenceSummary;
+    } catch (error) {
+        console.error('METADATA REFERENCE DISCOVERY ERROR');
+        console.error(error);
+
+        discoveredReferences = [];
+        referenceSummary = {
+            referencesDiscovered: 0,
+            byType: {},
+            blockingReferences: 0,
+            deployableReferences: 0,
+            warnings: [
+                error.message ||
+                    'Reference discovery failed; continuing without references.'
+            ]
+        };
+    }
+
+    try {
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
                 requiredDependencies: enrichedRequiredDependencies,
@@ -329,6 +384,34 @@ async function validateDeployment({
             ]
         };
         resolvedRequiredDependencies = enrichedRequiredDependencies;
+    }
+
+    try {
+        const explorerResult =
+            dependencyExplorerService.buildDependencyExplorer({
+                selectedMetadata: deploymentPackage.selectedMetadata,
+                discoveredRelationships,
+                discoveredReferences,
+                resolvedDependencies: resolvedRequiredDependencies,
+                referenceSummary
+            });
+
+        dependencyExplorer =
+            explorerResult.dependencyExplorer || dependencyExplorer;
+        relationshipTree = explorerResult.relationshipTree || [];
+        referenceSummary =
+            explorerResult.referenceSummary || referenceSummary;
+        graphStatistics = explorerResult.graphStatistics || graphStatistics;
+    } catch (error) {
+        console.error('DEPENDENCY EXPLORER ERROR');
+        console.error(error);
+        dependencyExplorer = {
+            nodes: [],
+            edges: [],
+            warnings: [
+                error.message || 'Dependency explorer failed.'
+            ]
+        };
     }
 
     const deploymentPackageWithResolvedDependencies = {
@@ -517,6 +600,11 @@ async function validateDeployment({
         relationshipDiscoverySummary,
         graphExpansionSummary,
         discoveredRelationships,
+        discoveredReferences,
+        referenceSummary,
+        dependencyExplorer,
+        relationshipTree,
+        graphStatistics,
         dependencyResolutionSummary
     };
 
