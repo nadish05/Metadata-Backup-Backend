@@ -221,6 +221,14 @@ async function validateDeployment({
         masterDetailRelationships: 0,
         warnings: []
     };
+    let graphExpansionSummary = {
+        iterations: 0,
+        graphDepth: 0,
+        metadataNodes: 0,
+        relationships: 0,
+        newDependencies: 0,
+        warnings: []
+    };
     let discoveredRelationships = [];
     let resolvedRequiredDependencies =
         deploymentPackage.requiredDependencies || [];
@@ -256,6 +264,8 @@ async function validateDeployment({
             enrichedRequiredDependencies;
         relationshipDiscoverySummary =
             discoveryResult.summary || relationshipDiscoverySummary;
+        graphExpansionSummary =
+            discoveryResult.graphExpansionSummary || graphExpansionSummary;
         discoveredRelationships =
             discoveryResult.discoveredRelationships || [];
     } catch (error) {
@@ -268,6 +278,17 @@ async function validateDeployment({
             relationshipsDiscovered: 0,
             lookupRelationships: 0,
             masterDetailRelationships: 0,
+            warnings: [
+                error.message ||
+                    'Relationship discovery failed; continuing with existing dependencies.'
+            ]
+        };
+        graphExpansionSummary = {
+            iterations: 0,
+            graphDepth: 0,
+            metadataNodes: 0,
+            relationships: 0,
+            newDependencies: 0,
             warnings: [
                 error.message ||
                     'Relationship discovery failed; continuing with existing dependencies.'
@@ -494,6 +515,7 @@ async function validateDeployment({
         generatedWorkspace,
         compatibilitySummary,
         relationshipDiscoverySummary,
+        graphExpansionSummary,
         discoveredRelationships,
         dependencyResolutionSummary
     };

@@ -7,6 +7,8 @@ const { getRegisteredDiscoverers } = require('./relationshipRegistry');
 
 const execAsync = util.promisify(exec);
 
+const MAX_GRAPH_DEPTH = 10;
+
 function logSection(title) {
     console.log('------------------------------------');
     console.log(title);
@@ -19,7 +21,7 @@ function shellQuote(value) {
 
 function getDependencyKey(dependency) {
     const type = dependency?.type || dependency?.metadataType;
-    const name = dependency?.name;
+    const name = dependency?.name || dependency?.metadataName;
 
     if (!type || !name) {
         return null;
@@ -41,8 +43,9 @@ function normalizeExistingDependencies(requiredDependencies) {
 function toDependencyGraphItem(relationship) {
     return {
         name: relationship.name,
-        type: relationship.metadataType || 'CustomObject',
-        metadataType: relationship.metadataType || 'CustomObject',
+        type: relationship.metadataType || relationship.type || 'CustomObject',
+        metadataType:
+            relationship.metadataType || relationship.type || 'CustomObject',
         relationship: relationship.relationship,
         required: relationship.required !== false,
         selected: relationship.selected !== false,
@@ -50,7 +53,8 @@ function toDependencyGraphItem(relationship) {
         sourceMetadata: relationship.sourceMetadata,
         sourceField: relationship.sourceField,
         discoveryMethod: relationship.discoveryMethod,
-        reason: relationship.reason
+        reason: relationship.reason,
+        depth: relationship.depth || 1
     };
 }
 
@@ -86,7 +90,6 @@ function mergeDependencies(existingDependencies, discoveredRelationships) {
         if (dependencyMap.has(key)) {
             const existing = dependencyMap.get(key);
 
-            // Enrich provenance without changing existing discovery entries.
             if (!existing.relationship && graphItem.relationship) {
                 existing.relationship = graphItem.relationship;
             }
@@ -97,6 +100,10 @@ function mergeDependencies(existingDependencies, discoveredRelationships) {
                 existing.sourceField = graphItem.sourceField;
                 existing.discoveryMethod = graphItem.discoveryMethod;
                 existing.reason = graphItem.reason || existing.reason;
+            }
+
+            if (existing.depth == null && graphItem.depth != null) {
+                existing.depth = graphItem.depth;
             }
 
             continue;
@@ -136,6 +143,24 @@ function buildSummary({
     };
 }
 
+function buildGraphExpansionSummary({
+    iterations,
+    graphDepth,
+    metadataNodes,
+    relationships,
+    newDependencies,
+    warnings
+}) {
+    return {
+        iterations,
+        graphDepth,
+        metadataNodes,
+        relationships,
+        newDependencies,
+        warnings: [...warnings]
+    };
+}
+
 function logDiscoveryResults(relationships, summary) {
     console.log('Selected metadata scanned:', summary.metadataScanned);
     console.log('Files scanned:', summary.filesScanned);
@@ -144,11 +169,16 @@ function logDiscoveryResults(relationships, summary) {
     for (const relationship of relationships) {
         console.log('Relationship');
         console.log(relationship.relationship);
-        console.log(
-            `${relationship.sourceMetadata}.${relationship.sourceField}`
-        );
+        if (relationship.sourceField) {
+            console.log(
+                `${relationship.sourceMetadata}.${relationship.sourceField}`
+            );
+        } else {
+            console.log(relationship.sourceMetadata);
+        }
         console.log('↓');
         console.log(relationship.name);
+        console.log('Depth:', relationship.depth || 1);
         console.log('Discovered');
         console.log('Reason');
         console.log(relationship.reason);
@@ -167,6 +197,216 @@ function logDiscoveryResults(relationships, summary) {
     );
 
     logSection('Relationship Discovery Summary');
+}
+
+function logGraphExpansionIteration({
+    iteration,
+    depth,
+    metadataScanned,
+    newRelationships
+}) {
+    logSection('Metadata Graph Expansion');
+    console.log('Iteration:', iteration);
+    console.log('Graph depth:', depth);
+    console.log('Metadata scanned:', metadataScanned);
+    console.log('Relationships discovered:', newRelationships.length);
+
+    for (const relationship of newRelationships) {
+        console.log(`Depth ${relationship.depth}`);
+        console.log(relationship.sourceMetadata);
+        console.log('↓');
+        console.log(relationship.name);
+        console.log(relationship.relationship);
+        console.log('Discovered');
+        console.log('------------------------------------');
+    }
+}
+
+function toScanTarget(item) {
+    if (!item) {
+        return null;
+    }
+
+    if (item.metadataType && (item.metadataName || item.filePath)) {
+        return {
+            metadataType: item.metadataType,
+            metadataName: item.metadataName || item.name || null,
+            filePath: item.filePath || null
+        };
+    }
+
+    if ((item.type || item.metadataType) && item.name) {
+        return {
+            metadataType: item.metadataType || item.type,
+            metadataName: item.name,
+            filePath: item.filePath || null
+        };
+    }
+
+    return null;
+}
+
+function relationshipToScanTarget(relationship) {
+    if (!relationship?.name || !relationship?.metadataType) {
+        return null;
+    }
+
+    // Only CustomObject nodes expand further in this phase.
+    // FlexiPage and other types become leaf nodes until future discoverers exist.
+    if (relationship.metadataType !== 'CustomObject') {
+        return null;
+    }
+
+    return {
+        metadataType: 'CustomObject',
+        metadataName: relationship.name,
+        filePath: null
+    };
+}
+
+async function runDiscoverersForFrontier({
+    frontier,
+    discoverers,
+    repoFiles,
+    readRepoFile,
+    depth
+}) {
+    const relationships = [];
+    const warnings = [];
+    let metadataScanned = 0;
+    let filesScanned = 0;
+
+    for (const discoverer of discoverers) {
+        const result = await discoverer.discover({
+            selectedMetadata: frontier,
+            repoFiles,
+            readRepoFile,
+            depth
+        });
+
+        relationships.push(...(result.relationships || []));
+        warnings.push(...(result.warnings || []));
+        metadataScanned += result.metadataScanned || 0;
+        filesScanned += result.filesScanned || 0;
+    }
+
+    return {
+        relationships,
+        warnings,
+        metadataScanned,
+        filesScanned
+    };
+}
+
+/**
+ * Expand the dependency graph until no new discoverable metadata appears.
+ */
+async function discoverUntilStable({
+    selectedMetadata,
+    discoverers,
+    repoFiles,
+    readRepoFile
+}) {
+    const allRelationships = [];
+    const relationshipKeys = new Set();
+    const visitedMetadata = new Set();
+    const warnings = [];
+    let metadataScanned = 0;
+    let filesScanned = 0;
+    let iterations = 0;
+    let graphDepth = 0;
+    let newDependencies = 0;
+
+    let frontier = (selectedMetadata || [])
+        .map(toScanTarget)
+        .filter(Boolean);
+
+    while (frontier.length > 0 && graphDepth < MAX_GRAPH_DEPTH) {
+        const unscannedFrontier = [];
+
+        for (const item of frontier) {
+            const key = getDependencyKey(item);
+
+            if (!key || visitedMetadata.has(key)) {
+                continue;
+            }
+
+            visitedMetadata.add(key);
+            unscannedFrontier.push(item);
+        }
+
+        if (unscannedFrontier.length === 0) {
+            break;
+        }
+
+        iterations += 1;
+        graphDepth += 1;
+
+        const iterationResult = await runDiscoverersForFrontier({
+            frontier: unscannedFrontier,
+            discoverers,
+            repoFiles,
+            readRepoFile,
+            depth: graphDepth
+        });
+
+        metadataScanned += iterationResult.metadataScanned;
+        filesScanned += iterationResult.filesScanned;
+        warnings.push(...iterationResult.warnings);
+
+        const newlyDiscovered = [];
+
+        for (const relationship of iterationResult.relationships) {
+            const key = getDependencyKey(relationship);
+
+            if (!key || relationshipKeys.has(key)) {
+                continue;
+            }
+
+            relationshipKeys.add(key);
+            allRelationships.push(relationship);
+            newlyDiscovered.push(relationship);
+            newDependencies += 1;
+        }
+
+        logGraphExpansionIteration({
+            iteration: iterations,
+            depth: graphDepth,
+            metadataScanned: unscannedFrontier.length,
+            newRelationships: newlyDiscovered
+        });
+
+        frontier = newlyDiscovered
+            .map(relationshipToScanTarget)
+            .filter(Boolean);
+    }
+
+    if (graphDepth >= MAX_GRAPH_DEPTH && frontier.length > 0) {
+        warnings.push(
+            `Graph expansion stopped at maximum depth ${MAX_GRAPH_DEPTH}.`
+        );
+    }
+
+    console.log('Graph expansion iterations:', iterations);
+    console.log('Graph depth:', graphDepth);
+    console.log('Metadata nodes visited:', visitedMetadata.size);
+    console.log('New dependencies:', newDependencies);
+    logSection('Metadata Graph Expansion Summary');
+
+    return {
+        relationships: allRelationships,
+        warnings,
+        metadataScanned,
+        filesScanned,
+        graphExpansionSummary: buildGraphExpansionSummary({
+            iterations,
+            graphDepth,
+            metadataNodes: visitedMetadata.size,
+            relationships: allRelationships.length,
+            newDependencies,
+            warnings
+        })
+    };
 }
 
 async function withClonedRepository({ repoUrl, branch }, callback) {
@@ -224,6 +464,7 @@ async function withClonedRepository({ repoUrl, branch }, callback) {
 
 /**
  * Discover relationship-based dependencies and enrich the dependency graph.
+ * Expands recursively until the graph is stable.
  * Does not decide deployment actions or modify packages/metadata.
  *
  * @param {{
@@ -244,6 +485,14 @@ async function discoverRelationships({
     const existingDependencies = normalizeExistingDependencies(
         requiredDependencies
     );
+    const emptyGraphExpansionSummary = buildGraphExpansionSummary({
+        iterations: 0,
+        graphDepth: 0,
+        metadataNodes: 0,
+        relationships: 0,
+        newDependencies: 0,
+        warnings: []
+    });
     const emptySummary = buildSummary({
         metadataScanned: 0,
         filesScanned: 0,
@@ -271,7 +520,11 @@ async function discoverRelationships({
         return {
             discoveredRelationships: [],
             enrichedDependencies: existingDependencies,
-            summary
+            summary,
+            graphExpansionSummary: {
+                ...emptyGraphExpansionSummary,
+                warnings
+            }
         };
     }
 
@@ -284,7 +537,8 @@ async function discoverRelationships({
         return {
             discoveredRelationships: [],
             enrichedDependencies: existingDependencies,
-            summary: emptySummary
+            summary: emptySummary,
+            graphExpansionSummary: emptyGraphExpansionSummary
         };
     }
 
@@ -295,29 +549,20 @@ async function discoverRelationships({
             { repoUrl, branch: sourceBranch },
             async (readRepoFile, listRepoFiles) => {
                 const repoFiles = await listRepoFiles();
-                const relationships = [];
-                const warnings = [];
-                let metadataScanned = 0;
-                let filesScanned = 0;
 
-                for (const discoverer of discoverers) {
-                    const result = await discoverer.discover({
-                        selectedMetadata,
-                        repoFiles,
-                        readRepoFile
-                    });
+                const expansionResult = await discoverUntilStable({
+                    selectedMetadata,
+                    discoverers,
+                    repoFiles,
+                    readRepoFile
+                });
 
-                    relationships.push(...(result.relationships || []));
-                    warnings.push(...(result.warnings || []));
-                    metadataScanned += result.metadataScanned || 0;
-                    filesScanned += result.filesScanned || 0;
-                }
-
+                const relationships = expansionResult.relationships;
                 const summary = buildSummary({
-                    metadataScanned,
-                    filesScanned,
+                    metadataScanned: expansionResult.metadataScanned,
+                    filesScanned: expansionResult.filesScanned,
                     relationships,
-                    warnings
+                    warnings: expansionResult.warnings
                 });
 
                 logDiscoveryResults(relationships, summary);
@@ -328,7 +573,8 @@ async function discoverRelationships({
                         existingDependencies,
                         relationships
                     ),
-                    summary
+                    summary,
+                    graphExpansionSummary: expansionResult.graphExpansionSummary
                 };
             }
         );
@@ -353,11 +599,16 @@ async function discoverRelationships({
         return {
             discoveredRelationships: [],
             enrichedDependencies: existingDependencies,
-            summary
+            summary,
+            graphExpansionSummary: {
+                ...emptyGraphExpansionSummary,
+                warnings
+            }
         };
     }
 }
 
 module.exports = {
-    discoverRelationships
+    discoverRelationships,
+    discoverUntilStable
 };

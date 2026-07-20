@@ -4,9 +4,13 @@
  */
 
 const customObjectRelationshipDiscoverer = require('./discoverers/customObjectRelationship.discoverer');
+const customObjectActionOverrideDiscoverer = require('./discoverers/customObjectActionOverride.discoverer');
 
 function getRegisteredDiscoverers() {
-    return [customObjectRelationshipDiscoverer];
+    return [
+        customObjectRelationshipDiscoverer,
+        customObjectActionOverrideDiscoverer
+    ];
 }
 
 module.exports = {

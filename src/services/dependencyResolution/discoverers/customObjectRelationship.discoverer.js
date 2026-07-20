@@ -137,7 +137,8 @@ function createRelationshipRecord({
     referencedObject,
     relationship,
     sourceMetadata,
-    sourceField
+    sourceField,
+    depth = 1
 }) {
     return {
         name: referencedObject,
@@ -150,6 +151,7 @@ function createRelationshipRecord({
         discoveryMethod: DISCOVERY_METHOD,
         required: true,
         selected: true,
+        depth,
         reason: `${relationship} target discovered from field metadata.`
     };
 }
@@ -160,7 +162,7 @@ function createRelationshipRecord({
 const customObjectRelationshipDiscoverer = {
     id: DISCOVERER_ID,
 
-    async discover({ selectedMetadata, repoFiles, readRepoFile }) {
+    async discover({ selectedMetadata, repoFiles, readRepoFile, depth = 1 }) {
         const relationships = [];
         const warnings = [];
         const scannedFieldPaths = new Set();
@@ -225,7 +227,8 @@ const customObjectRelationshipDiscoverer = {
                                 referencedObject: parsed.referencedObject,
                                 relationship: parsed.relationship,
                                 sourceMetadata: objectApiName,
-                                sourceField
+                                sourceField,
+                                depth
                             })
                         );
                     } catch (error) {
@@ -278,7 +281,8 @@ const customObjectRelationshipDiscoverer = {
                             referencedObject: parsed.referencedObject,
                             relationship: parsed.relationship,
                             sourceMetadata,
-                            sourceField
+                            sourceField,
+                            depth
                         })
                     );
                 } catch (error) {
