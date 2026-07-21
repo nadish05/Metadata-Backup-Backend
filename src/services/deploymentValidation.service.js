@@ -674,11 +674,6 @@ async function validateDeployment({
             deploymentPackageWithResolvedDependencies
         );
 
-    const deploymentPackageForDependencyValidation = {
-        ...deploymentPackageWithResolvedDependencies,
-        selectedMetadata: generatedDeploymentPackage.metadata
-    };
-
     let dependencyValidation;
 
     if (connectivityResult.deploymentValidation?.destinationConnected) {
@@ -691,12 +686,14 @@ async function validateDeployment({
             };
         } else {
             try {
+                // Reporting only: validate the same inventory the deploy package uses.
                 dependencyValidation =
                     await dependencyValidationService.validateDependencies({
                         accessToken: accessTokenForDownstream,
                         instanceUrl: resolvedInstanceUrl,
                         deploymentPackage:
-                            deploymentPackageForDependencyValidation
+                            deploymentPackageWithResolvedDependencies,
+                        generatedDeploymentPackage
                     });
             } catch (error) {
                 console.error('DEPENDENCY VALIDATION ERROR');

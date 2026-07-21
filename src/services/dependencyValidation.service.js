@@ -1,7 +1,5 @@
 const axios = require('axios');
 
-const deploymentReviewService = require('./deploymentReview.service');
-
 const SUPPORTED_DEPENDENCY_TYPES = new Set([
     'ApexClass',
     'ApexTrigger',
@@ -119,33 +117,48 @@ function usesToolingApi(type) {
     return type === 'ApexClass' || type === 'ApexTrigger';
 }
 
-async function collectRequiredDependencies(deploymentPackage) {
-    const reviewResult =
-        await deploymentReviewService.runDeploymentReview(deploymentPackage);
+/**
+ * Build Dependency Validation rows from the generated deployment package.
+ * This is a reporting inventory only — same source of truth as deploy.
+ */
+function collectDeploymentPackageInventory(generatedDeploymentPackage) {
+    const inventoryMap = new Map();
 
-    const dependencyMap = new Map();
+    function addItem(type, name) {
+        if (!type || !name) {
+            return;
+        }
 
-    for (const item of reviewResult.deploymentReview || []) {
-        const requiredDependencies =
-            item.dependencyAnalysis?.requiredDependencies || [];
+        const key = `${type}:${name}`;
 
-        for (const dependency of requiredDependencies) {
-            if (!dependency?.required || !dependency?.name || !dependency?.type) {
-                continue;
-            }
-
-            const key = `${dependency.type}:${dependency.name}`;
-
-            if (!dependencyMap.has(key)) {
-                dependencyMap.set(key, {
-                    name: dependency.name,
-                    type: dependency.type
-                });
-            }
+        if (!inventoryMap.has(key)) {
+            inventoryMap.set(key, { name, type });
         }
     }
 
-    return [...dependencyMap.values()];
+    for (const item of generatedDeploymentPackage?.metadata || []) {
+        addItem(
+            item.metadataType || item.type,
+            item.metadataName || item.name
+        );
+    }
+
+    for (const dependency of generatedDeploymentPackage?.dependencies || []) {
+        addItem(
+            dependency.type || dependency.metadataType,
+            dependency.name || dependency.metadataName
+        );
+    }
+
+    return [...inventoryMap.values()].sort((a, b) => {
+        const typeCompare = a.type.localeCompare(b.type);
+
+        if (typeCompare !== 0) {
+            return typeCompare;
+        }
+
+        return a.name.localeCompare(b.name);
+    });
 }
 
 function buildCustomFieldSoql(name) {
@@ -379,7 +392,8 @@ function resolveOverallStatus(results) {
 async function validateDependencies({
     accessToken,
     instanceUrl,
-    deploymentPackage
+    deploymentPackage,
+    generatedDeploymentPackage
 }) {
     logSection('Dependency Validation Started');
 
@@ -394,30 +408,25 @@ async function validateDependencies({
         };
     }
 
-    let requiredDependencies = [];
-
-    try {
-        requiredDependencies = await collectRequiredDependencies(
-            deploymentPackage
-        );
-    } catch (error) {
-        console.error('Dependency discovery failed.');
-        console.error(error.message);
-
-        logSection('Dependency Validation Complete');
-
-        return {
-            overallStatus: 'BLOCKED',
-            results: [],
-            message: error.message || 'Unable to discover required dependencies.'
+    // Reporting source of truth = generated deployment package (same as deploy).
+    // Do not re-run Deployment Review to invent a separate dependency list.
+    const packageInventory =
+        generatedDeploymentPackage ||
+        {
+            metadata: deploymentPackage?.selectedMetadata || [],
+            dependencies: deploymentPackage?.requiredDependencies || []
         };
-    }
 
-    const packageMetadataKeys = buildPackageMetadataKeys(
-        deploymentPackage?.selectedMetadata
-    );
+    const dependenciesToValidate =
+        collectDeploymentPackageInventory(packageInventory);
 
-    const dependenciesToValidate = requiredDependencies;
+    const packageMetadataKeys = buildPackageMetadataKeys([
+        ...(packageInventory.metadata || []),
+        ...((packageInventory.dependencies || []).map((dependency) => ({
+            metadataType: dependency.type || dependency.metadataType,
+            metadataName: dependency.name || dependency.metadataName
+        })))
+    ]);
 
     if (!dependenciesToValidate.length) {
         logSection('Dependency Validation Complete');
