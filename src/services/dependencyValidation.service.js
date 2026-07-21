@@ -8,7 +8,8 @@ const SUPPORTED_DEPENDENCY_TYPES = new Set([
     'NamedCredential',
     'CustomMetadata',
     'CustomLabel',
-    'ListView'
+    'ListView',
+    'FlexiPage'
 ]);
 
 const BLOCKED_MESSAGES = {
@@ -19,7 +20,8 @@ const BLOCKED_MESSAGES = {
     NamedCredential: 'Named Credential not found in destination org.',
     CustomMetadata: 'Custom Metadata Type not found in destination org.',
     CustomLabel: 'Custom Label not found in destination org.',
-    ListView: 'List View not found in destination org.'
+    ListView: 'List View not found in destination org.',
+    FlexiPage: 'FlexiPage not found in destination org.'
 };
 
 function logSection(title) {
@@ -119,7 +121,8 @@ function usesToolingApi(type) {
     return (
         type === 'ApexClass' ||
         type === 'ApexTrigger' ||
-        type === 'CustomField'
+        type === 'CustomField' ||
+        type === 'FlexiPage'
     );
 }
 
@@ -226,6 +229,12 @@ function buildExistenceQuery(type, name) {
 
         case 'ListView':
             return buildListViewSoql(name);
+
+        case 'FlexiPage':
+            return (
+                'SELECT Id, DeveloperName FROM FlexiPage ' +
+                `WHERE DeveloperName = '${escapedName}' LIMIT 1`
+            );
 
         case 'NamedCredential':
             return (
