@@ -589,6 +589,56 @@ async function validateDeployment({
     // BEFORE Compatibility so Compatibility validates the committed plan.
     // Applies to both selectedMetadata and requiredDependencies decisions.
     try {
+        // TEMPORARY PLANNER DEBUG LOG — remove after Skip verification.
+        // Logs inventories only; does not modify planner or deployment behaviour.
+        const plannerDebugName = 'ComparisonResultController';
+        const plannerDebugNameOf = (item) =>
+            item?.metadataName || item?.name || null;
+        const plannerDebugNamesOf = (items) =>
+            (Array.isArray(items) ? items : [])
+                .map(plannerDebugNameOf)
+                .filter(Boolean);
+        const plannerDebugHasName = (items, name) =>
+            plannerDebugNamesOf(items).some((value) => value === name);
+
+        const selectedMetadataBeforePlanner =
+            artifactEnrichedSelectedMetadata;
+        const requiredDependenciesBeforePlanner =
+            resolvedRequiredDependencies;
+        const hadControllerInSelectedBefore = plannerDebugHasName(
+            selectedMetadataBeforePlanner,
+            plannerDebugName
+        );
+
+        console.log('=== Planner Debug ===');
+        console.log('TEMPORARY VERIFICATION LOG');
+        console.log('deploymentSelections:');
+        console.log(
+            JSON.stringify(reservedDeploymentSelections || [], null, 2)
+        );
+        console.log('selectedMetadata BEFORE:');
+        console.log(
+            plannerDebugNamesOf(selectedMetadataBeforePlanner).join('\n') ||
+                '(empty)'
+        );
+        console.log(
+            `${plannerDebugName} in selectedMetadata BEFORE:`,
+            hadControllerInSelectedBefore
+        );
+        console.log('requiredDependencies BEFORE:');
+        console.log(
+            plannerDebugNamesOf(requiredDependenciesBeforePlanner).join(
+                '\n'
+            ) || '(empty)'
+        );
+        console.log(
+            `${plannerDebugName} in requiredDependencies BEFORE:`,
+            plannerDebugHasName(
+                requiredDependenciesBeforePlanner,
+                plannerDebugName
+            )
+        );
+
         const plannerResult = deploymentPlannerService.applyPlannerOverrides({
             selectedMetadata: artifactEnrichedSelectedMetadata,
             resolvedDependencies: resolvedRequiredDependencies,
@@ -601,6 +651,40 @@ async function validateDeployment({
         resolvedRequiredDependencies =
             plannerResult.resolvedDependencies ||
             resolvedRequiredDependencies;
+
+        // TEMPORARY PLANNER DEBUG LOG — remove after Skip verification.
+        const hadControllerInSelectedAfter = plannerDebugHasName(
+            artifactEnrichedSelectedMetadata,
+            plannerDebugName
+        );
+
+        console.log('selectedMetadata AFTER:');
+        console.log(
+            plannerDebugNamesOf(artifactEnrichedSelectedMetadata).join(
+                '\n'
+            ) || '(empty)'
+        );
+        console.log(
+            `${plannerDebugName} in selectedMetadata AFTER:`,
+            hadControllerInSelectedAfter
+        );
+        console.log(
+            `${plannerDebugName} removed from selectedMetadata:`,
+            hadControllerInSelectedBefore && !hadControllerInSelectedAfter
+        );
+        console.log('requiredDependencies AFTER:');
+        console.log(
+            plannerDebugNamesOf(resolvedRequiredDependencies).join('\n') ||
+                '(empty)'
+        );
+        console.log(
+            `${plannerDebugName} in requiredDependencies AFTER:`,
+            plannerDebugHasName(
+                resolvedRequiredDependencies,
+                plannerDebugName
+            )
+        );
+        console.log('=====================');
     } catch (error) {
         console.error('DEPLOYMENT PLANNER ERROR');
         console.error(error);
