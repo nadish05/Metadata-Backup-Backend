@@ -7,7 +7,8 @@ const SUPPORTED_DEPENDENCY_TYPES = new Set([
     'CustomField',
     'NamedCredential',
     'CustomMetadata',
-    'CustomLabel'
+    'CustomLabel',
+    'ListView'
 ]);
 
 const BLOCKED_MESSAGES = {
@@ -17,7 +18,8 @@ const BLOCKED_MESSAGES = {
     CustomField: 'Custom Field not found in destination org.',
     NamedCredential: 'Named Credential not found in destination org.',
     CustomMetadata: 'Custom Metadata Type not found in destination org.',
-    CustomLabel: 'Custom Label not found in destination org.'
+    CustomLabel: 'Custom Label not found in destination org.',
+    ListView: 'List View not found in destination org.'
 };
 
 function logSection(title) {
@@ -184,6 +186,25 @@ function buildCustomFieldSoql(name) {
     );
 }
 
+function buildListViewSoql(name) {
+    if (!name.includes('.')) {
+        return null;
+    }
+
+    const [objectApiName, developerName] = name.split('.');
+
+    if (!objectApiName || !developerName) {
+        return null;
+    }
+
+    return (
+        'SELECT Id, DeveloperName, SobjectType FROM ListView ' +
+        `WHERE DeveloperName = '${escapeSoql(developerName)}' ` +
+        `AND SobjectType = '${escapeSoql(objectApiName)}' ` +
+        'LIMIT 1'
+    );
+}
+
 function buildExistenceQuery(type, name) {
     const escapedName = escapeSoql(name);
 
@@ -202,6 +223,9 @@ function buildExistenceQuery(type, name) {
 
         case 'CustomField':
             return buildCustomFieldSoql(name);
+
+        case 'ListView':
+            return buildListViewSoql(name);
 
         case 'NamedCredential':
             return (
