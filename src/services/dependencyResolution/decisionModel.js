@@ -1,6 +1,10 @@
 /**
  * Supported dependency deployment actions.
  * MERGE is reserved for a future phase and must not be applied.
+ *
+ * Reserved for Deployment Planner (Future Phase):
+ * editable + destinationState decisions are the natural override surface for
+ * future Deploy/Skip selections. Phase 4.1 does not apply planner overrides.
  */
 const ACTIONS = Object.freeze({
     DEPLOY: 'DEPLOY',

@@ -17,6 +17,9 @@ const graphExpansionService = require('./dependencyResolution/graphExpansion/gra
 const artifactResolutionService = require('./repositoryArtifacts/artifactResolution.service');
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
+const {
+    extractDeploymentSelections
+} = require('./deploymentPlanner/deploymentSelections.foundation');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -216,6 +219,12 @@ async function validateDeployment({
     if (!deploymentPackage) {
         return connectivityResult;
     }
+
+    // Reserved for Deployment Planner (Future Phase).
+    // Captured for internal storage only. Must not influence Compatibility,
+    // Package Generation, Workspace, package.xml, or Salesforce CLI.
+    const reservedDeploymentSelections =
+        extractDeploymentSelections(deploymentPackage);
 
     const metadataValidation =
         await metadataValidationService.validateMetadataPackage(
@@ -754,7 +763,9 @@ async function validateDeployment({
             deploymentPackage,
             deploymentReadiness,
             metadataValidation,
-            dependencyValidation
+            dependencyValidation,
+            // Reserved for Deployment Planner (Future Phase) — storage only.
+            deploymentSelections: reservedDeploymentSelections
         })
     );
 

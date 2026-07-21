@@ -260,7 +260,10 @@ function createHistory({
     deploymentPackage,
     deploymentReadiness,
     metadataValidation,
-    dependencyValidation
+    dependencyValidation,
+    // Reserved for Deployment Planner (Future Phase) — internal storage only.
+    // Not exposed via buildApiResponse; does not affect deployment behaviour.
+    deploymentSelections
 } = {}) {
     try {
         logSection('Deployment History Started');
@@ -316,6 +319,15 @@ function createHistory({
             sourceOrgId: deploymentPackage?.sourceOrgId || null,
             destinationOrgId: deploymentPackage?.destinationOrgId || null
         };
+
+        // Reserved for Deployment Planner (Future Phase).
+        // Stored internally when present; never applied to deploy inventory.
+        if (
+            Array.isArray(deploymentSelections) &&
+            deploymentSelections.length > 0
+        ) {
+            history.deploymentSelections = deploymentSelections;
+        }
 
         appendTimeline(history, STAGES.VALIDATION_STARTED);
         historyStore.set(historyId, history);

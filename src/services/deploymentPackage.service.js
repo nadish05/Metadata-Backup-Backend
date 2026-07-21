@@ -152,6 +152,10 @@ function shouldAutoIncludeDependency(dependency) {
     // Action-aware path: only DEPLOY decisions are auto-included.
     // REFERENCE / SKIP / BLOCK / MERGE are never included.
     // Dependencies without an action keep the legacy required && selected rule.
+    //
+    // Reserved for Deployment Planner (Future Phase):
+    // deploymentPackage.deploymentSelections must not be read here until a
+    // later phase explicitly applies planner overrides.
     if (dependency.action) {
         return (
             dependency.action === 'DEPLOY' && dependency.selected === true

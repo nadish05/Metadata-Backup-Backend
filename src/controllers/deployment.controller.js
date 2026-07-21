@@ -282,6 +282,9 @@ const dependencies = [
 };
 
 const deploymentValidationService = require('../services/deploymentValidation.service');
+const {
+    attachReservedDeploymentSelections
+} = require('../services/deploymentPlanner/deploymentSelections.foundation');
 
 exports.validateDeployment = async (req, res) => {
 
@@ -291,15 +294,25 @@ exports.validateDeployment = async (req, res) => {
             refreshToken,
             instanceUrl,
             orgId,
-            deploymentPackage
+            deploymentPackage,
+            // Reserved for Deployment Planner (Future Phase).
+            // Optional; ignored by the current deployment pipeline.
+            deploymentSelections
         } = req.body;
+
+        // Attach selections for internal storage only when present.
+        // Existing clients that omit this field are unchanged.
+        const packageForValidation = attachReservedDeploymentSelections(
+            deploymentPackage,
+            deploymentSelections
+        );
 
         const result =
             await deploymentValidationService.validateDeployment({
                 refreshToken,
                 instanceUrl,
                 orgId,
-                deploymentPackage
+                deploymentPackage: packageForValidation
             });
 
         return res.json(result);
