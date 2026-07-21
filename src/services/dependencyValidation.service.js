@@ -114,7 +114,11 @@ async function runSoqlQuery(
 }
 
 function usesToolingApi(type) {
-    return type === 'ApexClass' || type === 'ApexTrigger';
+    return (
+        type === 'ApexClass' ||
+        type === 'ApexTrigger' ||
+        type === 'CustomField'
+    );
 }
 
 /**
@@ -166,7 +170,7 @@ function buildCustomFieldSoql(name) {
         const [objectName, fieldName] = name.split('.');
 
         return (
-            'SELECT Id FROM FieldDefinition ' +
+            'SELECT DurableId FROM FieldDefinition ' +
             `WHERE QualifiedApiName = '${escapeSoql(fieldName)}' ` +
             `AND EntityDefinition.QualifiedApiName = '${escapeSoql(objectName)}' ` +
             'LIMIT 1'
@@ -174,7 +178,7 @@ function buildCustomFieldSoql(name) {
     }
 
     return (
-        'SELECT Id FROM FieldDefinition ' +
+        'SELECT DurableId FROM FieldDefinition ' +
         `WHERE QualifiedApiName = '${escapeSoql(name)}' ` +
         'LIMIT 1'
     );
