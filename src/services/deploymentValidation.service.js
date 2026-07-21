@@ -20,6 +20,7 @@ const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibilit
 const {
     extractDeploymentSelections
 } = require('./deploymentPlanner/deploymentSelections.foundation');
+const deploymentPlannerService = require('./deploymentPlanner/deploymentPlanner.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -220,9 +221,8 @@ async function validateDeployment({
         return connectivityResult;
     }
 
-    // Reserved for Deployment Planner (Future Phase).
-    // Captured for internal storage only. Must not influence Compatibility,
-    // Package Generation, Workspace, package.xml, or Salesforce CLI.
+    // Deployment Planner selections (preferences). Applied after Dependency
+    // Resolution and before Compatibility; Package Generation is unchanged.
     const reservedDeploymentSelections =
         extractDeploymentSelections(deploymentPackage);
 
@@ -585,6 +585,23 @@ async function validateDeployment({
         resolvedRequiredDependencies = enrichedRequiredDependencies;
     }
 
+    // Apply Deployment Planner overrides AFTER Dependency Resolution and
+    // BEFORE Compatibility so Compatibility validates the committed plan.
+    try {
+        const plannerResult = deploymentPlannerService.applyPlannerOverrides(
+            resolvedRequiredDependencies,
+            reservedDeploymentSelections
+        );
+
+        resolvedRequiredDependencies =
+            plannerResult.resolvedDependencies ||
+            resolvedRequiredDependencies;
+    } catch (error) {
+        console.error('DEPLOYMENT PLANNER ERROR');
+        console.error(error);
+        // Keep resolved decisions unchanged if planner application fails.
+    }
+
     // DEBUG ONLY — temporary diagnostics before Compatibility.
     {
         const comparisonNodes = [
@@ -777,7 +794,7 @@ async function validateDeployment({
             deploymentReadiness,
             metadataValidation,
             dependencyValidation,
-            // Reserved for Deployment Planner (Future Phase) — storage only.
+            // Planner selections retained for history storage only.
             deploymentSelections: reservedDeploymentSelections
         })
     );

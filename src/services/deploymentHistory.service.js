@@ -261,8 +261,8 @@ function createHistory({
     deploymentReadiness,
     metadataValidation,
     dependencyValidation,
-    // Reserved for Deployment Planner (Future Phase) — internal storage only.
-    // Not exposed via buildApiResponse; does not affect deployment behaviour.
+    // Deployment Planner selections — internal history storage when present.
+    // Not exposed via buildApiResponse; does not change API contracts.
     deploymentSelections
 } = {}) {
     try {
@@ -320,8 +320,7 @@ function createHistory({
             destinationOrgId: deploymentPackage?.destinationOrgId || null
         };
 
-        // Reserved for Deployment Planner (Future Phase).
-        // Stored internally when present; never applied to deploy inventory.
+        // Deployment Planner selections stored internally when present.
         if (
             Array.isArray(deploymentSelections) &&
             deploymentSelections.length > 0

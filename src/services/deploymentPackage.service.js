@@ -153,9 +153,8 @@ function shouldAutoIncludeDependency(dependency) {
     // REFERENCE / SKIP / BLOCK / MERGE are never included.
     // Dependencies without an action keep the legacy required && selected rule.
     //
-    // Reserved for Deployment Planner (Future Phase):
-    // deploymentPackage.deploymentSelections must not be read here until a
-    // later phase explicitly applies planner overrides.
+    // Deployment Planner overrides are applied upstream to the decision model
+    // (selected only). This gate must not read deploymentSelections directly.
     if (dependency.action) {
         return (
             dependency.action === 'DEPLOY' && dependency.selected === true

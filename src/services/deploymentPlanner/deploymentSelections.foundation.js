@@ -1,20 +1,14 @@
 /**
- * Deployment Planner foundation (Phase 4.1).
+ * Deployment Planner foundation.
  *
- * Reserved for Deployment Planner (Future Phase).
+ * Extracts and normalizes optional deploymentSelections from the request.
+ * Application of those preferences onto the decision model is handled by
+ * deploymentPlanner.service (after Dependency Resolution, before Compatibility).
  *
- * This module only extracts and normalizes optional deployment selections so
- * they can be stored for a future phase. It MUST NOT influence:
- * - Dependency Resolution outcomes
- * - Compatibility Validation
- * - Package Generation
- * - Dependency Validation reporting
- * - package.xml generation
- * - Workspace creation
- * - Salesforce CLI execution
+ * This module does not change Compatibility, Package Generation, Workspace,
+ * package.xml, or Salesforce CLI behaviour by itself.
  *
- * When no selections are present, callers receive an empty list and the
- * existing deployment flow is unchanged.
+ * When no selections are present, callers receive an empty list.
  */
 
 const ALLOWED_CHOICES = new Set(['DEPLOY', 'SKIP']);
@@ -114,9 +108,7 @@ function extractDeploymentSelections(deploymentPackage) {
  * for internal storage only.
  *
  * When neither top-level nor package selections are present, returns the
- * original package reference unchanged (zero behavioural impact).
- *
- * Reserved for Deployment Planner (Future Phase).
+ * original package reference unchanged.
  *
  * @param {object|null|undefined} deploymentPackage
  * @param {unknown} topLevelSelections

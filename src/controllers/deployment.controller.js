@@ -295,13 +295,12 @@ exports.validateDeployment = async (req, res) => {
             instanceUrl,
             orgId,
             deploymentPackage,
-            // Reserved for Deployment Planner (Future Phase).
-            // Optional; ignored by the current deployment pipeline.
+            // Optional Deployment Planner preferences (Deploy/Skip).
             deploymentSelections
         } = req.body;
 
-        // Attach selections for internal storage only when present.
-        // Existing clients that omit this field are unchanged.
+        // Attach selections when present. Existing clients that omit this
+        // field keep the same package reference and behaviour.
         const packageForValidation = attachReservedDeploymentSelections(
             deploymentPackage,
             deploymentSelections
