@@ -10,7 +10,9 @@ const SUPPORTED_DEPENDENCY_TYPES = new Set([
     'CustomLabel',
     'ListView',
     'FlexiPage',
-    'LightningComponentBundle'
+    'LightningComponentBundle',
+    'PermissionSet',
+    'RecordType'
 ]);
 
 const BLOCKED_MESSAGES = {
@@ -24,7 +26,9 @@ const BLOCKED_MESSAGES = {
     ListView: 'List View not found in destination org.',
     FlexiPage: 'FlexiPage not found in destination org.',
     LightningComponentBundle:
-        'Lightning Component Bundle not found in destination org.'
+        'Lightning Component Bundle not found in destination org.',
+    PermissionSet: 'Permission Set not found in destination org.',
+    RecordType: 'Record Type not found in destination org.'
 };
 
 function logSection(title) {
@@ -212,6 +216,25 @@ function buildListViewSoql(name) {
     );
 }
 
+function buildRecordTypeSoql(name) {
+    if (!name.includes('.')) {
+        return null;
+    }
+
+    const [objectApiName, developerName] = name.split('.');
+
+    if (!objectApiName || !developerName) {
+        return null;
+    }
+
+    return (
+        'SELECT Id, DeveloperName, SobjectType FROM RecordType ' +
+        `WHERE DeveloperName = '${escapeSoql(developerName)}' ` +
+        `AND SobjectType = '${escapeSoql(objectApiName)}' ` +
+        'LIMIT 1'
+    );
+}
+
 function buildExistenceQuery(type, name) {
     const escapedName = escapeSoql(name);
 
@@ -233,6 +256,9 @@ function buildExistenceQuery(type, name) {
 
         case 'ListView':
             return buildListViewSoql(name);
+
+        case 'RecordType':
+            return buildRecordTypeSoql(name);
 
         case 'FlexiPage':
             return (
@@ -262,6 +288,13 @@ function buildExistenceQuery(type, name) {
             return (
                 'SELECT Id FROM ExternalString ' +
                 `WHERE Name = '${escapedName}' LIMIT 1`
+            );
+
+        case 'PermissionSet':
+            return (
+                'SELECT Id, Name FROM PermissionSet ' +
+                `WHERE Name = '${escapedName}' ` +
+                'AND IsOwnedByProfile = false LIMIT 1'
             );
 
         default:
