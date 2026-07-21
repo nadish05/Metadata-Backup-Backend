@@ -810,6 +810,17 @@ async function validateDeployment({
         generatedDeploymentPackage
     );
 
+    // TEMPORARY VERIFICATION LOG — remove after Deployment Planner verification.
+    // Logs generated package.xml only; does not modify manifest or deployment behaviour.
+    {
+        console.log('====================================================');
+        console.log('TEMPORARY VERIFICATION LOG');
+        console.log('Generated package.xml');
+        console.log('====================================================');
+        console.log(generatedManifest?.packageXml || '(empty package.xml)');
+        console.log('====================================================');
+    }
+
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
             stage: deploymentHistoryService.STAGES.MANIFEST_GENERATED,
