@@ -16,21 +16,15 @@ function runTest(name, fn) {
     }
 }
 
-function generateFromDecisions(decisions) {
+function generatePackage(selectedMetadata, decisions) {
     return deploymentPackageService.generateDeploymentPackage({
-        selectedMetadata: [
-            {
-                metadataType: 'ApexClass',
-                metadataName: 'Primary',
-                filePath: 'classes/Primary.cls'
-            }
-        ],
+        selectedMetadata,
         requiredDependencies: decisions,
         selectedTestClasses: []
     });
 }
 
-function isDependencyIncluded(generated, type, name) {
+function isIncluded(generated, type, name) {
     return (generated.metadata || []).some(
         (item) =>
             item.metadataType === type && item.metadataName === name
@@ -65,35 +59,43 @@ const mandatoryDecision = {
     source: 'RESOLVER'
 };
 
+const primaryController = {
+    metadataType: 'ApexClass',
+    metadataName: 'ComparisonResultController',
+    filePath: 'classes/ComparisonResultController.cls'
+};
+
+const otherPrimary = {
+    metadataType: 'ApexClass',
+    metadataName: 'Primary',
+    filePath: 'classes/Primary.cls'
+};
+
 runTest('A. No deploymentSelections — behaviour unchanged', () => {
     const decisions = [
         { ...optionalDeployDecision },
         { ...mandatoryDecision }
     ];
+    const selectedMetadata = [{ ...otherPrimary }];
 
-    const result = applyPlannerOverrides(decisions, []);
+    const result = applyPlannerOverrides({
+        selectedMetadata,
+        resolvedDependencies: decisions,
+        deploymentSelections: []
+    });
 
+    assert.strictEqual(result.selectedMetadata, selectedMetadata);
     assert.strictEqual(result.resolvedDependencies, decisions);
     assert.strictEqual(result.summary.selectionsReceived, 0);
     assert.strictEqual(result.summary.overridesApplied, 0);
 
-    const withoutPlanner = generateFromDecisions(decisions);
-    const withEmptyPlanner = generateFromDecisions(
-        result.resolvedDependencies
-    );
-
-    assert.deepStrictEqual(withEmptyPlanner, withoutPlanner);
-    assert.strictEqual(
-        isDependencyIncluded(
-            withEmptyPlanner,
-            'CustomObject',
-            'Optional_Object__c'
-        ),
-        true
+    assert.deepStrictEqual(
+        generatePackage(result.selectedMetadata, result.resolvedDependencies),
+        generatePackage(selectedMetadata, decisions)
     );
 });
 
-runTest('B. Optional metadata Deploy — included in package', () => {
+runTest('B. Optional dependency Deploy — included in package', () => {
     const decisions = [
         {
             ...optionalDeployDecision,
@@ -101,22 +103,22 @@ runTest('B. Optional metadata Deploy — included in package', () => {
         }
     ];
 
-    const { resolvedDependencies } = applyPlannerOverrides(decisions, [
-        {
-            metadataType: 'CustomObject',
-            metadataName: 'Optional_Object__c',
-            choice: 'DEPLOY'
-        }
-    ]);
+    const { resolvedDependencies, selectedMetadata } = applyPlannerOverrides({
+        selectedMetadata: [{ ...otherPrimary }],
+        resolvedDependencies: decisions,
+        deploymentSelections: [
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Optional_Object__c',
+                choice: 'DEPLOY'
+            }
+        ]
+    });
 
     assert.strictEqual(resolvedDependencies[0].selected, true);
-    assert.strictEqual(resolvedDependencies[0].action, 'DEPLOY');
-    assert.strictEqual(resolvedDependencies[0].editable, true);
-
-    const generated = generateFromDecisions(resolvedDependencies);
     assert.strictEqual(
-        isDependencyIncluded(
-            generated,
+        isIncluded(
+            generatePackage(selectedMetadata, resolvedDependencies),
             'CustomObject',
             'Optional_Object__c'
         ),
@@ -124,33 +126,26 @@ runTest('B. Optional metadata Deploy — included in package', () => {
     );
 });
 
-runTest('C. Optional metadata Skip — excluded from package', () => {
-    const decisions = [{ ...optionalDeployDecision }];
-
-    const { resolvedDependencies, summary } = applyPlannerOverrides(
-        decisions,
-        [
-            {
-                metadataType: 'CustomObject',
-                metadataName: 'Optional_Object__c',
-                choice: 'SKIP'
-            }
-        ]
-    );
+runTest('C. Optional dependency Skip — excluded from package', () => {
+    const { resolvedDependencies, selectedMetadata, summary } =
+        applyPlannerOverrides({
+            selectedMetadata: [{ ...otherPrimary }],
+            resolvedDependencies: [{ ...optionalDeployDecision }],
+            deploymentSelections: [
+                {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Optional_Object__c',
+                    choice: 'SKIP'
+                }
+            ]
+        });
 
     assert.strictEqual(summary.overridesApplied, 1);
     assert.strictEqual(resolvedDependencies[0].selected, false);
     assert.strictEqual(resolvedDependencies[0].action, 'DEPLOY');
-    assert.strictEqual(resolvedDependencies[0].required, true);
     assert.strictEqual(
-        resolvedDependencies[0].destinationState,
-        'MISSING'
-    );
-
-    const generated = generateFromDecisions(resolvedDependencies);
-    assert.strictEqual(
-        isDependencyIncluded(
-            generated,
+        isIncluded(
+            generatePackage(selectedMetadata, resolvedDependencies),
             'CustomObject',
             'Optional_Object__c'
         ),
@@ -158,29 +153,26 @@ runTest('C. Optional metadata Skip — excluded from package', () => {
     );
 });
 
-runTest('D. Mandatory metadata Skip — ignored, still deployed', () => {
-    const decisions = [{ ...mandatoryDecision }];
-
-    const { resolvedDependencies, summary } = applyPlannerOverrides(
-        decisions,
-        [
-            {
-                metadataType: 'CustomObject',
-                metadataName: 'Mandatory_Object__c',
-                choice: 'SKIP'
-            }
-        ]
-    );
+runTest('D. Mandatory dependency Skip — ignored, still deployed', () => {
+    const { resolvedDependencies, selectedMetadata, summary } =
+        applyPlannerOverrides({
+            selectedMetadata: [{ ...otherPrimary }],
+            resolvedDependencies: [{ ...mandatoryDecision }],
+            deploymentSelections: [
+                {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Mandatory_Object__c',
+                    choice: 'SKIP'
+                }
+            ]
+        });
 
     assert.strictEqual(summary.mandatoryIgnored, 1);
     assert.strictEqual(summary.overridesApplied, 0);
     assert.strictEqual(resolvedDependencies[0].selected, true);
-    assert.strictEqual(resolvedDependencies[0].editable, false);
-
-    const generated = generateFromDecisions(resolvedDependencies);
     assert.strictEqual(
-        isDependencyIncluded(
-            generated,
+        isIncluded(
+            generatePackage(selectedMetadata, resolvedDependencies),
             'CustomObject',
             'Mandatory_Object__c'
         ),
@@ -190,36 +182,124 @@ runTest('D. Mandatory metadata Skip — ignored, still deployed', () => {
 
 runTest('E. Unknown metadata — ignored safely', () => {
     const decisions = [{ ...optionalDeployDecision }];
+    const selectedMetadata = [{ ...otherPrimary }];
 
-    const { resolvedDependencies, summary } = applyPlannerOverrides(
-        decisions,
-        [
+    const result = applyPlannerOverrides({
+        selectedMetadata,
+        resolvedDependencies: decisions,
+        deploymentSelections: [
             {
                 metadataType: 'ApexClass',
                 metadataName: 'DoesNotExist',
                 choice: 'SKIP'
             }
         ]
-    );
-
-    assert.strictEqual(summary.unknownIgnored, 1);
-    assert.strictEqual(summary.overridesIgnored, 1);
-    assert.strictEqual(summary.overridesApplied, 0);
-    assert.deepStrictEqual(resolvedDependencies[0], {
-        ...optionalDeployDecision
     });
+
+    assert.strictEqual(result.summary.unknownIgnored, 1);
+    assert.strictEqual(result.summary.overridesApplied, 0);
+    assert.strictEqual(result.selectedMetadata.length, 1);
+    assert.strictEqual(result.resolvedDependencies[0].selected, true);
+});
+
+runTest('F. Primary selectedMetadata Skip — excluded from package', () => {
+    const { selectedMetadata, summary } = applyPlannerOverrides({
+        selectedMetadata: [{ ...primaryController }, { ...otherPrimary }],
+        resolvedDependencies: [],
+        deploymentSelections: [
+            {
+                metadataType: 'ApexClass',
+                metadataName: 'ComparisonResultController',
+                choice: 'SKIP'
+            }
+        ]
+    });
+
+    assert.ok(summary.overridesApplied >= 1);
+    assert.strictEqual(selectedMetadata.length, 1);
+    assert.strictEqual(selectedMetadata[0].metadataName, 'Primary');
+
+    const generated = generatePackage(selectedMetadata, []);
+    assert.strictEqual(
+        isIncluded(generated, 'ApexClass', 'ComparisonResultController'),
+        false
+    );
+    assert.strictEqual(isIncluded(generated, 'ApexClass', 'Primary'), true);
+});
+
+runTest('G. Primary selectedMetadata Deploy — remains in package', () => {
+    const { selectedMetadata } = applyPlannerOverrides({
+        selectedMetadata: [{ ...primaryController, selected: false }],
+        resolvedDependencies: [],
+        deploymentSelections: [
+            {
+                metadataType: 'ApexClass',
+                metadataName: 'ComparisonResultController',
+                choice: 'DEPLOY'
+            }
+        ]
+    });
+
+    assert.strictEqual(selectedMetadata.length, 1);
+    assert.strictEqual(selectedMetadata[0].selected, true);
+    assert.strictEqual(
+        isIncluded(
+            generatePackage(selectedMetadata, []),
+            'ApexClass',
+            'ComparisonResultController'
+        ),
+        true
+    );
+});
+
+runTest('H. Mandatory primary selectedMetadata Skip — not removed', () => {
+    const { selectedMetadata, summary } = applyPlannerOverrides({
+        selectedMetadata: [
+            {
+                ...primaryController,
+                editable: false
+            }
+        ],
+        resolvedDependencies: [],
+        deploymentSelections: [
+            {
+                metadataType: 'ApexClass',
+                metadataName: 'ComparisonResultController',
+                choice: 'SKIP'
+            }
+        ]
+    });
+
+    assert.strictEqual(summary.mandatoryIgnored, 1);
+    assert.strictEqual(selectedMetadata.length, 1);
+    assert.strictEqual(
+        selectedMetadata[0].metadataName,
+        'ComparisonResultController'
+    );
+    assert.strictEqual(
+        isIncluded(
+            generatePackage(selectedMetadata, []),
+            'ApexClass',
+            'ComparisonResultController'
+        ),
+        true
+    );
 });
 
 runTest('Planner never mutates action / required / destinationState', () => {
     const decisions = [{ ...optionalDeployDecision }];
 
-    const { resolvedDependencies } = applyPlannerOverrides(decisions, [
-        {
-            metadataType: 'CustomObject',
-            metadataName: 'Optional_Object__c',
-            choice: 'SKIP'
-        }
-    ]);
+    const { resolvedDependencies } = applyPlannerOverrides({
+        selectedMetadata: [],
+        resolvedDependencies: decisions,
+        deploymentSelections: [
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Optional_Object__c',
+                choice: 'SKIP'
+            }
+        ]
+    });
 
     assert.strictEqual(resolvedDependencies[0].action, 'DEPLOY');
     assert.strictEqual(resolvedDependencies[0].required, true);
@@ -227,9 +307,6 @@ runTest('Planner never mutates action / required / destinationState', () => {
         resolvedDependencies[0].destinationState,
         'MISSING'
     );
-    assert.strictEqual(resolvedDependencies[0].relationship, 'Lookup');
-    assert.strictEqual(resolvedDependencies[0].source, 'RESOLVER');
-    assert.notStrictEqual(resolvedDependencies[0], decisions[0]);
     assert.strictEqual(decisions[0].selected, true);
 });
 

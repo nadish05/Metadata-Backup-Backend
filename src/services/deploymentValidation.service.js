@@ -587,12 +587,17 @@ async function validateDeployment({
 
     // Apply Deployment Planner overrides AFTER Dependency Resolution and
     // BEFORE Compatibility so Compatibility validates the committed plan.
+    // Applies to both selectedMetadata and requiredDependencies decisions.
     try {
-        const plannerResult = deploymentPlannerService.applyPlannerOverrides(
-            resolvedRequiredDependencies,
-            reservedDeploymentSelections
-        );
+        const plannerResult = deploymentPlannerService.applyPlannerOverrides({
+            selectedMetadata: artifactEnrichedSelectedMetadata,
+            resolvedDependencies: resolvedRequiredDependencies,
+            deploymentSelections: reservedDeploymentSelections
+        });
 
+        artifactEnrichedSelectedMetadata =
+            plannerResult.selectedMetadata ||
+            artifactEnrichedSelectedMetadata;
         resolvedRequiredDependencies =
             plannerResult.resolvedDependencies ||
             resolvedRequiredDependencies;

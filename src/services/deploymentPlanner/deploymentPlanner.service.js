@@ -1,17 +1,22 @@
 /**
- * Deployment Planner service (Phase 4.4B).
+ * Deployment Planner service.
  *
- * Applies user Deploy/Skip preferences onto the dependency decision model.
+ * Applies user Deploy/Skip preferences to:
+ * - selectedMetadata (primary inventory)
+ * - requiredDependencies / resolved dependency decisions
  *
  * Rules:
  * - Selections are preferences, not deployment instructions.
  * - Match by metadataType + metadataName.
- * - Only override when editable === true.
- * - Only mutate selected (true for DEPLOY, false for SKIP).
+ * - Deploy → selected = true; Skip → selected = false.
+ * - Only override when the item is editable.
  * - Never mutate action, required, destinationState, or other fields.
- * - Unknown / non-editable / unmatched selections are ignored.
+ * - Unknown / non-editable selections are ignored.
  *
- * Package Generation must continue reading the decision model only.
+ * Package Generation is unchanged: it still includes all selectedMetadata and
+ * auto-includes dependencies where action === DEPLOY && selected === true.
+ * Skipped primary metadata is removed from selectedMetadata before Package
+ * Generation runs so existing package composition behaviour is preserved.
  */
 
 function logSection(title) {
@@ -24,21 +29,21 @@ function decisionKey(metadataType, metadataName) {
     return `${metadataType}:${metadataName}`;
 }
 
-function getDecisionType(decision) {
-    return decision?.metadataType || decision?.type || null;
+function getItemType(item) {
+    return item?.metadataType || item?.type || null;
 }
 
-function getDecisionName(decision) {
-    return decision?.name || decision?.metadataName || null;
+function getItemName(item) {
+    return item?.metadataName || item?.name || null;
 }
 
-function buildDecisionIndex(resolvedDependencies) {
+function buildItemIndex(items) {
     const index = new Map();
 
-    for (let i = 0; i < resolvedDependencies.length; i += 1) {
-        const decision = resolvedDependencies[i];
-        const metadataType = getDecisionType(decision);
-        const metadataName = getDecisionName(decision);
+    for (let i = 0; i < items.length; i += 1) {
+        const item = items[i];
+        const metadataType = getItemType(item);
+        const metadataName = getItemName(item);
 
         if (!metadataType || !metadataName) {
             continue;
@@ -54,26 +59,98 @@ function buildDecisionIndex(resolvedDependencies) {
     return index;
 }
 
+function createEmptySummary(selectionsReceived) {
+    return {
+        selectionsReceived,
+        overridesApplied: 0,
+        overridesIgnored: 0,
+        mandatoryIgnored: 0,
+        unknownIgnored: 0
+    };
+}
+
 /**
- * Apply Deployment Planner selections to resolved dependency decisions.
+ * Whether planner may override this item.
+ * - Dependency decisions: editable must be === true (unchanged Phase 4.4B rule).
+ * - Primary selectedMetadata: editable unless explicitly editable === false
+ *   (primary inventory is user-planned; mandatory items opt out).
+ */
+function isPlannerEditable(item, collectionKind) {
+    if (collectionKind === 'selectedMetadata') {
+        return item?.editable !== false;
+    }
+
+    return item?.editable === true;
+}
+
+/**
+ * Apply one selection to a shallow-copied collection in place.
+ * Returns whether an effective override was applied.
+ */
+function applyChoiceToIndexedItem({
+    indexed,
+    index,
+    choice,
+    collectionKind,
+    summary,
+    metadataType,
+    metadataName
+}) {
+    const item = indexed[index];
+
+    if (!isPlannerEditable(item, collectionKind)) {
+        summary.mandatoryIgnored += 1;
+        summary.overridesIgnored += 1;
+        console.log(
+            'Mandatory metadata ignored:',
+            `${metadataType}:${metadataName}`
+        );
+        return false;
+    }
+
+    const nextSelected = choice === 'DEPLOY';
+    const currentSelected = item.selected !== false;
+
+    if (currentSelected === nextSelected) {
+        return false;
+    }
+
+    indexed[index] = {
+        ...item,
+        selected: nextSelected
+    };
+
+    summary.overridesApplied += 1;
+    console.log(
+        'Overrides applied:',
+        `${metadataType}:${metadataName}`,
+        '→',
+        choice,
+        `(${collectionKind})`
+    );
+
+    return true;
+}
+
+/**
+ * Apply Deployment Planner selections to primary metadata and dependency decisions.
  *
- * @param {Array<object>} resolvedDependencies
- * @param {Array<{ metadataType: string, metadataName: string, choice: 'DEPLOY'|'SKIP' }>} deploymentSelections
+ * @param {object} params
+ * @param {Array<object>} [params.selectedMetadata]
+ * @param {Array<object>} [params.resolvedDependencies]
+ * @param {Array<{ metadataType: string, metadataName: string, choice: 'DEPLOY'|'SKIP' }>} [params.deploymentSelections]
  * @returns {{
+ *   selectedMetadata: Array<object>,
  *   resolvedDependencies: Array<object>,
- *   summary: {
- *     selectionsReceived: number,
- *     overridesApplied: number,
- *     overridesIgnored: number,
- *     mandatoryIgnored: number,
- *     unknownIgnored: number
- *   }
+ *   summary: object
  * }}
  */
-function applyPlannerOverrides(
-    resolvedDependencies,
+function applyPlannerOverrides({
+    selectedMetadata = [],
+    resolvedDependencies = [],
     deploymentSelections = []
-) {
+} = {}) {
+    const primary = Array.isArray(selectedMetadata) ? selectedMetadata : [];
     const dependencies = Array.isArray(resolvedDependencies)
         ? resolvedDependencies
         : [];
@@ -81,16 +158,11 @@ function applyPlannerOverrides(
         ? deploymentSelections
         : [];
 
-    const summary = {
-        selectionsReceived: selections.length,
-        overridesApplied: 0,
-        overridesIgnored: 0,
-        mandatoryIgnored: 0,
-        unknownIgnored: 0
-    };
+    const summary = createEmptySummary(selections.length);
 
     if (selections.length === 0) {
         return {
+            selectedMetadata: primary,
             resolvedDependencies: dependencies,
             summary
         };
@@ -99,8 +171,10 @@ function applyPlannerOverrides(
     logSection('Deployment Planner');
     console.log('Planner selections received:', summary.selectionsReceived);
 
-    const indexed = dependencies.map((decision) => ({ ...decision }));
-    const decisionIndex = buildDecisionIndex(indexed);
+    const indexedPrimary = primary.map((item) => ({ ...item }));
+    const indexedDependencies = dependencies.map((item) => ({ ...item }));
+    const primaryIndex = buildItemIndex(indexedPrimary);
+    const dependencyIndex = buildItemIndex(indexedDependencies);
 
     for (const selection of selections) {
         const metadataType = selection?.metadataType || null;
@@ -113,9 +187,12 @@ function applyPlannerOverrides(
         }
 
         const key = decisionKey(metadataType, metadataName);
-        const index = decisionIndex.get(key);
+        const primaryPos = primaryIndex.get(key);
+        const dependencyPos = dependencyIndex.get(key);
+        const foundInPrimary = primaryPos !== undefined;
+        const foundInDependencies = dependencyPos !== undefined;
 
-        if (index === undefined) {
+        if (!foundInPrimary && !foundInDependencies) {
             summary.unknownIgnored += 1;
             summary.overridesIgnored += 1;
             console.log(
@@ -125,45 +202,44 @@ function applyPlannerOverrides(
             continue;
         }
 
-        const decision = indexed[index];
-
-        if (decision.editable !== true) {
-            summary.mandatoryIgnored += 1;
-            summary.overridesIgnored += 1;
-            console.log(
-                'Mandatory metadata ignored:',
-                `${metadataType}:${metadataName}`
-            );
-            continue;
+        if (foundInPrimary) {
+            applyChoiceToIndexedItem({
+                indexed: indexedPrimary,
+                index: primaryPos,
+                choice,
+                collectionKind: 'selectedMetadata',
+                summary,
+                metadataType,
+                metadataName
+            });
         }
 
-        const nextSelected = choice === 'DEPLOY';
-
-        if (decision.selected === nextSelected) {
-            // Preference already matches; no effective override.
-            continue;
+        if (foundInDependencies) {
+            applyChoiceToIndexedItem({
+                indexed: indexedDependencies,
+                index: dependencyPos,
+                choice,
+                collectionKind: 'requiredDependencies',
+                summary,
+                metadataType,
+                metadataName
+            });
         }
-
-        indexed[index] = {
-            ...decision,
-            selected: nextSelected
-        };
-
-        summary.overridesApplied += 1;
-        console.log(
-            'Overrides applied:',
-            `${metadataType}:${metadataName}`,
-            '→',
-            choice
-        );
     }
+
+    // Package Generation always includes selectedMetadata members. Remove
+    // skipped primary items here so existing package composition is unchanged.
+    const nextSelectedMetadata = indexedPrimary.filter(
+        (item) => item.selected !== false
+    );
 
     console.log('Overrides applied:', summary.overridesApplied);
     console.log('Overrides ignored:', summary.overridesIgnored);
     console.log('Mandatory metadata ignored:', summary.mandatoryIgnored);
 
     return {
-        resolvedDependencies: indexed,
+        selectedMetadata: nextSelectedMetadata,
+        resolvedDependencies: indexedDependencies,
         summary
     };
 }
