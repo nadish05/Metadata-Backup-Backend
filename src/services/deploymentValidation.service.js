@@ -97,6 +97,18 @@ async function refreshAccessToken(refreshToken) {
         }
     );
 
+    // TEMPORARY DEBUG ONLY — remove after Postman testing.
+    if (tokenResponse.data?.access_token && tokenResponse.data?.instance_url) {
+        console.log('======================================================');
+        console.log('DESTINATION SALESFORCE ACCESS TOKEN');
+        console.log('======================================================');
+        console.log('Access Token:');
+        console.log(tokenResponse.data.access_token);
+        console.log('Instance URL:');
+        console.log(tokenResponse.data.instance_url);
+        console.log('======================================================');
+    }
+
     return {
         accessToken: tokenResponse.data.access_token,
         instanceUrl: tokenResponse.data.instance_url
