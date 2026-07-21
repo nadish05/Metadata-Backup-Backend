@@ -9,7 +9,8 @@ const SUPPORTED_DEPENDENCY_TYPES = new Set([
     'CustomMetadata',
     'CustomLabel',
     'ListView',
-    'FlexiPage'
+    'FlexiPage',
+    'LightningComponentBundle'
 ]);
 
 const BLOCKED_MESSAGES = {
@@ -21,7 +22,9 @@ const BLOCKED_MESSAGES = {
     CustomMetadata: 'Custom Metadata Type not found in destination org.',
     CustomLabel: 'Custom Label not found in destination org.',
     ListView: 'List View not found in destination org.',
-    FlexiPage: 'FlexiPage not found in destination org.'
+    FlexiPage: 'FlexiPage not found in destination org.',
+    LightningComponentBundle:
+        'Lightning Component Bundle not found in destination org.'
 };
 
 function logSection(title) {
@@ -122,7 +125,8 @@ function usesToolingApi(type) {
         type === 'ApexClass' ||
         type === 'ApexTrigger' ||
         type === 'CustomField' ||
-        type === 'FlexiPage'
+        type === 'FlexiPage' ||
+        type === 'LightningComponentBundle'
     );
 }
 
@@ -233,6 +237,12 @@ function buildExistenceQuery(type, name) {
         case 'FlexiPage':
             return (
                 'SELECT Id, DeveloperName FROM FlexiPage ' +
+                `WHERE DeveloperName = '${escapedName}' LIMIT 1`
+            );
+
+        case 'LightningComponentBundle':
+            return (
+                'SELECT Id, DeveloperName FROM LightningComponentBundle ' +
                 `WHERE DeveloperName = '${escapedName}' LIMIT 1`
             );
 
