@@ -226,6 +226,19 @@ async function validateDeployment({
     const reservedDeploymentSelections =
         extractDeploymentSelections(deploymentPackage);
 
+    // Phase 4.4A verification — temporary transport logging only.
+    console.log('Phase 4.4A verification: Received deploymentSelections');
+    console.log(
+        'Phase 4.4A verification: Number of selections =',
+        reservedDeploymentSelections.length
+    );
+    if (reservedDeploymentSelections.length > 0) {
+        console.log(
+            'Phase 4.4A verification: Sample selection =',
+            reservedDeploymentSelections[0]
+        );
+    }
+
     const metadataValidation =
         await metadataValidationService.validateMetadataPackage(
             deploymentPackage
