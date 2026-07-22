@@ -2,7 +2,7 @@
  * Shared destination existence query definitions.
  *
  * Single catalog for SOQL / Tooling query construction used by
- * Dependency Validation (and later Destination Inventory Builder).
+ * Destination Inventory Builder (and formerly Dependency Validation queries).
  *
  * This module builds queries only. It does not execute HTTP calls
  * and does not decide Deploy/Skip or validation status.
@@ -19,6 +19,101 @@ function usesToolingApi(type) {
         type === 'CustomField' ||
         type === 'FlexiPage' ||
         type === 'LightningComponentBundle'
+    );
+}
+
+function isSafeSalesforceApiName(value) {
+    return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(value);
+}
+
+/**
+ * Parse and normalize a CustomMetadata member name to MDAPI Type.Record.
+ *
+ * Accepts:
+ * - Type.Record
+ * - Type__mdt.Record
+ *
+ * Rejects bare type tokens (e.g. Type__mdt) — those are not records.
+ *
+ * @param {string} name
+ * @returns {{
+ *   canonicalMember: string,
+ *   typeDeveloperName: string,
+ *   recordDeveloperName: string,
+ *   entityApiName: string
+ * }|null}
+ */
+function parseCustomMetadataMember(name) {
+    if (!name || typeof name !== 'string' || !name.includes('.')) {
+        return null;
+    }
+
+    const separatorIndex = name.indexOf('.');
+    const typePart = name.slice(0, separatorIndex).trim();
+    const recordPart = name.slice(separatorIndex + 1).trim();
+
+    if (!typePart || !recordPart || recordPart.includes('.')) {
+        return null;
+    }
+
+    if (
+        !isSafeSalesforceApiName(typePart) ||
+        !isSafeSalesforceApiName(recordPart)
+    ) {
+        return null;
+    }
+
+    const typeDeveloperName = typePart.endsWith('__mdt')
+        ? typePart.slice(0, -'__mdt'.length)
+        : typePart;
+
+    if (!typeDeveloperName || !isSafeSalesforceApiName(typeDeveloperName)) {
+        return null;
+    }
+
+    const entityApiName = `${typeDeveloperName}__mdt`;
+
+    if (!isSafeSalesforceApiName(entityApiName)) {
+        return null;
+    }
+
+    return {
+        canonicalMember: `${typeDeveloperName}.${recordPart}`,
+        typeDeveloperName,
+        recordDeveloperName: recordPart,
+        entityApiName
+    };
+}
+
+/**
+ * Normalize CustomMetadata member to canonical Type.Record.
+ * Returns null when the name is not a valid record member.
+ *
+ * @param {string} name
+ * @returns {string|null}
+ */
+function normalizeCustomMetadataMember(name) {
+    return parseCustomMetadataMember(name)?.canonicalMember || null;
+}
+
+/**
+ * Build SOQL that validates a CustomMetadata RECORD (not the CMDT type).
+ * Uses FROM Type__mdt WHERE DeveloperName = Record.
+ *
+ * @param {string} name
+ * @returns {string|null}
+ */
+function buildCustomMetadataSoql(name) {
+    const parsed = parseCustomMetadataMember(name);
+
+    if (!parsed) {
+        return null;
+    }
+
+    return (
+        `SELECT Id FROM ${parsed.entityApiName} ` +
+        `WHERE DeveloperName = '${escapeSoql(parsed.recordDeveloperName)}' ` +
+        'LIMIT 1'
     );
 }
 
@@ -123,10 +218,8 @@ function buildExistenceQuery(type, name) {
             );
 
         case 'CustomMetadata':
-            return (
-                'SELECT QualifiedApiName FROM EntityDefinition ' +
-                `WHERE QualifiedApiName = '${escapedName}' LIMIT 1`
-            );
+            // Record existence (Type.Record), not EntityDefinition type lookup.
+            return buildCustomMetadataSoql(name);
 
         case 'CustomLabel':
             return (
@@ -149,6 +242,10 @@ function buildExistenceQuery(type, name) {
 module.exports = {
     escapeSoql,
     usesToolingApi,
+    isSafeSalesforceApiName,
+    parseCustomMetadataMember,
+    normalizeCustomMetadataMember,
+    buildCustomMetadataSoql,
     buildCustomFieldSoql,
     buildListViewSoql,
     buildRecordTypeSoql,
