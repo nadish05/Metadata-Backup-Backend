@@ -22,6 +22,10 @@ const {
 } = require('./deploymentPlanner/deploymentSelections.foundation');
 const deploymentPlannerService = require('./deploymentPlanner/deploymentPlanner.service');
 const deploymentPlannerCompatibilityAnalyzerService = require('./deploymentPlannerCompatibility/deploymentPlannerCompatibility.analyzer.service');
+const {
+    buildDestinationInventory,
+    getState
+} = require('./destinationInventory/destinationInventoryBuilder.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -51,6 +55,151 @@ function resolveDeploymentMode(deploymentPackage) {
     }
 
     return 'VALIDATE';
+}
+
+/**
+ * Collect metadata participating in validation for shadow inventory only.
+ * Does not mutate inventories or affect Deploy/Skip decisions.
+ */
+function collectShadowInventoryItems({
+    selectedMetadata,
+    requiredDependencies,
+    discoveredReferences
+} = {}) {
+    const byKey = new Map();
+
+    const addItem = (metadataType, metadataName) => {
+        if (!metadataType || !metadataName) {
+            return;
+        }
+
+        const key = `${metadataType}:${metadataName}`;
+
+        if (!byKey.has(key)) {
+            byKey.set(key, { metadataType, metadataName });
+        }
+    };
+
+    for (const item of selectedMetadata || []) {
+        addItem(
+            item?.metadataType || item?.type,
+            item?.metadataName || item?.name
+        );
+    }
+
+    for (const item of requiredDependencies || []) {
+        addItem(
+            item?.metadataType || item?.type,
+            item?.metadataName || item?.name
+        );
+    }
+
+    for (const item of discoveredReferences || []) {
+        addItem(
+            item?.metadataType || item?.type,
+            item?.metadataName || item?.name
+        );
+    }
+
+    return [...byKey.values()];
+}
+
+function countStates(values) {
+    return {
+        EXISTS: values.filter((state) => state === 'EXISTS').length,
+        MISSING: values.filter((state) => state === 'MISSING').length,
+        UNKNOWN: values.filter((state) => state === 'UNKNOWN').length
+    };
+}
+
+/**
+ * Compare CustomObject shadow inventory to Dependency Resolution
+ * destinationState values (from buildDestinationStates). Diagnostics only.
+ */
+function compareCustomObjectInventoryParity(inventory, resolvedDependencies) {
+    const currentStates = [];
+    const shadowStates = [];
+    const mismatches = [];
+
+    for (const dependency of resolvedDependencies || []) {
+        const metadataType =
+            dependency?.metadataType || dependency?.type || null;
+        const metadataName =
+            dependency?.metadataName || dependency?.name || null;
+
+        if (metadataType !== 'CustomObject' || !metadataName) {
+            continue;
+        }
+
+        const currentState = dependency?.destinationState || 'UNKNOWN';
+        const shadowState = getState(
+            inventory,
+            'CustomObject',
+            metadataName
+        );
+
+        currentStates.push(currentState);
+        shadowStates.push(shadowState);
+
+        if (currentState !== shadowState) {
+            mismatches.push({
+                metadataType: 'CustomObject',
+                metadataName,
+                currentState,
+                shadowState
+            });
+        }
+    }
+
+    return {
+        compared: currentStates.length,
+        current: countStates(currentStates),
+        shadow: countStates(shadowStates),
+        mismatches
+    };
+}
+
+function logShadowDestinationInventoryDiagnostics({
+    summary,
+    parity
+} = {}) {
+    logSection('Destination Inventory Shadow Mode');
+    console.log('Shadow inventory summary:');
+    console.log('Requested:', summary?.requested ?? 0);
+    console.log('EXISTS:', summary?.exists ?? 0);
+    console.log('MISSING:', summary?.missing ?? 0);
+    console.log('UNKNOWN:', summary?.unknown ?? 0);
+    console.log('Unsupported:', summary?.unsupported ?? 0);
+
+    console.log('CustomObject parity vs buildDestinationStates():');
+    console.log('Compared:', parity?.compared ?? 0);
+    console.log(
+        'Current EXISTS/MISSING/UNKNOWN:',
+        parity?.current?.EXISTS ?? 0,
+        parity?.current?.MISSING ?? 0,
+        parity?.current?.UNKNOWN ?? 0
+    );
+    console.log(
+        'Shadow EXISTS/MISSING/UNKNOWN:',
+        parity?.shadow?.EXISTS ?? 0,
+        parity?.shadow?.MISSING ?? 0,
+        parity?.shadow?.UNKNOWN ?? 0
+    );
+
+    if (parity?.mismatches?.length) {
+        console.log('Parity mismatches:', parity.mismatches.length);
+        for (const mismatch of parity.mismatches) {
+            console.log(
+                `${mismatch.metadataType}:${mismatch.metadataName}`,
+                `current=${mismatch.currentState}`,
+                `shadow=${mismatch.shadowState}`
+            );
+        }
+    } else {
+        console.log('Parity mismatches: (none)');
+    }
+
+    console.log('Shadow mode does not influence runtime behavior.');
 }
 
 function resolveErrorMessage(error) {
@@ -584,6 +733,36 @@ async function validateDeployment({
             ]
         };
         resolvedRequiredDependencies = enrichedRequiredDependencies;
+    }
+
+    // Phase 3D Step 3 — Destination Inventory Builder (shadow mode).
+    // Builds inventory for diagnostics only. Output is not passed downstream
+    // and must not change destinationState, editable, action, package, or deploy.
+    try {
+        const shadowItems = collectShadowInventoryItems({
+            selectedMetadata: artifactEnrichedSelectedMetadata,
+            requiredDependencies: enrichedRequiredDependencies,
+            discoveredReferences
+        });
+
+        const shadowInventoryResult = await buildDestinationInventory({
+            items: shadowItems,
+            accessToken: accessTokenForDownstream,
+            instanceUrl: resolvedInstanceUrl
+        });
+
+        const customObjectParity = compareCustomObjectInventoryParity(
+            shadowInventoryResult.inventory,
+            resolvedRequiredDependencies
+        );
+
+        logShadowDestinationInventoryDiagnostics({
+            summary: shadowInventoryResult.summary,
+            parity: customObjectParity
+        });
+    } catch (error) {
+        console.error('DESTINATION INVENTORY SHADOW MODE ERROR');
+        console.error(error);
     }
 
     // Phase 1 — Planner Compatibility Analyzer (report-only).
