@@ -139,6 +139,7 @@ function applyChoiceToIndexedItem({
  * @param {Array<object>} [params.selectedMetadata]
  * @param {Array<object>} [params.resolvedDependencies]
  * @param {Array<{ metadataType: string, metadataName: string, choice: 'DEPLOY'|'SKIP' }>} [params.deploymentSelections]
+ * @param {object|null} [params.plannerCompatibilityReport] Phase 2A — received only; ignored for decisions.
  * @returns {{
  *   selectedMetadata: Array<object>,
  *   resolvedDependencies: Array<object>,
@@ -148,8 +149,14 @@ function applyChoiceToIndexedItem({
 function applyPlannerOverrides({
     selectedMetadata = [],
     resolvedDependencies = [],
-    deploymentSelections = []
+    deploymentSelections = [],
+    // Phase 2A: optional report wiring. Intentionally unused for Deploy/Skip,
+    // editable, Optional/Mandatory, or inventory mutation. Reserved for Phase 2B+.
+    plannerCompatibilityReport = null
 } = {}) {
+    // Accept the report reference without reading plannerCompatibility fields.
+    void plannerCompatibilityReport;
+
     const primary = Array.isArray(selectedMetadata) ? selectedMetadata : [];
     const dependencies = Array.isArray(resolvedDependencies)
         ? resolvedDependencies

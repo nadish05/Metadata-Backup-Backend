@@ -605,9 +605,6 @@ async function validateDeployment({
         plannerCompatibilityReport = null;
     }
 
-    // Silence unused-variable lint for Phase 1 intentional non-use.
-    void plannerCompatibilityReport;
-
     // Apply Deployment Planner overrides AFTER Dependency Resolution and
     // BEFORE Compatibility so Compatibility validates the committed plan.
     // Applies to both selectedMetadata and requiredDependencies decisions.
@@ -665,7 +662,9 @@ async function validateDeployment({
         const plannerResult = deploymentPlannerService.applyPlannerOverrides({
             selectedMetadata: artifactEnrichedSelectedMetadata,
             resolvedDependencies: resolvedRequiredDependencies,
-            deploymentSelections: reservedDeploymentSelections
+            deploymentSelections: reservedDeploymentSelections,
+            // Phase 2A: wired into planner; intentionally unused for decisions.
+            plannerCompatibilityReport
         });
 
         // TEMPORARY PLANNER DEBUG LOG — remove after Skip verification.
