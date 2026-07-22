@@ -13,8 +13,9 @@
  * - Never mutate action, required, destinationState, or other fields.
  * - Unknown / non-editable selections are ignored.
  *
- * Phase 2D: Planner Decision Resolver uses per-type TRUST_POLICY.
- * While every type trusts nothing, Deploy/Skip still uses editable only.
+ * Phase 2D/2E: Planner Decision Resolver uses per-type TRUST_POLICY and
+ * produces an internal decision trace. While every type trusts nothing,
+ * Deploy/Skip still uses editable only.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
  * auto-includes dependencies where action === DEPLOY && selected === true.
@@ -125,12 +126,25 @@ function buildCompatibilityRowIndex(plannerCompatibilityReport) {
  * Owns migration policy: analyzer results vs legacy editable logic.
  * Trust is evaluated per metadata type via TRUST_POLICY.
  *
- * Phase 2D: all trust lists are empty → always useAnalyzer = false.
+ * Phase 2E: returns an internal decision trace for diagnostics only.
+ * Trace is not persisted, not returned via REST, and not logged by default.
  *
  * @param {object} params
  * @param {object} [params.metadataItem]
  * @param {object|null} [params.plannerCompatibilityRow]
- * @returns {{ useAnalyzer: boolean, canSkip: boolean }}
+ * @returns {{
+ *   useAnalyzer: boolean,
+ *   canSkip: boolean,
+ *   trace: {
+ *     metadataType: string|null,
+ *     metadataName: string|null,
+ *     analysisLevel: string,
+ *     trustedLevels: string[],
+ *     trustMatched: boolean,
+ *     decisionPath: string,
+ *     fallbackReason: string|null
+ *   }
+ * }}
  */
 function resolvePlannerDecision({
     metadataItem,
@@ -140,23 +154,48 @@ function resolvePlannerDecision({
         getItemType(metadataItem) ||
         plannerCompatibilityRow?.metadataType ||
         null;
+    const metadataName =
+        getItemName(metadataItem) ||
+        plannerCompatibilityRow?.metadataName ||
+        null;
     const analysisLevel =
         plannerCompatibilityRow?.analysisLevel || 'NONE';
 
     const trustedLevels = Array.isArray(TRUST_POLICY[metadataType])
-        ? TRUST_POLICY[metadataType]
+        ? [...TRUST_POLICY[metadataType]]
         : [];
 
-    if (trustedLevels.includes(analysisLevel)) {
+    const trustMatched = trustedLevels.includes(analysisLevel);
+
+    if (trustMatched) {
         return {
             useAnalyzer: true,
-            canSkip: plannerCompatibilityRow?.canSkip === true
+            canSkip: plannerCompatibilityRow?.canSkip === true,
+            trace: {
+                metadataType,
+                metadataName,
+                analysisLevel,
+                trustedLevels,
+                trustMatched: true,
+                decisionPath: 'ANALYZER',
+                fallbackReason: null
+            }
         };
     }
 
     return {
         useAnalyzer: false,
-        canSkip: false
+        canSkip: false,
+        trace: {
+            metadataType,
+            metadataName,
+            analysisLevel,
+            trustedLevels,
+            trustMatched: false,
+            decisionPath: 'LEGACY_EDITABLE',
+            fallbackReason:
+                'Analysis level not trusted for metadata type.'
+        }
     };
 }
 
@@ -255,6 +294,8 @@ function applyPlannerOverrides({
     const compatibilityRowIndex = buildCompatibilityRowIndex(
         plannerCompatibilityReport
     );
+    // Phase 2E: internal decision traces only — not returned, not persisted.
+    const decisionTraces = [];
 
     if (selections.length === 0) {
         return {
@@ -308,10 +349,14 @@ function applyPlannerOverrides({
                 plannerCompatibilityRow
             });
 
-            // Phase 2D: TRUST_POLICY lists are empty → useAnalyzer is false.
+            if (plannerDecision.trace) {
+                decisionTraces.push(plannerDecision.trace);
+            }
+
+            // Phase 2E: TRUST_POLICY lists are empty → useAnalyzer is false.
             // Legacy editable path via unchanged applyChoiceToIndexedItem.
             if (plannerDecision.useAnalyzer) {
-                // Reserved for Phase 2E+: analyzer-backed Deploy/Skip gating
+                // Reserved for Phase 2F+: analyzer-backed Deploy/Skip gating
                 // when a metadata type trusts EXISTENCE (or higher).
                 // Unreachable while TRUST_POLICY lists are empty.
             } else {
@@ -334,8 +379,12 @@ function applyPlannerOverrides({
                 plannerCompatibilityRow
             });
 
+            if (plannerDecision.trace) {
+                decisionTraces.push(plannerDecision.trace);
+            }
+
             if (plannerDecision.useAnalyzer) {
-                // Reserved for Phase 2E+: analyzer-backed Deploy/Skip gating
+                // Reserved for Phase 2F+: analyzer-backed Deploy/Skip gating
                 // when a metadata type trusts EXISTENCE (or higher).
                 // Unreachable while TRUST_POLICY lists are empty.
             } else {
@@ -361,6 +410,9 @@ function applyPlannerOverrides({
     console.log('Overrides applied:', summary.overridesApplied);
     console.log('Overrides ignored:', summary.overridesIgnored);
     console.log('Mandatory metadata ignored:', summary.mandatoryIgnored);
+
+    // Internal diagnostics only — intentionally not returned or exposed.
+    void decisionTraces;
 
     return {
         selectedMetadata: nextSelectedMetadata,
