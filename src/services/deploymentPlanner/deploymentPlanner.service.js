@@ -13,8 +13,8 @@
  * - Never mutate action, required, destinationState, or other fields.
  * - Unknown / non-editable selections are ignored.
  *
- * Phase 2B: Planner Decision Resolver chooses analyzer vs legacy editable.
- * While analysisLevel is never trusted, Deploy/Skip still uses editable only.
+ * Phase 2D: Planner Decision Resolver uses per-type TRUST_POLICY.
+ * While every type trusts nothing, Deploy/Skip still uses editable only.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
  * auto-includes dependencies where action === DEPLOY && selected === true.
@@ -73,16 +73,22 @@ function createEmptySummary(selectionsReceived) {
 }
 
 /**
- * Analysis levels the planner is willing to trust for analyzer-backed gates.
- * Phase 2B: empty — analysisLevel NONE (and all others) are not trusted yet.
- * Phase 2C can add 'EXISTENCE' here without changing analyzer ownership.
+ * Per-metadata-type trust policy for analyzer-backed planner decisions.
+ * Each type lists analysis levels the planner may trust for that type only.
+ *
+ * Phase 2D: every type trusts nothing → useAnalyzer always false.
+ * Phase 2E can enable a single type, e.g. ApexClass: ['EXISTENCE'].
  */
-const TRUSTED_ANALYSIS_LEVELS = new Set([
-    // 'EXISTENCE' — Phase 2C
-    // 'GRAPH'
-    // 'CONTRACT'
-    // 'SEMANTIC'
-]);
+const TRUST_POLICY = Object.freeze({
+    ApexClass: Object.freeze([]),
+    ApexTrigger: Object.freeze([]),
+    CustomObject: Object.freeze([]),
+    CustomField: Object.freeze([]),
+    Layout: Object.freeze([]),
+    Flow: Object.freeze([]),
+    PermissionSet: Object.freeze([]),
+    Profile: Object.freeze([])
+});
 
 function buildCompatibilityRowIndex(plannerCompatibilityReport) {
     const index = new Map();
@@ -117,9 +123,9 @@ function buildCompatibilityRowIndex(plannerCompatibilityReport) {
  * Planner Decision Resolver.
  *
  * Owns migration policy: analyzer results vs legacy editable logic.
- * Analyzer remains independent and only reports analysisLevel.
+ * Trust is evaluated per metadata type via TRUST_POLICY.
  *
- * Phase 2B: no analysisLevel is trusted → always useAnalyzer = false.
+ * Phase 2D: all trust lists are empty → always useAnalyzer = false.
  *
  * @param {object} params
  * @param {object} [params.metadataItem]
@@ -130,12 +136,18 @@ function resolvePlannerDecision({
     metadataItem,
     plannerCompatibilityRow
 } = {}) {
-    void metadataItem;
-
+    const metadataType =
+        getItemType(metadataItem) ||
+        plannerCompatibilityRow?.metadataType ||
+        null;
     const analysisLevel =
         plannerCompatibilityRow?.analysisLevel || 'NONE';
 
-    if (TRUSTED_ANALYSIS_LEVELS.has(analysisLevel)) {
+    const trustedLevels = Array.isArray(TRUST_POLICY[metadataType])
+        ? TRUST_POLICY[metadataType]
+        : [];
+
+    if (trustedLevels.includes(analysisLevel)) {
         return {
             useAnalyzer: true,
             canSkip: plannerCompatibilityRow?.canSkip === true
@@ -296,11 +308,12 @@ function applyPlannerOverrides({
                 plannerCompatibilityRow
             });
 
-            // Phase 2B: analysisLevel is never trusted → useAnalyzer is false.
+            // Phase 2D: TRUST_POLICY lists are empty → useAnalyzer is false.
             // Legacy editable path via unchanged applyChoiceToIndexedItem.
             if (plannerDecision.useAnalyzer) {
-                // Reserved for Phase 2C+: analyzer-backed Deploy/Skip gating.
-                // Unreachable while TRUSTED_ANALYSIS_LEVELS is empty.
+                // Reserved for Phase 2E+: analyzer-backed Deploy/Skip gating
+                // when a metadata type trusts EXISTENCE (or higher).
+                // Unreachable while TRUST_POLICY lists are empty.
             } else {
                 applyChoiceToIndexedItem({
                     indexed: indexedPrimary,
@@ -322,8 +335,9 @@ function applyPlannerOverrides({
             });
 
             if (plannerDecision.useAnalyzer) {
-                // Reserved for Phase 2C+: analyzer-backed Deploy/Skip gating.
-                // Unreachable while TRUSTED_ANALYSIS_LEVELS is empty.
+                // Reserved for Phase 2E+: analyzer-backed Deploy/Skip gating
+                // when a metadata type trusts EXISTENCE (or higher).
+                // Unreachable while TRUST_POLICY lists are empty.
             } else {
                 applyChoiceToIndexedItem({
                     indexed: indexedDependencies,
@@ -357,6 +371,7 @@ function applyPlannerOverrides({
 
 module.exports = {
     applyPlannerOverrides,
-    // Exported for Phase 2B unit verification of resolver policy only.
-    resolvePlannerDecision
+    // Exported for resolver policy verification only.
+    resolvePlannerDecision,
+    TRUST_POLICY
 };
