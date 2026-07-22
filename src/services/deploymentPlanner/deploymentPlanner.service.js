@@ -119,6 +119,7 @@ const TRUST_POLICY = Object.freeze({
     ApexTrigger: Object.freeze([]),
     CustomObject: Object.freeze([]),
     CustomField: Object.freeze([]),
+    CustomLabel: Object.freeze(['EXISTENCE']),
     Layout: Object.freeze([]),
     Flow: Object.freeze([]),
     PermissionSet: Object.freeze(['EXISTENCE']),
