@@ -1,18 +1,26 @@
 /**
- * Planner Compatibility Analyzer — Phase 1 (report-only).
+ * Planner Compatibility Analyzer — Phase 1/2B (report-only).
  *
  * Completely isolated from deploymentCompatibility, Package Generation,
  * Workspace, CLI, and Deployment Planner decision mutation.
  *
- * Phase 1 rules:
+ * Responsibilities:
  * - Deterministic and pure (no I/O, no HTTP, no filesystem, no Git).
  * - Uses only selectedMetadata + resolvedDependencies already in memory.
  * - Does NOT modify any input collections.
- * - Does NOT assert real skip safety (canSkip stays false; graphSafe null).
- * - existsInDestination is derived from destinationState when present.
+ * - Reports analysisLevel (what analysis was performed).
+ * - Does NOT encode planner fallback / editable rules.
  *
- * Future phases may expand analysis; Phase 1 only establishes the seam.
+ * Phase 2B: analysisLevel is always NONE (placeholder).
  */
+
+const ANALYSIS_LEVEL = Object.freeze({
+    NONE: 'NONE',
+    EXISTENCE: 'EXISTENCE',
+    GRAPH: 'GRAPH',
+    CONTRACT: 'CONTRACT',
+    SEMANTIC: 'SEMANTIC'
+});
 
 function getMetadataType(item) {
     return item?.metadataType || item?.type || null;
@@ -39,8 +47,8 @@ function resolveExistsInDestination(destinationState) {
 }
 
 /**
- * Build a Phase 1 planner compatibility row from available decision fields.
- * Never grants canSkip in Phase 1 (report scaffolding only).
+ * Build a planner compatibility row from available decision fields.
+ * Phase 2B: analysisLevel is always NONE; canSkip is never granted.
  */
 function buildPhase1Result(item) {
     const metadataType = getMetadataType(item);
@@ -49,20 +57,21 @@ function buildPhase1Result(item) {
     const existsInDestination = resolveExistsInDestination(destinationState);
     const action = item?.action || null;
 
-    let reason = 'Phase 1: planner compatibility report only; skip safety not evaluated.';
+    let reason =
+        'Phase 2B: analysisLevel is NONE; planner must use legacy editable logic.';
 
     if (existsInDestination === true) {
         reason =
-            'Phase 1: destinationState is EXISTS; skip safety deferred to a later phase.';
+            'Phase 2B: destinationState is EXISTS; analysisLevel remains NONE.';
     } else if (existsInDestination === false) {
         reason =
-            'Phase 1: destinationState is MISSING; skip safety deferred to a later phase.';
+            'Phase 2B: destinationState is MISSING; analysisLevel remains NONE.';
     } else if (action === 'BLOCK') {
         reason =
-            'Phase 1: dependency action is BLOCK; skip safety deferred to a later phase.';
+            'Phase 2B: dependency action is BLOCK; analysisLevel remains NONE.';
     } else if (!destinationState) {
         reason =
-            'Phase 1: destinationState unavailable; skip safety deferred to a later phase.';
+            'Phase 2B: destinationState unavailable; analysisLevel remains NONE.';
     }
 
     return {
@@ -71,6 +80,7 @@ function buildPhase1Result(item) {
         existsInDestination,
         graphSafe: null,
         canSkip: false,
+        analysisLevel: ANALYSIS_LEVEL.NONE,
         reason
     };
 }
@@ -149,7 +159,7 @@ function buildSummary(results) {
 }
 
 /**
- * Analyze planner compatibility (Phase 1 — read-only report).
+ * Analyze planner compatibility (read-only report).
  *
  * @param {object} params
  * @param {Array<object>} [params.selectedMetadata]
@@ -176,5 +186,6 @@ function analyzePlannerCompatibility({
 }
 
 module.exports = {
+    ANALYSIS_LEVEL,
     analyzePlannerCompatibility
 };
