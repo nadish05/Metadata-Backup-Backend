@@ -104,6 +104,48 @@ function collectDestinationInventoryItems({
     return [...byKey.values()];
 }
 
+/**
+ * Prepare analyzer-only copies enriched from Destination Inventory.
+ * Does not mutate planner / resolution inventories.
+ * Missing inventory entries → UNKNOWN (never invent EXISTS/MISSING).
+ */
+function enrichAnalyzerItemsWithDestinationState(items, destinationStates) {
+    if (!Array.isArray(items)) {
+        return [];
+    }
+
+    const states =
+        destinationStates instanceof Map ? destinationStates : new Map();
+
+    return items.map((item) => {
+        const metadataType = item?.metadataType || item?.type || null;
+        const metadataName = item?.metadataName || item?.name || null;
+
+        let destinationState = 'UNKNOWN';
+
+        if (metadataType && metadataName) {
+            const key = `${metadataType}:${metadataName}`;
+
+            if (states.has(key)) {
+                const inventoryState = states.get(key);
+
+                if (
+                    inventoryState === 'EXISTS' ||
+                    inventoryState === 'MISSING' ||
+                    inventoryState === 'UNKNOWN'
+                ) {
+                    destinationState = inventoryState;
+                }
+            }
+        }
+
+        return {
+            ...item,
+            destinationState
+        };
+    });
+}
+
 function resolveErrorMessage(error) {
     const oauthError = error.response?.data;
 
@@ -360,6 +402,8 @@ async function validateDeployment({
         deploymentPackage.requiredDependencies || [];
     let enrichedRequiredDependencies =
         deploymentPackage.requiredDependencies || [];
+    // Destination Inventory state map retained for analyzer enrichment (Step 5).
+    let destinationStatesForAnalyzer = new Map();
 
     let accessTokenForDownstream = null;
     let resolvedInstanceUrl = instanceUrl;
@@ -642,6 +686,10 @@ async function validateDeployment({
             ];
         }
 
+        // Retain for Planner Compatibility Analyzer enrichment (Step 5).
+        // Does not mutate planner inputs; analyzer receives enriched copies only.
+        destinationStatesForAnalyzer = destinationStates;
+
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
                 requiredDependencies: enrichedRequiredDependencies,
@@ -677,16 +725,27 @@ async function validateDeployment({
     }
 
     // Phase 1 — Planner Compatibility Analyzer (report-only).
-    // Read-only: does not mutate inventories or deployment decisions.
-    // Result is intentionally unused; failures must not affect deployment.
+    // Phase 3D Step 5 — enrich analyzer inputs from Destination Inventory only.
+    // Planner Trust Policy unchanged → still LEGACY_EDITABLE / useAnalyzer false.
     let plannerCompatibilityReport = null;
 
     try {
+        const analyzerSelectedMetadata =
+            enrichAnalyzerItemsWithDestinationState(
+                artifactEnrichedSelectedMetadata,
+                destinationStatesForAnalyzer
+            );
+        const analyzerResolvedDependencies =
+            enrichAnalyzerItemsWithDestinationState(
+                resolvedRequiredDependencies,
+                destinationStatesForAnalyzer
+            );
+
         plannerCompatibilityReport =
             deploymentPlannerCompatibilityAnalyzerService.analyzePlannerCompatibility(
                 {
-                    selectedMetadata: artifactEnrichedSelectedMetadata,
-                    resolvedDependencies: resolvedRequiredDependencies
+                    selectedMetadata: analyzerSelectedMetadata,
+                    resolvedDependencies: analyzerResolvedDependencies
                 }
             );
     } catch (error) {
