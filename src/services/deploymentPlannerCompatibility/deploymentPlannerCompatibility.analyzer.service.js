@@ -11,6 +11,7 @@
  * - Reports analysisLevel based on destination existence analysis.
  * - Reports canSkip capability for EXISTENCE analysis (Phase 4D).
  * - Phase 6B: attaches normalized graph edge info (report-only).
+ * - Phase 6C: evaluates graphSafe (report-only; does not change decisions).
  * - Does NOT encode planner fallback / editable rules.
  * - Does NOT authorize Skip (Trust Policy / Analyzer Executor still decide).
  *
@@ -19,9 +20,8 @@
  * - otherwise → analysisLevel NONE
  * - canSkip capability: EXISTS + EXISTENCE → true; else false
  *
- * Phase 6B:
- * - Graph edges may be attached to rows (graphEdges / graphReasons).
- * - graphSafe stays false (GRAPH safety not evaluated yet).
+ * Phase 6B / 6C:
+ * - Graph edges attached; graphSafe evaluated from blocking dependsOn.
  * - analysisLevel and canSkip remain EXISTENCE-only.
  */
 
@@ -95,7 +95,6 @@ function computeCanSkip({
 
 /**
  * Normalize discovery outputs into a per-node edge index.
- * Phase 6B — informational only; does not evaluate graph safety.
  *
  * @param {object} [params]
  * @param {Array<object>} [params.discoveredRelationships]
@@ -128,7 +127,8 @@ function normalizeDependencyGraph({
         toType,
         toName,
         relationship = 'Reference',
-        source = null
+        source = null,
+        blocking = true
     }) {
         if (!fromType || !fromName || !toType || !toName) {
             return;
@@ -137,6 +137,7 @@ function normalizeDependencyGraph({
         const fromKey = buildKey(fromType, fromName);
         const toKey = buildKey(toType, toName);
         const edgeKey = `${fromKey}->${toKey}:${relationship}`;
+        const isBlocking = blocking !== false;
 
         if (edgeMap.has(edgeKey)) {
             return;
@@ -148,7 +149,8 @@ function normalizeDependencyGraph({
             toType,
             toName,
             relationship,
-            source
+            source,
+            blocking: isBlocking
         };
 
         edgeMap.set(edgeKey, edge);
@@ -160,14 +162,16 @@ function normalizeDependencyGraph({
             metadataType: toType,
             metadataName: toName,
             relationship,
-            source
+            source,
+            blocking: isBlocking
         });
 
         toEntry.requiredBy.push({
             metadataType: fromType,
             metadataName: fromName,
             relationship,
-            source
+            source,
+            blocking: isBlocking
         });
     }
 
@@ -178,7 +182,8 @@ function normalizeDependencyGraph({
             toType: edge.toType || edge.toMetadataType || null,
             toName: edge.toName || edge.toMetadataName || null,
             relationship: edge.relationship || edge.referenceType || 'Reference',
-            source: edge.discoveredBy || 'discoveredEdges'
+            source: edge.discoveredBy || 'discoveredEdges',
+            blocking: edge.blocking !== false
         });
     }
 
@@ -194,7 +199,9 @@ function normalizeDependencyGraph({
             toType,
             toName,
             relationship: relationship.relationship || 'RelatedObject',
-            source: relationship.discoveredBy || 'discoveredRelationships'
+            source: relationship.discoveredBy || 'discoveredRelationships',
+            // required !== false → blocking (conservative default).
+            blocking: relationship.required !== false && relationship.blocking !== false
         });
     }
 
@@ -202,7 +209,6 @@ function normalizeDependencyGraph({
         const toType = reference.metadataType || reference.type || null;
         const toName = reference.name || null;
         const fromName = reference.sourceMetadata || null;
-        // FlexiPage is the primary reference discoverer source today.
         const fromType = fromName
             ? reference.sourceMetadataType || 'FlexiPage'
             : null;
@@ -214,7 +220,8 @@ function normalizeDependencyGraph({
             toName,
             relationship:
                 reference.referenceType || reference.relationship || 'Reference',
-            source: reference.discoveredBy || 'discoveredReferences'
+            source: reference.discoveredBy || 'discoveredReferences',
+            blocking: reference.blocking !== false
         });
     }
 
@@ -224,41 +231,206 @@ function normalizeDependencyGraph({
     };
 }
 
-function getNodeGraphAttachment(graphIndex, metadataType, metadataName) {
-    const empty = {
-        graphSafe: false,
-        graphReasons: ['No graph edges attached for this metadata.'],
-        graphEdges: {
-            dependsOn: [],
-            requiredBy: []
+/**
+ * Keys that would be included in the deployment package (pre-package-gen view).
+ * Mirrors package generation auto-include rules without calling package service.
+ */
+function buildPackageMembershipKeys(selectedMetadata, resolvedDependencies) {
+    const keys = new Set();
+
+    for (const item of selectedMetadata || []) {
+        const metadataType = getMetadataType(item);
+        const metadataName = getMetadataName(item);
+
+        if (!metadataType || !metadataName) {
+            continue;
         }
+
+        // Primary inventory members present in selectedMetadata are package seeds.
+        // Planner may later remove skipped primaries; analyzer runs before that.
+        if (item.selected === false) {
+            continue;
+        }
+
+        keys.add(buildKey(metadataType, metadataName));
+    }
+
+    for (const item of resolvedDependencies || []) {
+        const metadataType = getMetadataType(item);
+        const metadataName = getMetadataName(item);
+
+        if (!metadataType || !metadataName) {
+            continue;
+        }
+
+        let included = false;
+
+        if (item.action) {
+            included =
+                item.action === 'DEPLOY' && item.selected === true;
+        } else {
+            included =
+                item.required !== false && item.selected !== false;
+        }
+
+        if (included) {
+            keys.add(buildKey(metadataType, metadataName));
+        }
+    }
+
+    return keys;
+}
+
+function buildDestinationStateIndex(inventoryItems) {
+    const stateByKey = new Map();
+
+    for (const item of inventoryItems || []) {
+        const metadataType = getMetadataType(item);
+        const metadataName = getMetadataName(item);
+
+        if (!metadataType || !metadataName) {
+            continue;
+        }
+
+        stateByKey.set(
+            buildKey(metadataType, metadataName),
+            item.destinationState || null
+        );
+    }
+
+    return stateByKey;
+}
+
+/**
+ * Phase 6C — evaluate whether blocking dependsOn closure is satisfied.
+ * Conservative: truncated / unknown / incomplete never yields graphSafe=true.
+ */
+function evaluateGraphSafety({
+    metadataType,
+    metadataName,
+    graphIndex,
+    stateByKey,
+    packageKeys,
+    graphTruncated = false
+} = {}) {
+    const emptyEdges = { dependsOn: [], requiredBy: [] };
+    const key =
+        metadataType && metadataName
+            ? buildKey(metadataType, metadataName)
+            : null;
+    const entry = key && graphIndex?.byNode ? graphIndex.byNode.get(key) : null;
+    const dependsOn = entry ? [...(entry.dependsOn || [])] : [];
+    const requiredBy = entry ? [...(entry.requiredBy || [])] : [];
+
+    const graphEvaluation = {
+        status: 'UNKNOWN',
+        truncated: graphTruncated === true,
+        hasGraphNode: Boolean(entry),
+        blockingDependsOn: 0,
+        dependsOnChecked: 0,
+        dependsOnSatisfied: 0,
+        unresolved: []
     };
 
-    if (!metadataType || !metadataName || !graphIndex?.byNode) {
-        return empty;
+    if (graphTruncated === true) {
+        return {
+            graphSafe: false,
+            graphReasons: [
+                'Graph evaluation incomplete: discovery truncated.'
+            ],
+            graphEdges: { dependsOn, requiredBy },
+            graphEvaluation
+        };
     }
-
-    const entry = graphIndex.byNode.get(buildKey(metadataType, metadataName));
 
     if (!entry) {
-        return empty;
+        return {
+            graphSafe: false,
+            graphReasons: ['No graph edges attached for this metadata.'],
+            graphEdges: emptyEdges,
+            graphEvaluation
+        };
     }
 
-    const dependsOn = [...(entry.dependsOn || [])];
-    const requiredBy = [...(entry.requiredBy || [])];
-    const hasEdges = dependsOn.length > 0 || requiredBy.length > 0;
+    const blockingDeps = dependsOn.filter((dep) => dep.blocking !== false);
+    graphEvaluation.blockingDependsOn = blockingDeps.length;
+
+    if (blockingDeps.length === 0) {
+        return {
+            graphSafe: true,
+            graphReasons: [
+                'No blocking dependsOn edges; graph closure is vacuously safe.'
+            ],
+            graphEdges: { dependsOn, requiredBy },
+            graphEvaluation: {
+                ...graphEvaluation,
+                status: 'SAFE'
+            }
+        };
+    }
+
+    const reasons = [];
+    let sawUnknown = false;
+
+    for (const dep of blockingDeps) {
+        graphEvaluation.dependsOnChecked += 1;
+
+        const depKey = buildKey(dep.metadataType, dep.metadataName);
+        const destinationState = stateByKey?.get(depKey);
+        const exists = destinationState === 'EXISTS';
+        const inPackage = packageKeys?.has(depKey) === true;
+
+        if (exists || inPackage) {
+            graphEvaluation.dependsOnSatisfied += 1;
+            continue;
+        }
+
+        if (destinationState === 'MISSING') {
+            graphEvaluation.unresolved.push({
+                metadataType: dep.metadataType,
+                metadataName: dep.metadataName,
+                relationship: dep.relationship,
+                reason: 'MISSING_NOT_IN_PACKAGE'
+            });
+            reasons.push(
+                `Blocking dependency ${depKey} is MISSING and not in package.`
+            );
+            continue;
+        }
+
+        sawUnknown = true;
+        graphEvaluation.unresolved.push({
+            metadataType: dep.metadataType,
+            metadataName: dep.metadataName,
+            relationship: dep.relationship,
+            reason: 'UNKNOWN_OR_ABSENT'
+        });
+        reasons.push(
+            `Blocking dependency ${depKey} has unknown destination state and is not in package.`
+        );
+    }
+
+    if (graphEvaluation.unresolved.length === 0) {
+        return {
+            graphSafe: true,
+            graphReasons: [
+                'All blocking dependsOn edges EXISTS or included in package.'
+            ],
+            graphEdges: { dependsOn, requiredBy },
+            graphEvaluation: {
+                ...graphEvaluation,
+                status: 'SAFE'
+            }
+        };
+    }
 
     return {
-        // Phase 6B: GRAPH safety is not evaluated — informational wiring only.
         graphSafe: false,
-        graphReasons: hasEdges
-            ? [
-                  'Graph edges attached; GRAPH safety not evaluated (Phase 6B).'
-              ]
-            : ['No graph edges attached for this metadata.'],
-        graphEdges: {
-            dependsOn,
-            requiredBy
+        graphReasons: reasons,
+        graphEdges: { dependsOn, requiredBy },
+        graphEvaluation: {
+            ...graphEvaluation,
+            status: sawUnknown ? 'UNKNOWN' : 'UNSAFE'
         }
     };
 }
@@ -266,9 +438,9 @@ function getNodeGraphAttachment(graphIndex, metadataType, metadataName) {
 /**
  * Build a planner compatibility row using destination existence analysis.
  * canSkip is capability only (Phase 4D); it does not authorize Skip.
- * Graph fields are Phase 6B report-only attachments.
+ * Graph fields are Phase 6B/6C report-only.
  */
-function buildCompatibilityResult(item, graphIndex = null) {
+function buildCompatibilityResult(item, evaluationContext = {}) {
     const metadataType = getMetadataType(item);
     const metadataName = getMetadataName(item);
     const destinationState = item?.destinationState || null;
@@ -279,19 +451,23 @@ function buildCompatibilityResult(item, graphIndex = null) {
         ? ANALYSIS_LEVEL.EXISTENCE
         : ANALYSIS_LEVEL.NONE;
 
-    const graphAttachment = getNodeGraphAttachment(
-        graphIndex,
+    const graphResult = evaluateGraphSafety({
         metadataType,
-        metadataName
-    );
+        metadataName,
+        graphIndex: evaluationContext.graphIndex || null,
+        stateByKey: evaluationContext.stateByKey || null,
+        packageKeys: evaluationContext.packageKeys || null,
+        graphTruncated: evaluationContext.graphTruncated === true
+    });
 
     return {
         metadataType,
         metadataName,
         existsInDestination,
-        graphSafe: graphAttachment.graphSafe,
-        graphReasons: graphAttachment.graphReasons,
-        graphEdges: graphAttachment.graphEdges,
+        graphSafe: graphResult.graphSafe,
+        graphReasons: graphResult.graphReasons,
+        graphEdges: graphResult.graphEdges,
+        graphEvaluation: graphResult.graphEvaluation,
         canSkip: computeCanSkip({
             destinationState,
             analysisLevel
@@ -354,8 +530,13 @@ function buildSummary(results, graphIndex = null) {
     let canSkip = 0;
     let cannotSkip = 0;
     let unknown = 0;
+    let graphSafe = 0;
 
     for (const result of results) {
+        if (result.graphSafe === true) {
+            graphSafe += 1;
+        }
+
         if (result.canSkip === true) {
             canSkip += 1;
         } else if (
@@ -373,7 +554,8 @@ function buildSummary(results, graphIndex = null) {
         canSkip,
         cannotSkip,
         unknown,
-        // Phase 6B informational — does not affect planner.
+        graphSafe,
+        // Phase 6B/6C informational — does not affect planner.
         graphEdgesAttached: Array.isArray(graphIndex?.edges)
             ? graphIndex.edges.length
             : 0,
@@ -390,6 +572,7 @@ function buildSummary(results, graphIndex = null) {
  * @param {Array<object>} [params.discoveredRelationships]
  * @param {Array<object>} [params.discoveredReferences]
  * @param {Array<object>} [params.discoveredEdges]
+ * @param {boolean} [params.graphTruncated]
  * @returns {{ plannerCompatibility: { results: Array<object>, summary: object } }}
  */
 function analyzePlannerCompatibility({
@@ -397,12 +580,15 @@ function analyzePlannerCompatibility({
     resolvedDependencies = [],
     discoveredRelationships = [],
     discoveredReferences = [],
-    discoveredEdges = []
+    discoveredEdges = [],
+    graphTruncated = false
 } = {}) {
-    const inventory = collectInventory(
-        Array.isArray(selectedMetadata) ? selectedMetadata : [],
-        Array.isArray(resolvedDependencies) ? resolvedDependencies : []
-    );
+    const selected = Array.isArray(selectedMetadata) ? selectedMetadata : [];
+    const resolved = Array.isArray(resolvedDependencies)
+        ? resolvedDependencies
+        : [];
+
+    const inventory = collectInventory(selected, resolved);
 
     const graphIndex = normalizeDependencyGraph({
         discoveredRelationships: Array.isArray(discoveredRelationships)
@@ -414,8 +600,15 @@ function analyzePlannerCompatibility({
         discoveredEdges: Array.isArray(discoveredEdges) ? discoveredEdges : []
     });
 
+    const evaluationContext = {
+        graphIndex,
+        stateByKey: buildDestinationStateIndex(inventory),
+        packageKeys: buildPackageMembershipKeys(selected, resolved),
+        graphTruncated: graphTruncated === true
+    };
+
     const results = inventory.map((item) =>
-        buildCompatibilityResult(item, graphIndex)
+        buildCompatibilityResult(item, evaluationContext)
     );
 
     return {
@@ -430,5 +623,6 @@ module.exports = {
     ANALYSIS_LEVEL,
     computeCanSkip,
     normalizeDependencyGraph,
+    evaluateGraphSafety,
     analyzePlannerCompatibility
 };

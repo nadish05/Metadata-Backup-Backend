@@ -731,7 +731,7 @@ async function validateDeployment({
 
     // Phase 1 — Planner Compatibility Analyzer (report-only).
     // Phase 3D Step 5 — enrich analyzer inputs from Destination Inventory.
-    // Phase 6B — also pass normalized graph discovery (report-only; no decision change).
+    // Phase 6B/6C — pass graph discovery and evaluate graphSafe (report-only).
     let plannerCompatibilityReport = null;
 
     try {
@@ -746,6 +746,13 @@ async function validateDeployment({
                 destinationStatesForAnalyzer
             );
 
+        const graphTruncated = [
+            ...(graphExpansionSummary.warnings || []),
+            ...(relationshipDiscoverySummary.warnings || [])
+        ].some((warning) =>
+            /maximum depth|truncated|incomplete/i.test(String(warning || ''))
+        );
+
         plannerCompatibilityReport =
             deploymentPlannerCompatibilityAnalyzerService.analyzePlannerCompatibility(
                 {
@@ -753,7 +760,8 @@ async function validateDeployment({
                     resolvedDependencies: analyzerResolvedDependencies,
                     discoveredRelationships,
                     discoveredReferences,
-                    discoveredEdges
+                    discoveredEdges,
+                    graphTruncated
                 }
             );
     } catch (error) {
