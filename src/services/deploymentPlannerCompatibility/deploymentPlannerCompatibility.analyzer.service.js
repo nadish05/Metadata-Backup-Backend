@@ -11,7 +11,8 @@
  * - Reports analysisLevel based on destination existence analysis.
  * - Reports canSkip capability for EXISTENCE analysis (Phase 4D).
  * - Phase 6B: attaches normalized graph edge info (report-only).
- * - Phase 6C: evaluates graphSafe (report-only; does not change decisions).
+ * - Phase 6C/6E: evaluates graphSafe (report-only; does not change decisions).
+ * - Phase 6F: graphSafe synchronized to effective package after planner.
  * - Does NOT encode planner fallback / editable rules.
  * - Does NOT authorize Skip (Trust Policy / Analyzer Executor still decide).
  *
@@ -20,8 +21,9 @@
  * - otherwise → analysisLevel NONE
  * - canSkip capability: EXISTS + EXISTENCE → true; else false
  *
- * Phase 6B / 6C / 6E:
+ * Phase 6B / 6C / 6E / 6F:
  * - Graph edges attached; graphSafe from transitive blocking dependsOn closure.
+ * - Package membership for graphSafe uses the effective deploy set (post-planner).
  * - analysisLevel and canSkip remain EXISTENCE-only.
  */
 
@@ -274,6 +276,39 @@ function buildPackageMembershipKeys(selectedMetadata, resolvedDependencies) {
         }
 
         if (included) {
+            keys.add(buildKey(metadataType, metadataName));
+        }
+    }
+
+    return keys;
+}
+
+/**
+ * Build package membership keys from generateDeploymentPackage() output.
+ * Reuses the composed deploy set — avoids re-implementing package rules.
+ *
+ * @param {object|null} generatedDeploymentPackage
+ * @returns {Set<string>}
+ */
+function buildPackageMembershipKeysFromGeneratedPackage(
+    generatedDeploymentPackage
+) {
+    const keys = new Set();
+
+    for (const item of generatedDeploymentPackage?.metadata || []) {
+        const metadataType = item?.metadataType || null;
+        const metadataName = item?.metadataName || item?.name || null;
+
+        if (metadataType && metadataName) {
+            keys.add(buildKey(metadataType, metadataName));
+        }
+    }
+
+    for (const item of generatedDeploymentPackage?.dependencies || []) {
+        const metadataType = item?.type || item?.metadataType || null;
+        const metadataName = item?.name || item?.metadataName || null;
+
+        if (metadataType && metadataName) {
             keys.add(buildKey(metadataType, metadataName));
         }
     }
@@ -549,7 +584,7 @@ function evaluateGraphSafety({
 /**
  * Build a planner compatibility row using destination existence analysis.
  * canSkip is capability only (Phase 4D); it does not authorize Skip.
- * Graph fields are Phase 6B/6C/6E report-only.
+ * Graph fields are Phase 6B–6F report-only.
  */
 function buildCompatibilityResult(item, evaluationContext = {}) {
     const metadataType = getMetadataType(item);
@@ -562,23 +597,51 @@ function buildCompatibilityResult(item, evaluationContext = {}) {
         ? ANALYSIS_LEVEL.EXISTENCE
         : ANALYSIS_LEVEL.NONE;
 
-    const graphResult = evaluateGraphSafety({
-        metadataType,
-        metadataName,
-        graphIndex: evaluationContext.graphIndex || null,
-        stateByKey: evaluationContext.stateByKey || null,
-        packageKeys: evaluationContext.packageKeys || null,
-        graphTruncated: evaluationContext.graphTruncated === true
-    });
+    const includeGraphEvaluation =
+        evaluationContext.includeGraphEvaluation !== false;
+
+    let graphSafe = false;
+    let graphReasons = [
+        'Graph evaluation deferred until effective package (Phase 6F).'
+    ];
+    let graphEdges = { dependsOn: [], requiredBy: [] };
+    let graphEvaluation = {
+        status: 'DEFERRED',
+        truncated: false,
+        hasGraphNode: false,
+        blockingDependsOn: 0,
+        dependsOnChecked: 0,
+        dependsOnSatisfied: 0,
+        transitive: true,
+        maxDepthReached: 0,
+        cycleSkips: 0,
+        unresolved: []
+    };
+
+    if (includeGraphEvaluation) {
+        const graphResult = evaluateGraphSafety({
+            metadataType,
+            metadataName,
+            graphIndex: evaluationContext.graphIndex || null,
+            stateByKey: evaluationContext.stateByKey || null,
+            packageKeys: evaluationContext.packageKeys || null,
+            graphTruncated: evaluationContext.graphTruncated === true
+        });
+
+        graphSafe = graphResult.graphSafe;
+        graphReasons = graphResult.graphReasons;
+        graphEdges = graphResult.graphEdges;
+        graphEvaluation = graphResult.graphEvaluation;
+    }
 
     return {
         metadataType,
         metadataName,
         existsInDestination,
-        graphSafe: graphResult.graphSafe,
-        graphReasons: graphResult.graphReasons,
-        graphEdges: graphResult.graphEdges,
-        graphEvaluation: graphResult.graphEvaluation,
+        graphSafe,
+        graphReasons,
+        graphEdges,
+        graphEvaluation,
         canSkip: computeCanSkip({
             destinationState,
             analysisLevel
@@ -684,6 +747,8 @@ function buildSummary(results, graphIndex = null) {
  * @param {Array<object>} [params.discoveredReferences]
  * @param {Array<object>} [params.discoveredEdges]
  * @param {boolean} [params.graphTruncated]
+ * @param {boolean} [params.includeGraphEvaluation=true]
+ * @param {Set<string>|null} [params.packageMembershipKeys] - optional override
  * @returns {{ plannerCompatibility: { results: Array<object>, summary: object } }}
  */
 function analyzePlannerCompatibility({
@@ -692,7 +757,9 @@ function analyzePlannerCompatibility({
     discoveredRelationships = [],
     discoveredReferences = [],
     discoveredEdges = [],
-    graphTruncated = false
+    graphTruncated = false,
+    includeGraphEvaluation = true,
+    packageMembershipKeys = null
 } = {}) {
     const selected = Array.isArray(selectedMetadata) ? selectedMetadata : [];
     const resolved = Array.isArray(resolvedDependencies)
@@ -701,21 +768,29 @@ function analyzePlannerCompatibility({
 
     const inventory = collectInventory(selected, resolved);
 
-    const graphIndex = normalizeDependencyGraph({
-        discoveredRelationships: Array.isArray(discoveredRelationships)
-            ? discoveredRelationships
-            : [],
-        discoveredReferences: Array.isArray(discoveredReferences)
-            ? discoveredReferences
-            : [],
-        discoveredEdges: Array.isArray(discoveredEdges) ? discoveredEdges : []
-    });
+    const graphIndex = includeGraphEvaluation
+        ? normalizeDependencyGraph({
+              discoveredRelationships: Array.isArray(discoveredRelationships)
+                  ? discoveredRelationships
+                  : [],
+              discoveredReferences: Array.isArray(discoveredReferences)
+                  ? discoveredReferences
+                  : [],
+              discoveredEdges: Array.isArray(discoveredEdges)
+                  ? discoveredEdges
+                  : []
+          })
+        : { byNode: new Map(), edges: [] };
 
     const evaluationContext = {
         graphIndex,
         stateByKey: buildDestinationStateIndex(inventory),
-        packageKeys: buildPackageMembershipKeys(selected, resolved),
-        graphTruncated: graphTruncated === true
+        packageKeys:
+            packageMembershipKeys instanceof Set
+                ? packageMembershipKeys
+                : buildPackageMembershipKeys(selected, resolved),
+        graphTruncated: graphTruncated === true,
+        includeGraphEvaluation: includeGraphEvaluation !== false
     };
 
     const results = inventory.map((item) =>
@@ -730,10 +805,95 @@ function analyzePlannerCompatibility({
     };
 }
 
+/**
+ * Phase 6F — refresh graphSafe fields using the effective deployment package.
+ * Preserves analysisLevel / canSkip / existsInDestination from the original report.
+ *
+ * @param {object|null} plannerCompatibilityReport
+ * @param {object} params
+ * @returns {object|null}
+ */
+function synchronizePlannerCompatibilityGraph(
+    plannerCompatibilityReport,
+    {
+        selectedMetadata = [],
+        resolvedDependencies = [],
+        discoveredRelationships = [],
+        discoveredReferences = [],
+        discoveredEdges = [],
+        graphTruncated = false,
+        packageMembershipKeys = null,
+        generatedDeploymentPackage = null
+    } = {}
+) {
+    const results = plannerCompatibilityReport?.plannerCompatibility?.results;
+
+    if (!Array.isArray(results)) {
+        return plannerCompatibilityReport;
+    }
+
+    const selected = Array.isArray(selectedMetadata) ? selectedMetadata : [];
+    const resolved = Array.isArray(resolvedDependencies)
+        ? resolvedDependencies
+        : [];
+
+    const inventory = collectInventory(selected, resolved);
+    const graphIndex = normalizeDependencyGraph({
+        discoveredRelationships: Array.isArray(discoveredRelationships)
+            ? discoveredRelationships
+            : [],
+        discoveredReferences: Array.isArray(discoveredReferences)
+            ? discoveredReferences
+            : [],
+        discoveredEdges: Array.isArray(discoveredEdges) ? discoveredEdges : []
+    });
+
+    let packageKeys = packageMembershipKeys;
+
+    if (!(packageKeys instanceof Set)) {
+        packageKeys = generatedDeploymentPackage
+            ? buildPackageMembershipKeysFromGeneratedPackage(
+                  generatedDeploymentPackage
+              )
+            : buildPackageMembershipKeys(selected, resolved);
+    }
+
+    const stateByKey = buildDestinationStateIndex(inventory);
+    const truncated = graphTruncated === true;
+
+    const synchronizedResults = results.map((row) => {
+        const graphResult = evaluateGraphSafety({
+            metadataType: row.metadataType,
+            metadataName: row.metadataName,
+            graphIndex,
+            stateByKey,
+            packageKeys,
+            graphTruncated: truncated
+        });
+
+        return {
+            ...row,
+            graphSafe: graphResult.graphSafe,
+            graphReasons: graphResult.graphReasons,
+            graphEdges: graphResult.graphEdges,
+            graphEvaluation: graphResult.graphEvaluation
+        };
+    });
+
+    return {
+        plannerCompatibility: {
+            results: synchronizedResults,
+            summary: buildSummary(synchronizedResults, graphIndex)
+        }
+    };
+}
+
 module.exports = {
     ANALYSIS_LEVEL,
     computeCanSkip,
     normalizeDependencyGraph,
     evaluateGraphSafety,
-    analyzePlannerCompatibility
+    buildPackageMembershipKeysFromGeneratedPackage,
+    analyzePlannerCompatibility,
+    synchronizePlannerCompatibilityGraph
 };

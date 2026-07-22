@@ -731,8 +731,9 @@ async function validateDeployment({
 
     // Phase 1 — Planner Compatibility Analyzer (report-only).
     // Phase 3D Step 5 — enrich analyzer inputs from Destination Inventory.
-    // Phase 6B/6C — pass graph discovery and evaluate graphSafe (report-only).
+    // Phase 6F — EXISTENCE for planner first; graphSafe synced after effective package.
     let plannerCompatibilityReport = null;
+    let graphTruncatedForCompatibility = false;
 
     try {
         const analyzerSelectedMetadata =
@@ -746,7 +747,7 @@ async function validateDeployment({
                 destinationStatesForAnalyzer
             );
 
-        const graphTruncated = [
+        graphTruncatedForCompatibility = [
             ...(graphExpansionSummary.warnings || []),
             ...(relationshipDiscoverySummary.warnings || [])
         ].some((warning) =>
@@ -758,10 +759,9 @@ async function validateDeployment({
                 {
                     selectedMetadata: analyzerSelectedMetadata,
                     resolvedDependencies: analyzerResolvedDependencies,
-                    discoveredRelationships,
-                    discoveredReferences,
-                    discoveredEdges,
-                    graphTruncated
+                    // Graph evaluation deferred until post-planner package (Phase 6F).
+                    includeGraphEvaluation: false,
+                    graphTruncated: graphTruncatedForCompatibility
                 }
             );
     } catch (error) {
@@ -996,6 +996,40 @@ async function validateDeployment({
         deploymentPackageService.generateDeploymentPackage(
             deploymentPackageWithResolvedDependencies
         );
+
+    // Phase 6F — synchronize graphSafe to the effective generated package.
+    // Does not re-run planner; preserves analysisLevel / canSkip from pre-planner report.
+    try {
+        if (plannerCompatibilityReport) {
+            const analyzerSelectedMetadata =
+                enrichAnalyzerItemsWithDestinationState(
+                    artifactEnrichedSelectedMetadata,
+                    destinationStatesForAnalyzer
+                );
+            const analyzerResolvedDependencies =
+                enrichAnalyzerItemsWithDestinationState(
+                    resolvedRequiredDependencies,
+                    destinationStatesForAnalyzer
+                );
+
+            plannerCompatibilityReport =
+                deploymentPlannerCompatibilityAnalyzerService.synchronizePlannerCompatibilityGraph(
+                    plannerCompatibilityReport,
+                    {
+                        selectedMetadata: analyzerSelectedMetadata,
+                        resolvedDependencies: analyzerResolvedDependencies,
+                        discoveredRelationships,
+                        discoveredReferences,
+                        discoveredEdges,
+                        graphTruncated: graphTruncatedForCompatibility,
+                        generatedDeploymentPackage
+                    }
+                );
+        }
+    } catch (error) {
+        console.error('PLANNER COMPATIBILITY GRAPH SYNC ERROR');
+        console.error(error);
+    }
 
     let dependencyValidation;
 
