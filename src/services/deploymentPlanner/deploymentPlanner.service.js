@@ -18,8 +18,10 @@
  * Deploy/Skip still uses editable only.
  *
  * Phase 4B: every selection builds an internal PlannerDecision first.
- * Runtime mutation still follows legacy editable logic; TRUST_POLICY empty
- * → useAnalyzer remains false. PlannerDecision is not returned via REST.
+ * Phase 4C: execution is driven by PlannerDecision via executePlannerDecision
+ * → Legacy Executor or Analyzer Executor (analyzer currently falls back to
+ * legacy). TRUST_POLICY empty → useAnalyzer remains false → Legacy only.
+ * PlannerDecision is not returned via REST.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
  * auto-includes dependencies where action === DEPLOY && selected === true.
@@ -333,6 +335,7 @@ function buildPlannerDecision({
         fallbackUsed,
         decisionPath,
         collectionKind,
+        found,
         trace: resolved.trace
     };
 }
@@ -385,6 +388,69 @@ function applyChoiceToIndexedItem({
     );
 
     return true;
+}
+
+/**
+ * Legacy Executor — existing editable override path (unchanged logic).
+ *
+ * @param {object} plannerDecision
+ * @param {object} context
+ * @returns {boolean}
+ */
+function executeLegacyPlannerDecision(plannerDecision, context) {
+    const {
+        indexed,
+        index,
+        summary
+    } = context;
+
+    return applyChoiceToIndexedItem({
+        indexed,
+        index,
+        choice: plannerDecision.choice,
+        collectionKind: plannerDecision.collectionKind,
+        summary,
+        metadataType: plannerDecision.metadataType,
+        metadataName: plannerDecision.metadataName
+    });
+}
+
+/**
+ * Analyzer Executor — seam for later analyzer-backed Deploy/Skip.
+ * Phase 4C: no analyzer decisions yet; immediately fall back to Legacy.
+ *
+ * @param {object} plannerDecision
+ * @param {object} context
+ * @returns {boolean}
+ */
+function executeAnalyzerPlannerDecision(plannerDecision, context) {
+    return executeLegacyPlannerDecision(plannerDecision, context);
+}
+
+/**
+ * Execute a PlannerDecision by routing to Analyzer or Legacy executor.
+ * With empty TRUST_POLICY, useAnalyzer is always false → Legacy Executor.
+ *
+ * @param {object} plannerDecision
+ * @param {object} context
+ * @returns {boolean}
+ */
+function executePlannerDecision(plannerDecision, context) {
+    if (!plannerDecision || plannerDecision.found === false) {
+        return false;
+    }
+
+    if (
+        plannerDecision.decision === PLANNER_DECISION_OUTCOME.IGNORE_UNKNOWN
+    ) {
+        return false;
+    }
+
+    if (plannerDecision.useAnalyzer) {
+        return executeAnalyzerPlannerDecision(plannerDecision, context);
+    }
+
+    return executeLegacyPlannerDecision(plannerDecision, context);
 }
 
 /**
@@ -497,22 +563,12 @@ function applyPlannerOverrides({
                 decisionTraces.push(plannerDecision.trace);
             }
 
-            // Phase 4B: PlannerDecision is built first; mutation still uses
-            // legacy editable logic. TRUST_POLICY empty → useAnalyzer false.
-            if (plannerDecision.useAnalyzer) {
-                // Reserved for later analyzer-backed Deploy/Skip gating.
-                // Unreachable while TRUST_POLICY lists are empty.
-            } else {
-                applyChoiceToIndexedItem({
-                    indexed: indexedPrimary,
-                    index: primaryPos,
-                    choice,
-                    collectionKind: 'selectedMetadata',
-                    summary,
-                    metadataType,
-                    metadataName
-                });
-            }
+            // Phase 4C: PlannerDecision drives execution (Legacy while trust empty).
+            executePlannerDecision(plannerDecision, {
+                indexed: indexedPrimary,
+                index: primaryPos,
+                summary
+            });
         }
 
         if (foundInDependencies) {
@@ -531,20 +587,11 @@ function applyPlannerOverrides({
                 decisionTraces.push(plannerDecision.trace);
             }
 
-            if (plannerDecision.useAnalyzer) {
-                // Reserved for later analyzer-backed Deploy/Skip gating.
-                // Unreachable while TRUST_POLICY lists are empty.
-            } else {
-                applyChoiceToIndexedItem({
-                    indexed: indexedDependencies,
-                    index: dependencyPos,
-                    choice,
-                    collectionKind: 'requiredDependencies',
-                    summary,
-                    metadataType,
-                    metadataName
-                });
-            }
+            executePlannerDecision(plannerDecision, {
+                indexed: indexedDependencies,
+                index: dependencyPos,
+                summary
+            });
         }
     }
 
@@ -571,9 +618,12 @@ function applyPlannerOverrides({
 
 module.exports = {
     applyPlannerOverrides,
-    // Exported for resolver / PlannerDecision verification only.
+    // Exported for resolver / PlannerDecision / executor verification only.
     resolvePlannerDecision,
     buildPlannerDecision,
+    executePlannerDecision,
+    executeLegacyPlannerDecision,
+    executeAnalyzerPlannerDecision,
     PLANNER_DECISION_OUTCOME,
     PLANNER_CONFIDENCE,
     TRUST_POLICY
