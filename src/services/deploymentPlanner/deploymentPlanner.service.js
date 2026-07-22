@@ -23,6 +23,8 @@
  * legacy). TRUST_POLICY empty → useAnalyzer remains false → Legacy only.
  * Phase 4D: PlannerDecision.canSkip is computed (EXISTENCE capability only);
  * it does not authorize Skip while trust / analyzer executor remain disabled.
+ * Phase 4E: Shadow Validation compares legacy editable vs analyzer canSkip
+ * internally; analyzer never affects runtime mutation.
  * PlannerDecision is not returned via REST.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
@@ -251,6 +253,51 @@ function isPlannerEditable(item, collectionKind) {
 }
 
 /**
+ * Phase 4E — Shadow Validation.
+ * Compare legacy editable gate vs analyzer canSkip capability.
+ * Diagnostics only — never drives mutation or REST.
+ *
+ * @param {object} params
+ * @param {boolean} params.legacyEditable
+ * @param {boolean} params.analyzerCanSkip
+ * @returns {{
+ *   legacyEditable: boolean,
+ *   analyzerCanSkip: boolean,
+ *   sameOutcome: boolean,
+ *   differenceReason: string|null
+ * }}
+ */
+function buildShadowValidation({
+    legacyEditable = false,
+    analyzerCanSkip = false
+} = {}) {
+    const legacy = legacyEditable === true;
+    const analyzer = analyzerCanSkip === true;
+    const sameOutcome = legacy === analyzer;
+
+    let differenceReason = null;
+
+    if (!sameOutcome) {
+        if (legacy === true && analyzer === false) {
+            differenceReason =
+                'Analyzer determined metadata is not safe to skip.';
+        } else if (legacy === false && analyzer === true) {
+            differenceReason = 'Legacy marked metadata mandatory.';
+        } else {
+            differenceReason =
+                'Legacy editable and analyzer canSkip disagree.';
+        }
+    }
+
+    return {
+        legacyEditable: legacy,
+        analyzerCanSkip: analyzer,
+        sameOutcome,
+        differenceReason
+    };
+}
+
+/**
  * Build an internal PlannerDecision for one selection hit.
  * Not returned via REST. Phase 4B infrastructure only — does not change
  * mutation behavior (legacy editable path still applies overrides).
@@ -339,6 +386,12 @@ function buildPlannerDecision({
         confidence = PLANNER_CONFIDENCE.HIGH;
     }
 
+    // Phase 4E: shadow compare legacy vs analyzer — never affects runtime.
+    const shadowValidation = buildShadowValidation({
+        legacyEditable: editable,
+        analyzerCanSkip: canSkip
+    });
+
     return {
         metadataType,
         metadataName,
@@ -356,6 +409,7 @@ function buildPlannerDecision({
         decisionPath,
         collectionKind,
         found,
+        shadowValidation,
         trace: resolved.trace
     };
 }
@@ -505,9 +559,10 @@ function applyPlannerOverrides({
     const compatibilityRowIndex = buildCompatibilityRowIndex(
         plannerCompatibilityReport
     );
-    // Phase 2E / 4B: internal diagnostics only — not returned, not persisted.
+    // Phase 2E / 4B / 4E: internal diagnostics only — not returned, not persisted.
     const decisionTraces = [];
     const plannerDecisions = [];
+    const shadowValidations = [];
 
     if (selections.length === 0) {
         return {
@@ -554,6 +609,9 @@ function applyPlannerOverrides({
             // PlannerDecision is recorded internally; traces stay unchanged
             // (unknown selections never contributed traces before Phase 4B).
             plannerDecisions.push(unknownDecision);
+            if (unknownDecision.shadowValidation) {
+                shadowValidations.push(unknownDecision.shadowValidation);
+            }
 
             summary.unknownIgnored += 1;
             summary.overridesIgnored += 1;
@@ -579,6 +637,10 @@ function applyPlannerOverrides({
 
             plannerDecisions.push(plannerDecision);
 
+            if (plannerDecision.shadowValidation) {
+                shadowValidations.push(plannerDecision.shadowValidation);
+            }
+
             if (plannerDecision.trace) {
                 decisionTraces.push(plannerDecision.trace);
             }
@@ -602,6 +664,10 @@ function applyPlannerOverrides({
             });
 
             plannerDecisions.push(plannerDecision);
+
+            if (plannerDecision.shadowValidation) {
+                shadowValidations.push(plannerDecision.shadowValidation);
+            }
 
             if (plannerDecision.trace) {
                 decisionTraces.push(plannerDecision.trace);
@@ -628,6 +694,7 @@ function applyPlannerOverrides({
     // Internal diagnostics only — intentionally not returned or exposed.
     void decisionTraces;
     void plannerDecisions;
+    void shadowValidations;
 
     return {
         selectedMetadata: nextSelectedMetadata,
@@ -641,6 +708,7 @@ module.exports = {
     // Exported for resolver / PlannerDecision / executor verification only.
     resolvePlannerDecision,
     buildPlannerDecision,
+    buildShadowValidation,
     executePlannerDecision,
     executeLegacyPlannerDecision,
     executeAnalyzerPlannerDecision,
