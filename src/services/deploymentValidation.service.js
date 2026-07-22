@@ -21,6 +21,7 @@ const {
     extractDeploymentSelections
 } = require('./deploymentPlanner/deploymentSelections.foundation');
 const deploymentPlannerService = require('./deploymentPlanner/deploymentPlanner.service');
+const deploymentPlannerCompatibilityAnalyzerService = require('./deploymentPlannerCompatibility/deploymentPlannerCompatibility.analyzer.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -584,6 +585,28 @@ async function validateDeployment({
         };
         resolvedRequiredDependencies = enrichedRequiredDependencies;
     }
+
+    // Phase 1 — Planner Compatibility Analyzer (report-only).
+    // Read-only: does not mutate inventories or deployment decisions.
+    // Result is intentionally unused; failures must not affect deployment.
+    let plannerCompatibilityReport = null;
+
+    try {
+        plannerCompatibilityReport =
+            deploymentPlannerCompatibilityAnalyzerService.analyzePlannerCompatibility(
+                {
+                    selectedMetadata: artifactEnrichedSelectedMetadata,
+                    resolvedDependencies: resolvedRequiredDependencies
+                }
+            );
+    } catch (error) {
+        console.error('PLANNER COMPATIBILITY ANALYZER ERROR');
+        console.error(error);
+        plannerCompatibilityReport = null;
+    }
+
+    // Silence unused-variable lint for Phase 1 intentional non-use.
+    void plannerCompatibilityReport;
 
     // Apply Deployment Planner overrides AFTER Dependency Resolution and
     // BEFORE Compatibility so Compatibility validates the committed plan.
