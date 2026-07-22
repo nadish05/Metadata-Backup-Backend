@@ -122,6 +122,7 @@ const TRUST_POLICY = Object.freeze({
     CustomLabel: Object.freeze(['EXISTENCE']),
     Layout: Object.freeze([]),
     Flow: Object.freeze([]),
+    NamedCredential: Object.freeze(['EXISTENCE']),
     PermissionSet: Object.freeze(['EXISTENCE']),
     Profile: Object.freeze([])
 });
