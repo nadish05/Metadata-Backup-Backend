@@ -170,6 +170,11 @@ async function queryCustomObjectExists(
     return Array.isArray(response.data?.records) && response.data.records.length > 0;
 }
 
+/**
+ * LEGACY — retained for later cleanup. No longer called by resolveDependencies.
+ * Destination existence now comes from Destination Inventory Builder via
+ * toDestinationStateMap → context.destinationStates.
+ */
 async function buildDestinationStates(
     dependencies,
     resolvers,
@@ -296,12 +301,18 @@ function logResolutionResults(decisions, summary) {
  * Deployable, blocking discovered references participate in the same
  * dependency list and decision flow as requiredDependencies.
  *
+ * Destination existence comes from the Destination Inventory Builder via
+ * destinationStates (toDestinationStateMap). Legacy buildDestinationStates()
+ * is retained but no longer called.
+ *
  * @param {{
  *   requiredDependencies?: Array,
  *   discoveredReferences?: Array,
  *   selectedMetadata?: Array,
  *   accessToken?: string,
- *   instanceUrl?: string
+ *   instanceUrl?: string,
+ *   destinationStates?: Map<string, string>,
+ *   destinationStateWarnings?: string[]
  * }} options
  */
 async function resolveDependencies({
@@ -309,7 +320,9 @@ async function resolveDependencies({
     discoveredReferences,
     selectedMetadata,
     accessToken,
-    instanceUrl
+    instanceUrl,
+    destinationStates,
+    destinationStateWarnings
 } = {}) {
     logSection('Dependency Resolution Engine');
 
@@ -331,15 +344,15 @@ async function resolveDependencies({
         };
     }
 
-    const { destinationStates, warnings } = await buildDestinationStates(
-        dependencies,
-        resolvers,
-        { accessToken, instanceUrl }
-    );
+    const resolvedDestinationStates =
+        destinationStates instanceof Map ? destinationStates : new Map();
+    const warnings = Array.isArray(destinationStateWarnings)
+        ? [...destinationStateWarnings]
+        : [];
 
     const context = {
         selectedMetadataKeys,
-        destinationStates,
+        destinationStates: resolvedDestinationStates,
         accessToken,
         instanceUrl
     };

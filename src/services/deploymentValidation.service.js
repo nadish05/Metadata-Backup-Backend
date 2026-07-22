@@ -24,7 +24,7 @@ const deploymentPlannerService = require('./deploymentPlanner/deploymentPlanner.
 const deploymentPlannerCompatibilityAnalyzerService = require('./deploymentPlannerCompatibility/deploymentPlannerCompatibility.analyzer.service');
 const {
     buildDestinationInventory,
-    getState
+    toDestinationStateMap
 } = require('./destinationInventory/destinationInventoryBuilder.service');
 
 function logSection(title) {
@@ -58,10 +58,10 @@ function resolveDeploymentMode(deploymentPackage) {
 }
 
 /**
- * Collect metadata participating in validation for shadow inventory only.
- * Does not mutate inventories or affect Deploy/Skip decisions.
+ * Collect metadata participating in validation for Destination Inventory.
+ * Does not mutate inventories or affect Deploy/Skip decisions by itself.
  */
-function collectShadowInventoryItems({
+function collectDestinationInventoryItems({
     selectedMetadata,
     requiredDependencies,
     discoveredReferences
@@ -102,104 +102,6 @@ function collectShadowInventoryItems({
     }
 
     return [...byKey.values()];
-}
-
-function countStates(values) {
-    return {
-        EXISTS: values.filter((state) => state === 'EXISTS').length,
-        MISSING: values.filter((state) => state === 'MISSING').length,
-        UNKNOWN: values.filter((state) => state === 'UNKNOWN').length
-    };
-}
-
-/**
- * Compare CustomObject shadow inventory to Dependency Resolution
- * destinationState values (from buildDestinationStates). Diagnostics only.
- */
-function compareCustomObjectInventoryParity(inventory, resolvedDependencies) {
-    const currentStates = [];
-    const shadowStates = [];
-    const mismatches = [];
-
-    for (const dependency of resolvedDependencies || []) {
-        const metadataType =
-            dependency?.metadataType || dependency?.type || null;
-        const metadataName =
-            dependency?.metadataName || dependency?.name || null;
-
-        if (metadataType !== 'CustomObject' || !metadataName) {
-            continue;
-        }
-
-        const currentState = dependency?.destinationState || 'UNKNOWN';
-        const shadowState = getState(
-            inventory,
-            'CustomObject',
-            metadataName
-        );
-
-        currentStates.push(currentState);
-        shadowStates.push(shadowState);
-
-        if (currentState !== shadowState) {
-            mismatches.push({
-                metadataType: 'CustomObject',
-                metadataName,
-                currentState,
-                shadowState
-            });
-        }
-    }
-
-    return {
-        compared: currentStates.length,
-        current: countStates(currentStates),
-        shadow: countStates(shadowStates),
-        mismatches
-    };
-}
-
-function logShadowDestinationInventoryDiagnostics({
-    summary,
-    parity
-} = {}) {
-    logSection('Destination Inventory Shadow Mode');
-    console.log('Shadow inventory summary:');
-    console.log('Requested:', summary?.requested ?? 0);
-    console.log('EXISTS:', summary?.exists ?? 0);
-    console.log('MISSING:', summary?.missing ?? 0);
-    console.log('UNKNOWN:', summary?.unknown ?? 0);
-    console.log('Unsupported:', summary?.unsupported ?? 0);
-
-    console.log('CustomObject parity vs buildDestinationStates():');
-    console.log('Compared:', parity?.compared ?? 0);
-    console.log(
-        'Current EXISTS/MISSING/UNKNOWN:',
-        parity?.current?.EXISTS ?? 0,
-        parity?.current?.MISSING ?? 0,
-        parity?.current?.UNKNOWN ?? 0
-    );
-    console.log(
-        'Shadow EXISTS/MISSING/UNKNOWN:',
-        parity?.shadow?.EXISTS ?? 0,
-        parity?.shadow?.MISSING ?? 0,
-        parity?.shadow?.UNKNOWN ?? 0
-    );
-
-    if (parity?.mismatches?.length) {
-        console.log('Parity mismatches:', parity.mismatches.length);
-        for (const mismatch of parity.mismatches) {
-            console.log(
-                `${mismatch.metadataType}:${mismatch.metadataName}`,
-                `current=${mismatch.currentState}`,
-                `shadow=${mismatch.shadowState}`
-            );
-        }
-    } else {
-        console.log('Parity mismatches: (none)');
-    }
-
-    console.log('Shadow mode does not influence runtime behavior.');
 }
 
 function resolveErrorMessage(error) {
@@ -703,13 +605,52 @@ async function validateDeployment({
     }
 
     try {
+        // Phase 3D Step 4 — Destination Inventory feeds Dependency Resolution.
+        // Inventory Map → toDestinationStateMap → context.destinationStates.
+        // Legacy buildDestinationStates() is no longer called.
+        let destinationStates = new Map();
+        let destinationStateWarnings = [];
+
+        try {
+            const inventoryItems = collectDestinationInventoryItems({
+                selectedMetadata: artifactEnrichedSelectedMetadata,
+                requiredDependencies: enrichedRequiredDependencies,
+                discoveredReferences
+            });
+
+            const inventoryResult = await buildDestinationInventory({
+                items: inventoryItems,
+                accessToken: accessTokenForDownstream,
+                instanceUrl: resolvedInstanceUrl
+            });
+
+            destinationStates = toDestinationStateMap(
+                inventoryResult.inventory
+            );
+            destinationStateWarnings = Array.isArray(
+                inventoryResult.summary?.warnings
+            )
+                ? inventoryResult.summary.warnings
+                : [];
+        } catch (inventoryError) {
+            console.error('DESTINATION INVENTORY BUILDER ERROR');
+            console.error(inventoryError);
+            destinationStates = new Map();
+            destinationStateWarnings = [
+                inventoryError.message ||
+                    'Destination inventory failed; continuing with UNKNOWN destination states.'
+            ];
+        }
+
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
                 requiredDependencies: enrichedRequiredDependencies,
                 discoveredReferences,
                 selectedMetadata: artifactEnrichedSelectedMetadata,
                 accessToken: accessTokenForDownstream,
-                instanceUrl: resolvedInstanceUrl
+                instanceUrl: resolvedInstanceUrl,
+                destinationStates,
+                destinationStateWarnings
             });
 
         resolvedRequiredDependencies =
@@ -733,36 +674,6 @@ async function validateDeployment({
             ]
         };
         resolvedRequiredDependencies = enrichedRequiredDependencies;
-    }
-
-    // Phase 3D Step 3 — Destination Inventory Builder (shadow mode).
-    // Builds inventory for diagnostics only. Output is not passed downstream
-    // and must not change destinationState, editable, action, package, or deploy.
-    try {
-        const shadowItems = collectShadowInventoryItems({
-            selectedMetadata: artifactEnrichedSelectedMetadata,
-            requiredDependencies: enrichedRequiredDependencies,
-            discoveredReferences
-        });
-
-        const shadowInventoryResult = await buildDestinationInventory({
-            items: shadowItems,
-            accessToken: accessTokenForDownstream,
-            instanceUrl: resolvedInstanceUrl
-        });
-
-        const customObjectParity = compareCustomObjectInventoryParity(
-            shadowInventoryResult.inventory,
-            resolvedRequiredDependencies
-        );
-
-        logShadowDestinationInventoryDiagnostics({
-            summary: shadowInventoryResult.summary,
-            parity: customObjectParity
-        });
-    } catch (error) {
-        console.error('DESTINATION INVENTORY SHADOW MODE ERROR');
-        console.error(error);
     }
 
     // Phase 1 — Planner Compatibility Analyzer (report-only).
