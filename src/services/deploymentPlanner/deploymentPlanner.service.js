@@ -17,11 +17,30 @@
  * produces an internal decision trace. While every type trusts nothing,
  * Deploy/Skip still uses editable only.
  *
+ * Phase 4B: every selection builds an internal PlannerDecision first.
+ * Runtime mutation still follows legacy editable logic; TRUST_POLICY empty
+ * → useAnalyzer remains false. PlannerDecision is not returned via REST.
+ *
  * Package Generation is unchanged: it still includes all selectedMetadata and
  * auto-includes dependencies where action === DEPLOY && selected === true.
  * Skipped primary metadata is removed from selectedMetadata before Package
  * Generation runs so existing package composition behaviour is preserved.
  */
+
+const PLANNER_DECISION_OUTCOME = Object.freeze({
+    APPLY: 'APPLY',
+    IGNORE_MANDATORY: 'IGNORE_MANDATORY',
+    IGNORE_UNKNOWN: 'IGNORE_UNKNOWN',
+    IGNORE_NOT_SKIPPABLE: 'IGNORE_NOT_SKIPPABLE',
+    NOOP: 'NOOP'
+});
+
+const PLANNER_CONFIDENCE = Object.freeze({
+    HIGH: 'HIGH',
+    MEDIUM: 'MEDIUM',
+    LOW: 'LOW',
+    NONE: 'NONE'
+});
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -214,8 +233,114 @@ function isPlannerEditable(item, collectionKind) {
 }
 
 /**
+ * Build an internal PlannerDecision for one selection hit.
+ * Not returned via REST. Phase 4B infrastructure only — does not change
+ * mutation behavior (legacy editable path still applies overrides).
+ *
+ * @param {object} params
+ * @param {object|null} [params.metadataItem]
+ * @param {object|null} [params.plannerCompatibilityRow]
+ * @param {string|null} [params.choice]
+ * @param {'selectedMetadata'|'requiredDependencies'|null} [params.collectionKind]
+ * @param {boolean} [params.found]
+ * @returns {object} PlannerDecision
+ */
+function buildPlannerDecision({
+    metadataItem = null,
+    plannerCompatibilityRow = null,
+    choice = null,
+    collectionKind = null,
+    found = true
+} = {}) {
+    const resolved = resolvePlannerDecision({
+        metadataItem,
+        plannerCompatibilityRow
+    });
+
+    const metadataType =
+        getItemType(metadataItem) ||
+        plannerCompatibilityRow?.metadataType ||
+        resolved.trace?.metadataType ||
+        null;
+    const metadataName =
+        getItemName(metadataItem) ||
+        plannerCompatibilityRow?.metadataName ||
+        resolved.trace?.metadataName ||
+        null;
+
+    const analysisLevel = resolved.trace?.analysisLevel || 'NONE';
+    const destinationState =
+        metadataItem?.destinationState ||
+        plannerCompatibilityRow?.destinationState ||
+        null;
+
+    const useAnalyzer = resolved.useAnalyzer === true;
+    const canSkip = resolved.canSkip === true;
+    const fallbackUsed = !useAnalyzer;
+    const decisionPath =
+        resolved.trace?.decisionPath || 'LEGACY_EDITABLE';
+
+    const editable =
+        found && metadataItem
+            ? isPlannerEditable(metadataItem, collectionKind)
+            : false;
+
+    let allowOverride = false;
+    let decision = PLANNER_DECISION_OUTCOME.IGNORE_UNKNOWN;
+    let reason = 'Selection does not match selectedMetadata or resolvedDependencies.';
+    let confidence = PLANNER_CONFIDENCE.NONE;
+
+    if (!found) {
+        allowOverride = false;
+        decision = PLANNER_DECISION_OUTCOME.IGNORE_UNKNOWN;
+        reason =
+            'Selection does not match selectedMetadata or resolvedDependencies.';
+        confidence = PLANNER_CONFIDENCE.NONE;
+    } else if (useAnalyzer) {
+        // Reserved analyzer path (unreachable while TRUST_POLICY is empty).
+        // Mirror current empty stub: no selected mutation via analyzer yet.
+        allowOverride = false;
+        decision = PLANNER_DECISION_OUTCOME.IGNORE_NOT_SKIPPABLE;
+        reason =
+            'Analyzer path reserved; analyzer-backed override not implemented.';
+        confidence = PLANNER_CONFIDENCE.LOW;
+    } else if (!editable) {
+        allowOverride = false;
+        decision = PLANNER_DECISION_OUTCOME.IGNORE_MANDATORY;
+        reason = 'Item is not planner-editable; selection ignored.';
+        confidence = PLANNER_CONFIDENCE.HIGH;
+    } else {
+        // Legacy editable path — mutation still re-validates via applyChoice.
+        allowOverride = true;
+        decision = PLANNER_DECISION_OUTCOME.APPLY;
+        reason = 'Legacy editable path; selection may update selected.';
+        confidence = PLANNER_CONFIDENCE.HIGH;
+    }
+
+    return {
+        metadataType,
+        metadataName,
+        choice,
+        editable,
+        canSkip,
+        allowOverride,
+        decision,
+        reason,
+        analysisLevel,
+        confidence,
+        destinationState,
+        useAnalyzer,
+        fallbackUsed,
+        decisionPath,
+        collectionKind,
+        trace: resolved.trace
+    };
+}
+
+/**
  * Apply one selection to a shallow-copied collection in place.
  * Returns whether an effective override was applied.
+ * Legacy editable gate is re-checked here (unchanged Phase 4.4B behavior).
  */
 function applyChoiceToIndexedItem({
     indexed,
@@ -294,8 +419,9 @@ function applyPlannerOverrides({
     const compatibilityRowIndex = buildCompatibilityRowIndex(
         plannerCompatibilityReport
     );
-    // Phase 2E: internal decision traces only — not returned, not persisted.
+    // Phase 2E / 4B: internal diagnostics only — not returned, not persisted.
     const decisionTraces = [];
+    const plannerDecisions = [];
 
     if (selections.length === 0) {
         return {
@@ -330,6 +456,19 @@ function applyPlannerOverrides({
         const foundInDependencies = dependencyPos !== undefined;
 
         if (!foundInPrimary && !foundInDependencies) {
+            const unknownDecision = buildPlannerDecision({
+                metadataItem: { metadataType, metadataName },
+                plannerCompatibilityRow:
+                    compatibilityRowIndex.get(key) || null,
+                choice,
+                collectionKind: null,
+                found: false
+            });
+
+            // PlannerDecision is recorded internally; traces stay unchanged
+            // (unknown selections never contributed traces before Phase 4B).
+            plannerDecisions.push(unknownDecision);
+
             summary.unknownIgnored += 1;
             summary.overridesIgnored += 1;
             console.log(
@@ -344,20 +483,24 @@ function applyPlannerOverrides({
 
         if (foundInPrimary) {
             const metadataItem = indexedPrimary[primaryPos];
-            const plannerDecision = resolvePlannerDecision({
+            const plannerDecision = buildPlannerDecision({
                 metadataItem,
-                plannerCompatibilityRow
+                plannerCompatibilityRow,
+                choice,
+                collectionKind: 'selectedMetadata',
+                found: true
             });
+
+            plannerDecisions.push(plannerDecision);
 
             if (plannerDecision.trace) {
                 decisionTraces.push(plannerDecision.trace);
             }
 
-            // Phase 2E: TRUST_POLICY lists are empty → useAnalyzer is false.
-            // Legacy editable path via unchanged applyChoiceToIndexedItem.
+            // Phase 4B: PlannerDecision is built first; mutation still uses
+            // legacy editable logic. TRUST_POLICY empty → useAnalyzer false.
             if (plannerDecision.useAnalyzer) {
-                // Reserved for Phase 2F+: analyzer-backed Deploy/Skip gating
-                // when a metadata type trusts EXISTENCE (or higher).
+                // Reserved for later analyzer-backed Deploy/Skip gating.
                 // Unreachable while TRUST_POLICY lists are empty.
             } else {
                 applyChoiceToIndexedItem({
@@ -374,18 +517,22 @@ function applyPlannerOverrides({
 
         if (foundInDependencies) {
             const metadataItem = indexedDependencies[dependencyPos];
-            const plannerDecision = resolvePlannerDecision({
+            const plannerDecision = buildPlannerDecision({
                 metadataItem,
-                plannerCompatibilityRow
+                plannerCompatibilityRow,
+                choice,
+                collectionKind: 'requiredDependencies',
+                found: true
             });
+
+            plannerDecisions.push(plannerDecision);
 
             if (plannerDecision.trace) {
                 decisionTraces.push(plannerDecision.trace);
             }
 
             if (plannerDecision.useAnalyzer) {
-                // Reserved for Phase 2F+: analyzer-backed Deploy/Skip gating
-                // when a metadata type trusts EXISTENCE (or higher).
+                // Reserved for later analyzer-backed Deploy/Skip gating.
                 // Unreachable while TRUST_POLICY lists are empty.
             } else {
                 applyChoiceToIndexedItem({
@@ -413,6 +560,7 @@ function applyPlannerOverrides({
 
     // Internal diagnostics only — intentionally not returned or exposed.
     void decisionTraces;
+    void plannerDecisions;
 
     return {
         selectedMetadata: nextSelectedMetadata,
@@ -423,7 +571,10 @@ function applyPlannerOverrides({
 
 module.exports = {
     applyPlannerOverrides,
-    // Exported for resolver policy verification only.
+    // Exported for resolver / PlannerDecision verification only.
     resolvePlannerDecision,
+    buildPlannerDecision,
+    PLANNER_DECISION_OUTCOME,
+    PLANNER_CONFIDENCE,
     TRUST_POLICY
 };
