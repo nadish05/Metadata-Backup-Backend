@@ -9,14 +9,16 @@
  * - Uses only selectedMetadata + resolvedDependencies already in memory.
  * - Does NOT modify any input collections.
  * - Reports analysisLevel based on destination existence analysis.
+ * - Reports canSkip capability for EXISTENCE analysis (Phase 4D).
  * - Does NOT encode planner fallback / editable rules.
- * - Does NOT grant canSkip (remains false until a later phase).
+ * - Does NOT authorize Skip (Trust Policy / Analyzer Executor still decide).
  *
- * Phase 2C:
+ * Phase 2C / 4D:
  * - existsInDestination === true → analysisLevel EXISTENCE
  * - otherwise → analysisLevel NONE
+ * - canSkip capability: EXISTS + EXISTENCE → true; else false
  *
- * Planner continues to ignore this report while TRUSTED_ANALYSIS_LEVELS
+ * Planner continues to ignore this report for mutation while TRUST_POLICY
  * remains empty.
  */
 
@@ -53,8 +55,44 @@ function resolveExistsInDestination(destinationState) {
 }
 
 /**
+ * Compute Skip capability for EXISTENCE analysis only.
+ * Capability ≠ authorization (Trust Policy / Analyzer Executor authorize).
+ *
+ * Rules:
+ * - analysisLevel NONE → false
+ * - analysisLevel not EXISTENCE → false
+ * - destinationState EXISTS → true
+ * - destinationState MISSING / UNKNOWN / missing → false
+ *
+ * @param {object} [params]
+ * @param {string|null} [params.destinationState]
+ * @param {string|null} [params.analysisLevel]
+ * @returns {boolean}
+ */
+function computeCanSkip({
+    destinationState = null,
+    analysisLevel = null
+} = {}) {
+    if (analysisLevel === ANALYSIS_LEVEL.NONE || !analysisLevel) {
+        return false;
+    }
+
+    // Phase 4D: EXISTENCE policy only.
+    if (analysisLevel !== ANALYSIS_LEVEL.EXISTENCE) {
+        return false;
+    }
+
+    if (destinationState === 'EXISTS') {
+        return true;
+    }
+
+    // MISSING, UNKNOWN, null, or any other value.
+    return false;
+}
+
+/**
  * Build a planner compatibility row using destination existence analysis.
- * canSkip is intentionally unchanged (always false in Phase 2C).
+ * canSkip is capability only (Phase 4D); it does not authorize Skip.
  */
 function buildCompatibilityResult(item) {
     const metadataType = getMetadataType(item);
@@ -63,16 +101,20 @@ function buildCompatibilityResult(item) {
     const existsInDestination = resolveExistsInDestination(destinationState);
 
     const exists = existsInDestination === true;
+    const analysisLevel = exists
+        ? ANALYSIS_LEVEL.EXISTENCE
+        : ANALYSIS_LEVEL.NONE;
 
     return {
         metadataType,
         metadataName,
         existsInDestination,
         graphSafe: false,
-        canSkip: false,
-        analysisLevel: exists
-            ? ANALYSIS_LEVEL.EXISTENCE
-            : ANALYSIS_LEVEL.NONE,
+        canSkip: computeCanSkip({
+            destinationState,
+            analysisLevel
+        }),
+        analysisLevel,
         reason: exists
             ? 'Destination metadata located.'
             : 'Metadata not found in destination.'
@@ -181,5 +223,6 @@ function analyzePlannerCompatibility({
 
 module.exports = {
     ANALYSIS_LEVEL,
+    computeCanSkip,
     analyzePlannerCompatibility
 };

@@ -21,6 +21,8 @@
  * Phase 4C: execution is driven by PlannerDecision via executePlannerDecision
  * → Legacy Executor or Analyzer Executor (analyzer currently falls back to
  * legacy). TRUST_POLICY empty → useAnalyzer remains false → Legacy only.
+ * Phase 4D: PlannerDecision.canSkip is computed (EXISTENCE capability only);
+ * it does not authorize Skip while trust / analyzer executor remain disabled.
  * PlannerDecision is not returned via REST.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
@@ -43,6 +45,10 @@ const PLANNER_CONFIDENCE = Object.freeze({
     LOW: 'LOW',
     NONE: 'NONE'
 });
+
+const {
+    computeCanSkip
+} = require('../deploymentPlannerCompatibility/deploymentPlannerCompatibility.analyzer.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -181,6 +187,16 @@ function resolvePlannerDecision({
         null;
     const analysisLevel =
         plannerCompatibilityRow?.analysisLevel || 'NONE';
+    const destinationState =
+        metadataItem?.destinationState ||
+        plannerCompatibilityRow?.destinationState ||
+        null;
+
+    // Phase 4D: capability only — does not authorize Skip by itself.
+    const canSkip = computeCanSkip({
+        destinationState,
+        analysisLevel
+    });
 
     const trustedLevels = Array.isArray(TRUST_POLICY[metadataType])
         ? [...TRUST_POLICY[metadataType]]
@@ -191,7 +207,7 @@ function resolvePlannerDecision({
     if (trustMatched) {
         return {
             useAnalyzer: true,
-            canSkip: plannerCompatibilityRow?.canSkip === true,
+            canSkip,
             trace: {
                 metadataType,
                 metadataName,
@@ -206,7 +222,7 @@ function resolvePlannerDecision({
 
     return {
         useAnalyzer: false,
-        canSkip: false,
+        canSkip,
         trace: {
             metadataType,
             metadataName,
@@ -277,7 +293,11 @@ function buildPlannerDecision({
         null;
 
     const useAnalyzer = resolved.useAnalyzer === true;
-    const canSkip = resolved.canSkip === true;
+    // Phase 4D: real canSkip capability on PlannerDecision (does not authorize).
+    const canSkip = computeCanSkip({
+        destinationState,
+        analysisLevel
+    });
     const fallbackUsed = !useAnalyzer;
     const decisionPath =
         resolved.trace?.decisionPath || 'LEGACY_EDITABLE';
