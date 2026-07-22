@@ -1,5 +1,3 @@
-const axios = require('axios');
-
 const { getRegisteredResolvers } = require('./registry');
 const {
     ACTIONS,
@@ -11,10 +9,6 @@ function logSection(title) {
     console.log('------------------------------------');
     console.log(title);
     console.log('------------------------------------');
-}
-
-function escapeSoql(value) {
-    return String(value).replace(/'/g, "\\'");
 }
 
 function buildSelectedMetadataKeys(selectedMetadata) {
@@ -128,116 +122,6 @@ function createDefaultDecision(dependency) {
     });
 }
 
-async function getLatestApiVersion(instanceUrl, accessToken) {
-    const response = await axios.get(`${instanceUrl}/services/data/`, {
-        headers: {
-            Authorization: `Bearer ${accessToken}`
-        },
-        timeout: 15000
-    });
-
-    const versions = response.data;
-
-    if (!Array.isArray(versions) || !versions.length) {
-        return '59.0';
-    }
-
-    return versions[versions.length - 1].version;
-}
-
-async function queryCustomObjectExists(
-    name,
-    instanceUrl,
-    accessToken,
-    apiVersion
-) {
-    const soql =
-        'SELECT QualifiedApiName FROM EntityDefinition ' +
-        `WHERE QualifiedApiName = '${escapeSoql(name)}' LIMIT 1`;
-
-    const response = await axios.get(
-        `${instanceUrl}/services/data/v${apiVersion}/query/?q=${encodeURIComponent(
-            soql
-        )}`,
-        {
-            headers: {
-                Authorization: `Bearer ${accessToken}`
-            },
-            timeout: 15000
-        }
-    );
-
-    return Array.isArray(response.data?.records) && response.data.records.length > 0;
-}
-
-/**
- * LEGACY — retained for later cleanup. No longer called by resolveDependencies.
- * Destination existence now comes from Destination Inventory Builder via
- * toDestinationStateMap → context.destinationStates.
- */
-async function buildDestinationStates(
-    dependencies,
-    resolvers,
-    { accessToken, instanceUrl }
-) {
-    const destinationStates = new Map();
-    const warnings = [];
-
-    if (!accessToken || !instanceUrl) {
-        return { destinationStates, warnings };
-    }
-
-    const customObjectNames = dependencies
-        .filter((dependency) =>
-            resolvers.some((resolver) => resolver.applies(dependency))
-        )
-        .filter((dependency) => dependency.type === 'CustomObject')
-        .map((dependency) => dependency.name);
-
-    if (!customObjectNames.length) {
-        return { destinationStates, warnings };
-    }
-
-    let apiVersion;
-
-    try {
-        apiVersion = await getLatestApiVersion(instanceUrl, accessToken);
-    } catch (error) {
-        warnings.push(
-            error?.message ||
-                'Unable to resolve Salesforce API version for dependency resolution.'
-        );
-        return { destinationStates, warnings };
-    }
-
-    for (const name of customObjectNames) {
-        const key = `CustomObject:${name}`;
-
-        try {
-            const exists = await queryCustomObjectExists(
-                name,
-                instanceUrl,
-                accessToken,
-                apiVersion
-            );
-
-            destinationStates.set(
-                key,
-                exists ? DESTINATION_STATES.EXISTS : DESTINATION_STATES.MISSING
-            );
-        } catch (error) {
-            destinationStates.set(key, DESTINATION_STATES.UNKNOWN);
-            warnings.push(
-                `Unable to query destination state for CustomObject ${name}: ${
-                    error?.message || 'unknown error'
-                }`
-            );
-        }
-    }
-
-    return { destinationStates, warnings };
-}
-
 function buildSummary(decisions, warnings = []) {
     const summary = {
         analyzed: decisions.length,
@@ -302,8 +186,7 @@ function logResolutionResults(decisions, summary) {
  * dependency list and decision flow as requiredDependencies.
  *
  * Destination existence comes from the Destination Inventory Builder via
- * destinationStates (toDestinationStateMap). Legacy buildDestinationStates()
- * is retained but no longer called.
+ * destinationStates (toDestinationStateMap → context.destinationStates).
  *
  * @param {{
  *   requiredDependencies?: Array,

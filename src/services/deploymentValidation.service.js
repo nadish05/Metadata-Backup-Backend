@@ -649,9 +649,8 @@ async function validateDeployment({
     }
 
     try {
-        // Phase 3D Step 4 — Destination Inventory feeds Dependency Resolution.
+        // Phase 3D — Destination Inventory feeds Dependency Resolution.
         // Inventory Map → toDestinationStateMap → context.destinationStates.
-        // Legacy buildDestinationStates() is no longer called.
         let destinationStates = new Map();
         let destinationStateWarnings = [];
 

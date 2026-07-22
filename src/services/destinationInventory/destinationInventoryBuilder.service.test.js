@@ -100,46 +100,82 @@ async function main() {
         );
     });
 
-    await runTest('service is not required by runtime modules', async () => {
-        const fs = require('fs');
-        const path = require('path');
-        const root = path.join(__dirname, '..');
-        const needle =
-            "destinationInventory/destinationInventoryBuilder.service";
+    await runTest(
+        'only orchestration consumes the builder; no legacy existence helpers remain',
+        async () => {
+            const fs = require('fs');
+            const path = require('path');
+            const servicesRoot = path.join(__dirname, '..');
+            const needle =
+                "destinationInventory/destinationInventoryBuilder.service";
 
-        function walk(dir, files = []) {
-            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-                if (entry.name === 'node_modules') {
-                    continue;
+            function walk(dir, files = []) {
+                for (const entry of fs.readdirSync(dir, {
+                    withFileTypes: true
+                })) {
+                    if (entry.name === 'node_modules') {
+                        continue;
+                    }
+
+                    const full = path.join(dir, entry.name);
+
+                    if (entry.isDirectory()) {
+                        walk(full, files);
+                    } else if (entry.name.endsWith('.js')) {
+                        files.push(full);
+                    }
                 }
 
-                const full = path.join(dir, entry.name);
-
-                if (entry.isDirectory()) {
-                    walk(full, files);
-                } else if (entry.name.endsWith('.js')) {
-                    files.push(full);
-                }
+                return files;
             }
 
-            return files;
+            const consumers = walk(servicesRoot)
+                .filter((file) => {
+                    if (file.includes('destinationInventoryBuilder.service')) {
+                        return false;
+                    }
+
+                    const content = fs.readFileSync(file, 'utf8');
+                    return content.includes(needle);
+                })
+                .map((file) => path.basename(file));
+
+            assert.deepStrictEqual(consumers, [
+                'deploymentValidation.service.js'
+            ]);
+
+            const resolution = fs.readFileSync(
+                path.join(
+                    servicesRoot,
+                    'dependencyResolution',
+                    'dependencyResolution.service.js'
+                ),
+                'utf8'
+            );
+            const validation = fs.readFileSync(
+                path.join(servicesRoot, 'dependencyValidation.service.js'),
+                'utf8'
+            );
+
+            assert.strictEqual(
+                resolution.includes('buildDestinationStates'),
+                false
+            );
+            assert.strictEqual(
+                resolution.includes('queryCustomObjectExists'),
+                false
+            );
+            assert.strictEqual(
+                validation.includes('dependencyExistsInDestination'),
+                false
+            );
+            assert.strictEqual(validation.includes('runSoqlQuery'), false);
+            assert.strictEqual(
+                validation.includes('getLatestApiVersion'),
+                false
+            );
         }
-
-        const consumers = walk(root).filter((file) => {
-            if (file.includes('destinationInventoryBuilder.service')) {
-                return false;
-            }
-
-            if (file.includes('destinationInventoryBuilder.service.test')) {
-                return false;
-            }
-
-            const content = fs.readFileSync(file, 'utf8');
-            return content.includes(needle);
-        });
-
-        assert.deepStrictEqual(consumers, []);
-    });
+    );
 
     if (!process.exitCode) {
         console.log('destinationInventoryBuilder.service tests passed');

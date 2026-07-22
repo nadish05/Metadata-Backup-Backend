@@ -1,10 +1,3 @@
-const axios = require('axios');
-
-const {
-    usesToolingApi,
-    buildExistenceQuery
-} = require('./destinationInventory/destinationExistenceQueries');
-
 const SUPPORTED_DEPENDENCY_TYPES = new Set([
     'ApexClass',
     'ApexTrigger',
@@ -87,51 +80,6 @@ function isIncludedInDeploymentPackage(type, name, packageMetadataKeys) {
 }
 
 /**
- * LEGACY — retained for later cleanup. No longer called after Destination Inventory switch.
- */
-async function getLatestApiVersion(instanceUrl, accessToken) {
-    const response = await axios.get(`${instanceUrl}/services/data/`, {
-        headers: {
-            Authorization: `Bearer ${accessToken}`
-        },
-        timeout: 15000
-    });
-
-    const versions = response.data;
-
-    if (!Array.isArray(versions) || !versions.length) {
-        return '59.0';
-    }
-
-    return versions[versions.length - 1].version;
-}
-
-/**
- * LEGACY — retained for later cleanup. No longer called after Destination Inventory switch.
- */
-async function runSoqlQuery(
-    instanceUrl,
-    accessToken,
-    apiVersion,
-    soql,
-    useToolingApi = false
-) {
-    const encodedQuery = encodeURIComponent(soql);
-    const queryPath = useToolingApi ? 'tooling/query' : 'query';
-    const response = await axios.get(
-        `${instanceUrl}/services/data/v${apiVersion}/${queryPath}/?q=${encodedQuery}`,
-        {
-            headers: {
-                Authorization: `Bearer ${accessToken}`
-            },
-            timeout: 15000
-        }
-    );
-
-    return response.data;
-}
-
-/**
  * Build Dependency Validation rows from the generated deployment package.
  * This is a reporting inventory only — same source of truth as deploy.
  */
@@ -176,52 +124,7 @@ function collectDeploymentPackageInventory(generatedDeploymentPackage) {
 }
 
 /**
- * LEGACY — retained for later cleanup. No longer called by validateDependencies.
- * Destination existence now comes from Destination Inventory via destinationStates.
- */
-async function dependencyExistsInDestination(
-    type,
-    name,
-    instanceUrl,
-    accessToken,
-    apiVersion
-) {
-    const soql = buildExistenceQuery(type, name);
-
-    if (!soql) {
-        return {
-            exists: false,
-            status: 'WARNING',
-            message: `${type} validation is not supported.`
-        };
-    }
-
-    const queryResult = await runSoqlQuery(
-        instanceUrl,
-        accessToken,
-        apiVersion,
-        soql,
-        usesToolingApi(type)
-    );
-
-    const exists = (queryResult.totalSize || 0) > 0;
-
-    if (exists) {
-        return {
-            exists: true,
-            status: 'PASS'
-        };
-    }
-
-    return {
-        exists: false,
-        status: 'BLOCKED',
-        message: BLOCKED_MESSAGES[type] || `${type} not found in destination org.`
-    };
-}
-
-/**
- * Map Destination Inventory state to the legacy existence result shape.
+ * Map Destination Inventory state to Dependency Validation existence result.
  * UNKNOWN / missing entry → same behavior as the former query-failure path.
  */
 function resolveExistenceFromInventory(type, name, destinationStates) {
