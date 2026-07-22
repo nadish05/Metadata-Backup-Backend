@@ -994,13 +994,15 @@ async function validateDeployment({
         } else {
             try {
                 // Reporting only: validate the same inventory the deploy package uses.
+                // Phase 3D Step 6 — existsInDestination from Destination Inventory (no re-query).
                 dependencyValidation =
                     await dependencyValidationService.validateDependencies({
                         accessToken: accessTokenForDownstream,
                         instanceUrl: resolvedInstanceUrl,
                         deploymentPackage:
                             deploymentPackageWithResolvedDependencies,
-                        generatedDeploymentPackage
+                        generatedDeploymentPackage,
+                        destinationStates: destinationStatesForAnalyzer
                     });
             } catch (error) {
                 console.error('DEPENDENCY VALIDATION ERROR');

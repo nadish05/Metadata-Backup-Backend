@@ -86,6 +86,9 @@ function isIncludedInDeploymentPackage(type, name, packageMetadataKeys) {
     return packageMetadataKeys.has(normalizeDependencyKey(type, name));
 }
 
+/**
+ * LEGACY — retained for later cleanup. No longer called after Destination Inventory switch.
+ */
 async function getLatestApiVersion(instanceUrl, accessToken) {
     const response = await axios.get(`${instanceUrl}/services/data/`, {
         headers: {
@@ -103,6 +106,9 @@ async function getLatestApiVersion(instanceUrl, accessToken) {
     return versions[versions.length - 1].version;
 }
 
+/**
+ * LEGACY — retained for later cleanup. No longer called after Destination Inventory switch.
+ */
 async function runSoqlQuery(
     instanceUrl,
     accessToken,
@@ -169,6 +175,10 @@ function collectDeploymentPackageInventory(generatedDeploymentPackage) {
     });
 }
 
+/**
+ * LEGACY — retained for later cleanup. No longer called by validateDependencies.
+ * Destination existence now comes from Destination Inventory via destinationStates.
+ */
 async function dependencyExistsInDestination(
     type,
     name,
@@ -210,12 +220,46 @@ async function dependencyExistsInDestination(
     };
 }
 
-async function validateSingleDependency(
+/**
+ * Map Destination Inventory state to the legacy existence result shape.
+ * UNKNOWN / missing entry → same behavior as the former query-failure path.
+ */
+function resolveExistenceFromInventory(type, name, destinationStates) {
+    const key = `${type}:${name}`;
+    const state =
+        destinationStates instanceof Map
+            ? destinationStates.get(key)
+            : undefined;
+
+    if (state === 'EXISTS') {
+        return {
+            exists: true,
+            status: 'PASS'
+        };
+    }
+
+    if (state === 'MISSING') {
+        return {
+            exists: false,
+            status: 'BLOCKED',
+            message:
+                BLOCKED_MESSAGES[type] ||
+                `${type} not found in destination org.`
+        };
+    }
+
+    // UNKNOWN or no inventory entry — do not invent EXISTS/MISSING.
+    return {
+        exists: false,
+        status: 'WARNING',
+        message: `Unable to validate ${type} in destination org.`
+    };
+}
+
+function validateSingleDependency(
     dependency,
-    instanceUrl,
-    accessToken,
-    apiVersion,
-    packageMetadataKeys
+    packageMetadataKeys,
+    destinationStates
 ) {
     const { name, type } = dependency;
     const includedInDeploymentPackage = isIncludedInDeploymentPackage(
@@ -246,84 +290,48 @@ async function validateSingleDependency(
         return result;
     }
 
-    try {
-        const validationResult = await dependencyExistsInDestination(
-            type,
-            name,
-            instanceUrl,
-            accessToken,
-            apiVersion
-        );
+    const validationResult = resolveExistenceFromInventory(
+        type,
+        name,
+        destinationStates
+    );
 
-        const existsInDestination = validationResult.exists;
-        let status;
+    const existsInDestination = validationResult.exists;
+    let status;
 
-        if (existsInDestination) {
-            status = 'PASS';
-        } else if (includedInDeploymentPackage) {
-            status = 'PASS';
-        } else if (validationResult.status === 'WARNING') {
-            status = 'WARNING';
-        } else {
-            status = 'BLOCKED';
-        }
-
-        logDependencyCheck(name, type, status);
-
-        const result = {
-            name,
-            type,
-            existsInDestination,
-            includedInDeploymentPackage,
-            status
-        };
-
-        if (status === 'PASS' && includedInDeploymentPackage && !existsInDestination) {
-            result.resolution = PACKAGE_PASS_RESOLUTION;
-        } else if (status === 'BLOCKED') {
-            result.resolution = PACKAGE_BLOCKED_RESOLUTION;
-            result.message =
-                validationResult.message ||
-                BLOCKED_MESSAGES[type] ||
-                `${type} not found in destination org.`;
-        } else if (validationResult.message && status === 'WARNING') {
-            result.message = validationResult.message;
-        }
-
-        return result;
-    } catch (error) {
-        console.error(`Dependency validation error for ${type}:${name}`);
-        console.error(error.response?.data || error.message);
-
-        if (includedInDeploymentPackage) {
-            logDependencyCheck(name, type, 'PASS');
-
-            return {
-                name,
-                type,
-                existsInDestination: false,
-                includedInDeploymentPackage: true,
-                status: 'PASS',
-                resolution: PACKAGE_PASS_RESOLUTION
-            };
-        }
-
-        const status = 'WARNING';
-
-        logDependencyCheck(name, type, status);
-
-        return {
-            name,
-            type,
-            existsInDestination: false,
-            includedInDeploymentPackage: false,
-            status,
-            message:
-                error.response?.data?.[0]?.message ||
-                error.message ||
-                `Unable to validate ${type} in destination org.`
-        };
+    if (existsInDestination) {
+        status = 'PASS';
+    } else if (includedInDeploymentPackage) {
+        status = 'PASS';
+    } else if (validationResult.status === 'WARNING') {
+        status = 'WARNING';
+    } else {
+        status = 'BLOCKED';
     }
+
+    logDependencyCheck(name, type, status);
+
+    const result = {
+        name,
+        type,
+        existsInDestination,
+        includedInDeploymentPackage,
+        status
+    };
+
+    if (status === 'PASS' && includedInDeploymentPackage && !existsInDestination) {
+        result.resolution = PACKAGE_PASS_RESOLUTION;
+    } else if (status === 'BLOCKED') {
+        result.resolution = PACKAGE_BLOCKED_RESOLUTION;
+        result.message =
+            validationResult.message ||
+            BLOCKED_MESSAGES[type] ||
+            `${type} not found in destination org.`;
+    } else if (validationResult.message && status === 'WARNING') {
+        result.message = validationResult.message;
+    }
+
+    return result;
 }
 
 function resolveOverallStatus(results) {
@@ -340,7 +348,8 @@ async function validateDependencies({
     accessToken,
     instanceUrl,
     deploymentPackage,
-    generatedDeploymentPackage
+    generatedDeploymentPackage,
+    destinationStates
 }) {
     logSection('Dependency Validation Started');
 
@@ -384,16 +393,15 @@ async function validateDependencies({
         };
     }
 
-    const apiVersion = await getLatestApiVersion(instanceUrl, accessToken);
+    const resolvedDestinationStates =
+        destinationStates instanceof Map ? destinationStates : new Map();
     const results = [];
 
     for (const dependency of dependenciesToValidate) {
-        const result = await validateSingleDependency(
+        const result = validateSingleDependency(
             dependency,
-            instanceUrl,
-            accessToken,
-            apiVersion,
-            packageMetadataKeys
+            packageMetadataKeys,
+            resolvedDestinationStates
         );
 
         results.push(result);
