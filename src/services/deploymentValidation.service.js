@@ -364,6 +364,8 @@ async function validateDeployment({
     };
     let discoveredRelationships = [];
     let discoveredReferences = [];
+    // Phase 6B: retain expansion edges for Planner Compatibility (report-only).
+    let discoveredEdges = [];
     let referenceSummary = {
         referencesDiscovered: 0,
         byType: {},
@@ -517,6 +519,9 @@ async function validateDeployment({
             expansionResult.discoveredReferences || [];
         const expansionDependencies =
             expansionResult.discoveredDependencies || [];
+        discoveredEdges = Array.isArray(expansionResult.discoveredEdges)
+            ? expansionResult.discoveredEdges
+            : [];
 
         if (expansionReferences.length) {
             const referenceKeys = new Set(
@@ -590,6 +595,7 @@ async function validateDeployment({
         console.error('METADATA GRAPH EXPANSION ERROR');
         console.error(error);
 
+        discoveredEdges = [];
         graphExpansionSummary = {
             ...graphExpansionSummary,
             warnings: [
@@ -724,8 +730,8 @@ async function validateDeployment({
     }
 
     // Phase 1 — Planner Compatibility Analyzer (report-only).
-    // Phase 3D Step 5 — enrich analyzer inputs from Destination Inventory only.
-    // Planner Trust Policy unchanged → still LEGACY_EDITABLE / useAnalyzer false.
+    // Phase 3D Step 5 — enrich analyzer inputs from Destination Inventory.
+    // Phase 6B — also pass normalized graph discovery (report-only; no decision change).
     let plannerCompatibilityReport = null;
 
     try {
@@ -744,7 +750,10 @@ async function validateDeployment({
             deploymentPlannerCompatibilityAnalyzerService.analyzePlannerCompatibility(
                 {
                     selectedMetadata: analyzerSelectedMetadata,
-                    resolvedDependencies: analyzerResolvedDependencies
+                    resolvedDependencies: analyzerResolvedDependencies,
+                    discoveredRelationships,
+                    discoveredReferences,
+                    discoveredEdges
                 }
             );
     } catch (error) {
