@@ -27,6 +27,8 @@
  * internally; analyzer never affects runtime mutation.
  * Phase 4F: PermissionSet trusts EXISTENCE; Analyzer Executor honors Skip when
  * EXISTS+canSkip, forces Deploy when MISSING, falls back on UNKNOWN.
+ * Phase 5B: analyzer routing is TRUST_POLICY-driven (EXISTENCE trust → all
+ * destination states); no metadata-type name checks in routing.
  * PlannerDecision is not returned via REST.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
@@ -108,7 +110,9 @@ function createEmptySummary(selectionsReceived) {
  * Per-metadata-type trust policy for analyzer-backed planner decisions.
  * Each type lists analysis levels the planner may trust for that type only.
  *
- * Phase 4F: PermissionSet trusts EXISTENCE only. All other types trust nothing.
+ * Types that include EXISTENCE are routed to Analyzer Executor for all
+ * destination states (EXISTS / MISSING / UNKNOWN). Phase 5B: routing is
+ * TRUST_POLICY-driven only (no metadata-type name checks).
  */
 const TRUST_POLICY = Object.freeze({
     ApexClass: Object.freeze([]),
@@ -208,11 +212,9 @@ function resolvePlannerDecision({
     const trustsExistence = trustedLevels.includes('EXISTENCE');
     const trustMatched = trustedLevels.includes(analysisLevel);
 
-    // Phase 4F: PermissionSet with EXISTENCE trust always routes through
-    // Analyzer Executor (EXISTS skip, MISSING deploy, UNKNOWN → legacy).
-    const useAnalyzer =
-        trustMatched ||
-        (metadataType === 'PermissionSet' && trustsExistence);
+    // Phase 5B: any type that trusts EXISTENCE is routed to Analyzer Executor
+    // for all destination states. Other trusted levels use trustMatched only.
+    const useAnalyzer = trustsExistence || trustMatched;
 
     if (useAnalyzer) {
         return {
@@ -227,7 +229,7 @@ function resolvePlannerDecision({
                 decisionPath: 'ANALYZER',
                 fallbackReason: trustMatched
                     ? null
-                    : 'PermissionSet EXISTENCE trust; analyzer executor applies state rules.'
+                    : 'EXISTENCE trust; analyzer executor applies destination-state rules.'
             }
         };
     }
@@ -376,7 +378,7 @@ function buildPlannerDecision({
             'Selection does not match selectedMetadata or resolvedDependencies.';
         confidence = PLANNER_CONFIDENCE.NONE;
     } else if (useAnalyzer) {
-        // Phase 4F: analyzer-backed PermissionSet (and any future trusted types).
+        // Phase 5B: analyzer-backed path for any EXISTENCE-trusted type.
         if (destinationState === 'MISSING') {
             allowOverride = true;
             decision = PLANNER_DECISION_OUTCOME.APPLY;
