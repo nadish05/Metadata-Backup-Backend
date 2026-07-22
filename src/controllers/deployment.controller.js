@@ -125,19 +125,41 @@ const classRefs =
         /\b[A-Z][A-Za-z0-9_]+\./g
     ) || [];
 
-// Custom Objects
+// Custom Objects (__c)
 const customObjects =
     cleanedContent.match(
         /\b[A-Za-z0-9_]+__c\b/g
     ) || [];
 
-// Custom Metadata
-const customMetadata =
+// Custom Metadata Types (__mdt) → CustomObject classification
+const customMetadataTypes =
     cleanedContent.match(
         /\b[A-Za-z0-9_]+__mdt\b/g
     ) || [];
 
+// Custom Metadata Records → Type.Record (use original content so
+// string literals in getInstance('Record') are preserved)
+const customMetadataRecords = [];
 
+for (const match of content.matchAll(
+    /\b([A-Za-z][A-Za-z0-9_]*)__mdt\.getInstance\(\s*['"]([A-Za-z][A-Za-z0-9_]*)['"]\s*\)/g
+)) {
+    customMetadataRecords.push(`${match[1]}.${match[2]}`);
+}
+
+for (const match of content.matchAll(
+    /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)__mdt\b([\s\S]{0,240}?)(?=;|\])/gi
+)) {
+    const typeDeveloperName = match[1];
+    const clause = match[2] || '';
+    for (const developerNameMatch of clause.matchAll(
+        /\bDeveloperName\s*=\s*['"]([A-Za-z][A-Za-z0-9_]*)['"]/gi
+    )) {
+        customMetadataRecords.push(
+            `${typeDeveloperName}.${developerNameMatch[1]}`
+        );
+    }
+}
 
 const constructorMatches =
     cleanedContent.match(
@@ -194,10 +216,10 @@ const classes =
     )];
 
 const objects =
-    [...new Set(customObjects)];
+    [...new Set([...customObjects, ...customMetadataTypes])];
 
 const metadata =
-    [...new Set(customMetadata)];
+    [...new Set(customMetadataRecords)];
 
 const flows =
     [...new Set(

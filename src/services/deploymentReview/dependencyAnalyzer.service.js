@@ -281,6 +281,45 @@ function classifyRelationshipReferences(cleanedContent) {
     );
 }
 
+/**
+ * Bare CMDT type tokens (MyType__mdt) — these are CustomObject metadata,
+ * not CustomMetadata records.
+ */
+function extractCustomMetadataTypes(cleanedContent) {
+    return uniqueSorted(
+        cleanedContent.match(/\b[A-Za-z][A-Za-z0-9_]*__mdt\b/g) || []
+    );
+}
+
+/**
+ * CustomMetadata RECORD members in canonical Type.Record form.
+ * Prefer getInstance / SOQL DeveloperName; avoid bare __mdt type tokens.
+ */
+function extractCustomMetadataRecords(cleanedContent) {
+    const records = new Set();
+
+    for (const match of cleanedContent.matchAll(
+        /\b([A-Za-z][A-Za-z0-9_]*)__mdt\.getInstance\(\s*['"]([A-Za-z][A-Za-z0-9_]*)['"]\s*\)/g
+    )) {
+        records.add(`${match[1]}.${match[2]}`);
+    }
+
+    for (const match of cleanedContent.matchAll(
+        /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)__mdt\b([\s\S]{0,240}?)(?=;|\])/gi
+    )) {
+        const typeDeveloperName = match[1];
+        const clause = match[2] || '';
+
+        for (const developerNameMatch of clause.matchAll(
+            /\bDeveloperName\s*=\s*['"]([A-Za-z][A-Za-z0-9_]*)['"]/gi
+        )) {
+            records.add(`${typeDeveloperName}.${developerNameMatch[1]}`);
+        }
+    }
+
+    return uniqueSorted([...records]);
+}
+
 function analyzeApexContent(content, currentClassName) {
     const cleanedContent = stripLiteralsAndComments(content);
     const internalDeclarations = getInternalTypeDeclarations(content);
@@ -292,16 +331,21 @@ function analyzeApexContent(content, currentClassName) {
             normalizeApexIdentifier(name) !== normalizedOuterClassName
     );
 
-    const { customObjects, customFields } =
+    const { customObjects: objectTokens, customFields } =
         classifyCustomObjectsAndFields(cleanedContent);
 
     const relationshipReferences =
         classifyRelationshipReferences(cleanedContent);
 
-    const customMetadata =
-        cleanedContent.match(
-            /\b[A-Za-z0-9_]+__mdt\b/g
-        ) || [];
+    // Phase 5G.2: bare __mdt → CustomObject; Type.Record → CustomMetadata.
+    // Record extraction uses original content so string literals in
+    // getInstance('Record') / DeveloperName = 'Record' are preserved.
+    const customMetadataTypes = extractCustomMetadataTypes(cleanedContent);
+    const customMetadata = extractCustomMetadataRecords(content);
+    const customObjects = uniqueSorted([
+        ...objectTokens,
+        ...customMetadataTypes
+    ]);
 
     const contentForClassRefs = cleanedContent
         .replace(/\bFlow\.Interview\.[A-Za-z0-9_]+\b/g, '')
@@ -382,5 +426,7 @@ function analyzeApexContent(content, currentClassName) {
 
 module.exports = {
     analyzeApexContent,
-    getCurrentClassName
+    getCurrentClassName,
+    extractCustomMetadataTypes,
+    extractCustomMetadataRecords
 };
