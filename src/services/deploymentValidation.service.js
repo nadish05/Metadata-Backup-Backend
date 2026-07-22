@@ -645,46 +645,42 @@ async function validateDeployment({
             deploymentSelections: reservedDeploymentSelections
         });
 
+        // TEMPORARY PLANNER DEBUG LOG — remove after Skip verification.
+        // Immediately after planner returns; before collections are consumed.
+        {
+            const debugName = 'ComparisonResultController';
+            const nameOf = (item) => item?.metadataName || item?.name || null;
+            const namesOf = (items) =>
+                (Array.isArray(items) ? items : [])
+                    .map(nameOf)
+                    .filter(Boolean);
+            const hasName = (items, name) =>
+                namesOf(items).some((value) => value === name);
+
+            const selectedAfter = plannerResult?.selectedMetadata;
+            const depsAfter = plannerResult?.resolvedDependencies;
+
+            console.log('selectedMetadata AFTER:');
+            console.log(namesOf(selectedAfter).join('\n') || '(empty)');
+            console.log(
+                `${debugName} in selectedMetadata AFTER:`,
+                hasName(selectedAfter, debugName)
+            );
+
+            console.log('requiredDependencies AFTER:');
+            console.log(namesOf(depsAfter).join('\n') || '(empty)');
+            console.log(
+                `${debugName} in requiredDependencies AFTER:`,
+                hasName(depsAfter, debugName)
+            );
+        }
+
         artifactEnrichedSelectedMetadata =
             plannerResult.selectedMetadata ||
             artifactEnrichedSelectedMetadata;
         resolvedRequiredDependencies =
             plannerResult.resolvedDependencies ||
             resolvedRequiredDependencies;
-
-        // TEMPORARY PLANNER DEBUG LOG — remove after Skip verification.
-        const hadControllerInSelectedAfter = plannerDebugHasName(
-            artifactEnrichedSelectedMetadata,
-            plannerDebugName
-        );
-
-        console.log('selectedMetadata AFTER:');
-        console.log(
-            plannerDebugNamesOf(artifactEnrichedSelectedMetadata).join(
-                '\n'
-            ) || '(empty)'
-        );
-        console.log(
-            `${plannerDebugName} in selectedMetadata AFTER:`,
-            hadControllerInSelectedAfter
-        );
-        console.log(
-            `${plannerDebugName} removed from selectedMetadata:`,
-            hadControllerInSelectedBefore && !hadControllerInSelectedAfter
-        );
-        console.log('requiredDependencies AFTER:');
-        console.log(
-            plannerDebugNamesOf(resolvedRequiredDependencies).join('\n') ||
-                '(empty)'
-        );
-        console.log(
-            `${plannerDebugName} in requiredDependencies AFTER:`,
-            plannerDebugHasName(
-                resolvedRequiredDependencies,
-                plannerDebugName
-            )
-        );
-        console.log('=====================');
     } catch (error) {
         console.error('DEPLOYMENT PLANNER ERROR');
         console.error(error);
