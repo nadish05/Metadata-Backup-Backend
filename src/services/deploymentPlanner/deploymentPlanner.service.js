@@ -25,6 +25,8 @@
  * it does not authorize Skip while trust / analyzer executor remain disabled.
  * Phase 4E: Shadow Validation compares legacy editable vs analyzer canSkip
  * internally; analyzer never affects runtime mutation.
+ * Phase 4F: PermissionSet trusts EXISTENCE; Analyzer Executor honors Skip when
+ * EXISTS+canSkip, forces Deploy when MISSING, falls back on UNKNOWN.
  * PlannerDecision is not returned via REST.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
@@ -106,8 +108,7 @@ function createEmptySummary(selectionsReceived) {
  * Per-metadata-type trust policy for analyzer-backed planner decisions.
  * Each type lists analysis levels the planner may trust for that type only.
  *
- * Phase 2D: every type trusts nothing → useAnalyzer always false.
- * Phase 2E can enable a single type, e.g. ApexClass: ['EXISTENCE'].
+ * Phase 4F: PermissionSet trusts EXISTENCE only. All other types trust nothing.
  */
 const TRUST_POLICY = Object.freeze({
     ApexClass: Object.freeze([]),
@@ -116,7 +117,7 @@ const TRUST_POLICY = Object.freeze({
     CustomField: Object.freeze([]),
     Layout: Object.freeze([]),
     Flow: Object.freeze([]),
-    PermissionSet: Object.freeze([]),
+    PermissionSet: Object.freeze(['EXISTENCE']),
     Profile: Object.freeze([])
 });
 
@@ -204,9 +205,16 @@ function resolvePlannerDecision({
         ? [...TRUST_POLICY[metadataType]]
         : [];
 
+    const trustsExistence = trustedLevels.includes('EXISTENCE');
     const trustMatched = trustedLevels.includes(analysisLevel);
 
-    if (trustMatched) {
+    // Phase 4F: PermissionSet with EXISTENCE trust always routes through
+    // Analyzer Executor (EXISTS skip, MISSING deploy, UNKNOWN → legacy).
+    const useAnalyzer =
+        trustMatched ||
+        (metadataType === 'PermissionSet' && trustsExistence);
+
+    if (useAnalyzer) {
         return {
             useAnalyzer: true,
             canSkip,
@@ -215,9 +223,11 @@ function resolvePlannerDecision({
                 metadataName,
                 analysisLevel,
                 trustedLevels,
-                trustMatched: true,
+                trustMatched: trustMatched === true,
                 decisionPath: 'ANALYZER',
-                fallbackReason: null
+                fallbackReason: trustMatched
+                    ? null
+                    : 'PermissionSet EXISTENCE trust; analyzer executor applies state rules.'
             }
         };
     }
@@ -345,7 +355,7 @@ function buildPlannerDecision({
         destinationState,
         analysisLevel
     });
-    const fallbackUsed = !useAnalyzer;
+    let fallbackUsed = !useAnalyzer;
     const decisionPath =
         resolved.trace?.decisionPath || 'LEGACY_EDITABLE';
 
@@ -366,13 +376,47 @@ function buildPlannerDecision({
             'Selection does not match selectedMetadata or resolvedDependencies.';
         confidence = PLANNER_CONFIDENCE.NONE;
     } else if (useAnalyzer) {
-        // Reserved analyzer path (unreachable while TRUST_POLICY is empty).
-        // Mirror current empty stub: no selected mutation via analyzer yet.
-        allowOverride = false;
-        decision = PLANNER_DECISION_OUTCOME.IGNORE_NOT_SKIPPABLE;
-        reason =
-            'Analyzer path reserved; analyzer-backed override not implemented.';
-        confidence = PLANNER_CONFIDENCE.LOW;
+        // Phase 4F: analyzer-backed PermissionSet (and any future trusted types).
+        if (destinationState === 'MISSING') {
+            allowOverride = true;
+            decision = PLANNER_DECISION_OUTCOME.APPLY;
+            reason =
+                'Analyzer: destination MISSING; Deploy required.';
+            confidence = PLANNER_CONFIDENCE.HIGH;
+        } else if (
+            destinationState === 'UNKNOWN' ||
+            destinationState == null ||
+            analysisLevel === 'NONE'
+        ) {
+            // Executor falls back to legacy for UNKNOWN / unavailable analysis.
+            fallbackUsed = true;
+            allowOverride = editable;
+            decision = editable
+                ? PLANNER_DECISION_OUTCOME.APPLY
+                : PLANNER_DECISION_OUTCOME.IGNORE_MANDATORY;
+            reason =
+                'Analyzer UNKNOWN or unavailable; executor falls back to legacy.';
+            confidence = PLANNER_CONFIDENCE.MEDIUM;
+        } else if (
+            destinationState === 'EXISTS' &&
+            analysisLevel === 'EXISTENCE' &&
+            canSkip === true
+        ) {
+            allowOverride = true;
+            decision = PLANNER_DECISION_OUTCOME.APPLY;
+            reason =
+                'Analyzer: EXISTS with canSkip; honor user Deploy/Skip.';
+            confidence = PLANNER_CONFIDENCE.HIGH;
+        } else {
+            fallbackUsed = true;
+            allowOverride = editable;
+            decision = editable
+                ? PLANNER_DECISION_OUTCOME.APPLY
+                : PLANNER_DECISION_OUTCOME.IGNORE_MANDATORY;
+            reason =
+                'Analyzer conditions not met; executor falls back to legacy.';
+            confidence = PLANNER_CONFIDENCE.MEDIUM;
+        }
     } else if (!editable) {
         allowOverride = false;
         decision = PLANNER_DECISION_OUTCOME.IGNORE_MANDATORY;
@@ -465,6 +509,45 @@ function applyChoiceToIndexedItem({
 }
 
 /**
+ * Apply analyzer-authorized selected mutation (no legacy editable gate).
+ * Used only by Analyzer Executor for trusted PermissionSet rules.
+ */
+function applyAnalyzerChoiceToIndexedItem({
+    indexed,
+    index,
+    choice,
+    summary,
+    metadataType,
+    metadataName,
+    forceDeploy = false
+}) {
+    const item = indexed[index];
+    const effectiveChoice = forceDeploy ? 'DEPLOY' : choice;
+    const nextSelected = effectiveChoice === 'DEPLOY';
+    const currentSelected = item.selected !== false;
+
+    if (currentSelected === nextSelected) {
+        return false;
+    }
+
+    indexed[index] = {
+        ...item,
+        selected: nextSelected
+    };
+
+    summary.overridesApplied += 1;
+    console.log(
+        'Overrides applied (analyzer):',
+        `${metadataType}:${metadataName}`,
+        '→',
+        effectiveChoice,
+        forceDeploy ? '(force Deploy)' : ''
+    );
+
+    return true;
+}
+
+/**
  * Legacy Executor — existing editable override path (unchanged logic).
  *
  * @param {object} plannerDecision
@@ -490,20 +573,66 @@ function executeLegacyPlannerDecision(plannerDecision, context) {
 }
 
 /**
- * Analyzer Executor — seam for later analyzer-backed Deploy/Skip.
- * Phase 4C: no analyzer decisions yet; immediately fall back to Legacy.
+ * Analyzer Executor — Phase 4F PermissionSet EXISTENCE rules.
+ *
+ * - EXISTENCE + EXISTS + canSkip → honor user Deploy/Skip
+ * - MISSING → force Deploy
+ * - UNKNOWN / analyzer unavailable → Legacy fallback
  *
  * @param {object} plannerDecision
  * @param {object} context
  * @returns {boolean}
  */
 function executeAnalyzerPlannerDecision(plannerDecision, context) {
+    const analysisLevel = plannerDecision.analysisLevel;
+    const destinationState = plannerDecision.destinationState;
+    const canSkip = plannerDecision.canSkip === true;
+
+    // MISSING takes precedence over analysisLevel NONE (inventory MISSING
+    // still yields analyzer analysisLevel NONE today).
+    if (destinationState === 'MISSING') {
+        return applyAnalyzerChoiceToIndexedItem({
+            indexed: context.indexed,
+            index: context.index,
+            choice: plannerDecision.choice,
+            summary: context.summary,
+            metadataType: plannerDecision.metadataType,
+            metadataName: plannerDecision.metadataName,
+            forceDeploy: true
+        });
+    }
+
+    const analyzerUnavailable =
+        analysisLevel === 'NONE' ||
+        analysisLevel == null ||
+        destinationState === 'UNKNOWN' ||
+        destinationState == null;
+
+    if (analyzerUnavailable) {
+        return executeLegacyPlannerDecision(plannerDecision, context);
+    }
+
+    if (
+        analysisLevel === 'EXISTENCE' &&
+        destinationState === 'EXISTS' &&
+        canSkip
+    ) {
+        return applyAnalyzerChoiceToIndexedItem({
+            indexed: context.indexed,
+            index: context.index,
+            choice: plannerDecision.choice,
+            summary: context.summary,
+            metadataType: plannerDecision.metadataType,
+            metadataName: plannerDecision.metadataName,
+            forceDeploy: false
+        });
+    }
+
     return executeLegacyPlannerDecision(plannerDecision, context);
 }
 
 /**
  * Execute a PlannerDecision by routing to Analyzer or Legacy executor.
- * With empty TRUST_POLICY, useAnalyzer is always false → Legacy Executor.
  *
  * @param {object} plannerDecision
  * @param {object} context
