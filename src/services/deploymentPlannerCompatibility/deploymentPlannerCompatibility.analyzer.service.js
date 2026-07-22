@@ -1,5 +1,5 @@
 /**
- * Planner Compatibility Analyzer — Phase 1/2B (report-only).
+ * Planner Compatibility Analyzer — Phase 2C (report-only).
  *
  * Completely isolated from deploymentCompatibility, Package Generation,
  * Workspace, CLI, and Deployment Planner decision mutation.
@@ -8,10 +8,16 @@
  * - Deterministic and pure (no I/O, no HTTP, no filesystem, no Git).
  * - Uses only selectedMetadata + resolvedDependencies already in memory.
  * - Does NOT modify any input collections.
- * - Reports analysisLevel (what analysis was performed).
+ * - Reports analysisLevel based on destination existence analysis.
  * - Does NOT encode planner fallback / editable rules.
+ * - Does NOT grant canSkip (remains false until a later phase).
  *
- * Phase 2B: analysisLevel is always NONE (placeholder).
+ * Phase 2C:
+ * - existsInDestination === true → analysisLevel EXISTENCE
+ * - otherwise → analysisLevel NONE
+ *
+ * Planner continues to ignore this report while TRUSTED_ANALYSIS_LEVELS
+ * remains empty.
  */
 
 const ANALYSIS_LEVEL = Object.freeze({
@@ -47,41 +53,29 @@ function resolveExistsInDestination(destinationState) {
 }
 
 /**
- * Build a planner compatibility row from available decision fields.
- * Phase 2B: analysisLevel is always NONE; canSkip is never granted.
+ * Build a planner compatibility row using destination existence analysis.
+ * canSkip is intentionally unchanged (always false in Phase 2C).
  */
-function buildPhase1Result(item) {
+function buildCompatibilityResult(item) {
     const metadataType = getMetadataType(item);
     const metadataName = getMetadataName(item);
     const destinationState = item?.destinationState || null;
     const existsInDestination = resolveExistsInDestination(destinationState);
-    const action = item?.action || null;
 
-    let reason =
-        'Phase 2B: analysisLevel is NONE; planner must use legacy editable logic.';
-
-    if (existsInDestination === true) {
-        reason =
-            'Phase 2B: destinationState is EXISTS; analysisLevel remains NONE.';
-    } else if (existsInDestination === false) {
-        reason =
-            'Phase 2B: destinationState is MISSING; analysisLevel remains NONE.';
-    } else if (action === 'BLOCK') {
-        reason =
-            'Phase 2B: dependency action is BLOCK; analysisLevel remains NONE.';
-    } else if (!destinationState) {
-        reason =
-            'Phase 2B: destinationState unavailable; analysisLevel remains NONE.';
-    }
+    const exists = existsInDestination === true;
 
     return {
         metadataType,
         metadataName,
         existsInDestination,
-        graphSafe: null,
+        graphSafe: false,
         canSkip: false,
-        analysisLevel: ANALYSIS_LEVEL.NONE,
-        reason
+        analysisLevel: exists
+            ? ANALYSIS_LEVEL.EXISTENCE
+            : ANALYSIS_LEVEL.NONE,
+        reason: exists
+            ? 'Destination metadata located.'
+            : 'Metadata not found in destination.'
     };
 }
 
@@ -175,7 +169,7 @@ function analyzePlannerCompatibility({
         Array.isArray(resolvedDependencies) ? resolvedDependencies : []
     );
 
-    const results = inventory.map((item) => buildPhase1Result(item));
+    const results = inventory.map((item) => buildCompatibilityResult(item));
 
     return {
         plannerCompatibility: {
