@@ -20,8 +20,8 @@
  * - otherwise → analysisLevel NONE
  * - canSkip capability: EXISTS + EXISTENCE → true; else false
  *
- * Phase 6B / 6C:
- * - Graph edges attached; graphSafe evaluated from blocking dependsOn.
+ * Phase 6B / 6C / 6E:
+ * - Graph edges attached; graphSafe from transitive blocking dependsOn closure.
  * - analysisLevel and canSkip remain EXISTENCE-only.
  */
 
@@ -302,8 +302,15 @@ function buildDestinationStateIndex(inventoryItems) {
 }
 
 /**
- * Phase 6C — evaluate whether blocking dependsOn closure is satisfied.
- * Conservative: truncated / unknown / incomplete never yields graphSafe=true.
+ * Align with graph expansion depth cap — stay conservative beyond this.
+ * @see graphExpansion.service.js MAX_GRAPH_DEPTH
+ */
+const MAX_GRAPH_EVAL_DEPTH = 10;
+
+/**
+ * Phase 6C/6E — evaluate whether the transitive blocking dependsOn closure
+ * is satisfied. Conservative: truncated / unknown / incomplete / depth-exceeded
+ * never yields graphSafe=true. Cycles are skipped via a visited set.
  */
 function evaluateGraphSafety({
     metadataType,
@@ -329,6 +336,9 @@ function evaluateGraphSafety({
         blockingDependsOn: 0,
         dependsOnChecked: 0,
         dependsOnSatisfied: 0,
+        transitive: true,
+        maxDepthReached: 0,
+        cycleSkips: 0,
         unresolved: []
     };
 
@@ -371,50 +381,151 @@ function evaluateGraphSafety({
 
     const reasons = [];
     let sawUnknown = false;
+    let depthExceeded = false;
 
-    for (const dep of blockingDeps) {
-        graphEvaluation.dependsOnChecked += 1;
+    // Root is visited so cyclic edges back to the start node are skipped.
+    const visited = new Set([key]);
+    const queue = blockingDeps.map((dep) => ({
+        metadataType: dep.metadataType,
+        metadataName: dep.metadataName,
+        relationship: dep.relationship || null,
+        depth: 1
+    }));
 
-        const depKey = buildKey(dep.metadataType, dep.metadataName);
-        const destinationState = stateByKey?.get(depKey);
-        const exists = destinationState === 'EXISTS';
-        const inPackage = packageKeys?.has(depKey) === true;
+    while (queue.length > 0) {
+        const current = queue.shift();
+        const depKey = buildKey(current.metadataType, current.metadataName);
 
-        if (exists || inPackage) {
-            graphEvaluation.dependsOnSatisfied += 1;
-            continue;
-        }
-
-        if (destinationState === 'MISSING') {
+        if (!current.metadataType || !current.metadataName) {
+            sawUnknown = true;
             graphEvaluation.unresolved.push({
-                metadataType: dep.metadataType,
-                metadataName: dep.metadataName,
-                relationship: dep.relationship,
-                reason: 'MISSING_NOT_IN_PACKAGE'
+                metadataType: current.metadataType,
+                metadataName: current.metadataName,
+                relationship: current.relationship,
+                reason: 'UNKNOWN_OR_ABSENT'
             });
             reasons.push(
-                `Blocking dependency ${depKey} is MISSING and not in package.`
+                'Blocking dependency has incomplete identity and cannot be evaluated.'
             );
             continue;
         }
 
-        sawUnknown = true;
-        graphEvaluation.unresolved.push({
-            metadataType: dep.metadataType,
-            metadataName: dep.metadataName,
-            relationship: dep.relationship,
-            reason: 'UNKNOWN_OR_ABSENT'
-        });
-        reasons.push(
-            `Blocking dependency ${depKey} has unknown destination state and is not in package.`
+        if (visited.has(depKey)) {
+            graphEvaluation.cycleSkips += 1;
+            continue;
+        }
+
+        visited.add(depKey);
+
+        if (current.depth > MAX_GRAPH_EVAL_DEPTH) {
+            depthExceeded = true;
+            graphEvaluation.truncated = true;
+            graphEvaluation.unresolved.push({
+                metadataType: current.metadataType,
+                metadataName: current.metadataName,
+                relationship: current.relationship,
+                reason: 'DEPTH_EXCEEDED'
+            });
+            reasons.push(
+                `Graph evaluation stopped at maximum depth ${MAX_GRAPH_EVAL_DEPTH} (reached ${depKey}).`
+            );
+            break;
+        }
+
+        if (current.depth > graphEvaluation.maxDepthReached) {
+            graphEvaluation.maxDepthReached = current.depth;
+        }
+
+        graphEvaluation.dependsOnChecked += 1;
+
+        const destinationState = stateByKey?.get(depKey);
+        const exists = destinationState === 'EXISTS';
+        const inPackage = packageKeys?.has(depKey) === true;
+
+        if (!exists && !inPackage) {
+            if (destinationState === 'MISSING') {
+                graphEvaluation.unresolved.push({
+                    metadataType: current.metadataType,
+                    metadataName: current.metadataName,
+                    relationship: current.relationship,
+                    reason: 'MISSING_NOT_IN_PACKAGE'
+                });
+                reasons.push(
+                    `Blocking dependency ${depKey} is MISSING and not in package.`
+                );
+            } else {
+                sawUnknown = true;
+                graphEvaluation.unresolved.push({
+                    metadataType: current.metadataType,
+                    metadataName: current.metadataName,
+                    relationship: current.relationship,
+                    reason: 'UNKNOWN_OR_ABSENT'
+                });
+                reasons.push(
+                    `Blocking dependency ${depKey} has unknown destination state and is not in package.`
+                );
+            }
+
+            // Unsatisfied node — do not expand further through it.
+            continue;
+        }
+
+        graphEvaluation.dependsOnSatisfied += 1;
+
+        const depEntry = graphIndex.byNode.get(depKey);
+
+        if (!depEntry) {
+            sawUnknown = true;
+            graphEvaluation.unresolved.push({
+                metadataType: current.metadataType,
+                metadataName: current.metadataName,
+                relationship: current.relationship,
+                reason: 'MISSING_GRAPH_NODE'
+            });
+            reasons.push(
+                `Blocking dependency ${depKey} has no graph node for transitive evaluation.`
+            );
+            continue;
+        }
+
+        const nextBlocking = (depEntry.dependsOn || []).filter(
+            (dep) => dep.blocking !== false
         );
+
+        for (const next of nextBlocking) {
+            const nextKey = buildKey(next.metadataType, next.metadataName);
+
+            if (visited.has(nextKey)) {
+                graphEvaluation.cycleSkips += 1;
+                continue;
+            }
+
+            queue.push({
+                metadataType: next.metadataType,
+                metadataName: next.metadataName,
+                relationship: next.relationship || null,
+                depth: current.depth + 1
+            });
+        }
+    }
+
+    if (depthExceeded) {
+        return {
+            graphSafe: false,
+            graphReasons: reasons,
+            graphEdges: { dependsOn, requiredBy },
+            graphEvaluation: {
+                ...graphEvaluation,
+                status: 'UNKNOWN'
+            }
+        };
     }
 
     if (graphEvaluation.unresolved.length === 0) {
         return {
             graphSafe: true,
             graphReasons: [
-                'All blocking dependsOn edges EXISTS or included in package.'
+                'All reachable blocking dependsOn edges EXISTS or included in package.'
             ],
             graphEdges: { dependsOn, requiredBy },
             graphEvaluation: {
@@ -438,7 +549,7 @@ function evaluateGraphSafety({
 /**
  * Build a planner compatibility row using destination existence analysis.
  * canSkip is capability only (Phase 4D); it does not authorize Skip.
- * Graph fields are Phase 6B/6C report-only.
+ * Graph fields are Phase 6B/6C/6E report-only.
  */
 function buildCompatibilityResult(item, evaluationContext = {}) {
     const metadataType = getMetadataType(item);
