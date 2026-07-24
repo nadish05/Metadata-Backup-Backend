@@ -29,6 +29,8 @@
  * EXISTS+canSkip, forces Deploy when MISSING, falls back on UNKNOWN.
  * Phase 5B: analyzer routing is TRUST_POLICY-driven (EXISTENCE trust → all
  * destination states); no metadata-type name checks in routing.
+ * Phase 7C: Skip capability computed via authorizeCapabilities() (EXISTENCE
+ * policy identical to computeCanSkip; GRAPH/CONTRACT/SEMANTIC passive).
  * PlannerDecision is not returned via REST.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
@@ -53,8 +55,8 @@ const PLANNER_CONFIDENCE = Object.freeze({
 });
 
 const {
-    computeCanSkip
-} = require('../deploymentPlannerCompatibility/deploymentPlannerCompatibility.analyzer.service');
+    authorizeCapabilities
+} = require('./plannerAuthorization.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -202,15 +204,18 @@ function resolvePlannerDecision({
         plannerCompatibilityRow?.destinationState ||
         null;
 
-    // Phase 4D: capability only — does not authorize Skip by itself.
-    const canSkip = computeCanSkip({
-        destinationState,
-        analysisLevel
-    });
-
     const trustedLevels = Array.isArray(TRUST_POLICY[metadataType])
         ? [...TRUST_POLICY[metadataType]]
         : [];
+
+    // Phase 7C: generic authorization helper (EXISTENCE-identical canSkip).
+    const authorization = authorizeCapabilities({
+        trustedCapabilities: trustedLevels,
+        capabilities: plannerCompatibilityRow?.capabilities || null,
+        destinationState,
+        analysisLevel
+    });
+    const canSkip = authorization.canSkip;
 
     const trustsExistence = trustedLevels.includes('EXISTENCE');
     const trustMatched = trustedLevels.includes(analysisLevel);
@@ -223,6 +228,7 @@ function resolvePlannerDecision({
         return {
             useAnalyzer: true,
             canSkip,
+            authorization,
             trace: {
                 metadataType,
                 metadataName,
@@ -232,7 +238,8 @@ function resolvePlannerDecision({
                 decisionPath: 'ANALYZER',
                 fallbackReason: trustMatched
                     ? null
-                    : 'EXISTENCE trust; analyzer executor applies destination-state rules.'
+                    : 'EXISTENCE trust; analyzer executor applies destination-state rules.',
+                authorizationTrace: authorization.trace
             }
         };
     }
@@ -240,6 +247,7 @@ function resolvePlannerDecision({
     return {
         useAnalyzer: false,
         canSkip,
+        authorization,
         trace: {
             metadataType,
             metadataName,
@@ -248,7 +256,8 @@ function resolvePlannerDecision({
             trustMatched: false,
             decisionPath: 'LEGACY_EDITABLE',
             fallbackReason:
-                'Analysis level not trusted for metadata type.'
+                'Analysis level not trusted for metadata type.',
+            authorizationTrace: authorization.trace
         }
     };
 }
@@ -355,11 +364,16 @@ function buildPlannerDecision({
         null;
 
     const useAnalyzer = resolved.useAnalyzer === true;
-    // Phase 4D: real canSkip capability on PlannerDecision (does not authorize).
-    const canSkip = computeCanSkip({
-        destinationState,
-        analysisLevel
-    });
+    // Phase 7C: canSkip from authorization helper (identical to computeCanSkip today).
+    const authorization =
+        resolved.authorization ||
+        authorizeCapabilities({
+            trustedCapabilities: resolved.trace?.trustedLevels || [],
+            capabilities: plannerCompatibilityRow?.capabilities || null,
+            destinationState,
+            analysisLevel
+        });
+    const canSkip = authorization.canSkip === true;
     let fallbackUsed = !useAnalyzer;
     const decisionPath =
         resolved.trace?.decisionPath || 'LEGACY_EDITABLE';
@@ -459,6 +473,8 @@ function buildPlannerDecision({
         collectionKind,
         found,
         shadowValidation,
+        // Phase 7C diagnostics — does not change decision outcomes.
+        authorization,
         trace: resolved.trace
     };
 }
@@ -848,5 +864,6 @@ module.exports = {
     executeAnalyzerPlannerDecision,
     PLANNER_DECISION_OUTCOME,
     PLANNER_CONFIDENCE,
-    TRUST_POLICY
+    TRUST_POLICY,
+    authorizeCapabilities
 };
