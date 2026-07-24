@@ -33,6 +33,8 @@
  * policy identical to computeCanSkip; GRAPH/CONTRACT/SEMANTIC passive).
  * Phase 7D: PlannerDecision gates consume authorization.authorized only —
  * no EXISTENCE / analysisLevel literals in Skip authorization decisions.
+ * Phase 7F: Analyzer Executor consumes PlannerDecision authorization —
+ * no EXISTENCE / analysisLevel literals in execution gates.
  * PlannerDecision is not returned via REST.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
@@ -579,23 +581,26 @@ function executeLegacyPlannerDecision(plannerDecision, context) {
 }
 
 /**
- * Analyzer Executor — Phase 4F PermissionSet EXISTENCE rules.
+ * Analyzer Executor — Phase 7F authorization-aligned execution.
  *
- * - EXISTENCE + EXISTS + canSkip → honor user Deploy/Skip
- * - MISSING → force Deploy
- * - UNKNOWN / analyzer unavailable → Legacy fallback
+ * Trusts PlannerDecision as the source of truth:
+ * - destination MISSING → force Deploy (inventory enforcement)
+ * - authorization.authorized → honor user Deploy/Skip
+ * - otherwise → Legacy Executor fallback
+ *
+ * Does not inspect analysisLevel, EXISTENCE, graphSafe, or capability maps.
  *
  * @param {object} plannerDecision
  * @param {object} context
  * @returns {boolean}
  */
 function executeAnalyzerPlannerDecision(plannerDecision, context) {
-    const analysisLevel = plannerDecision.analysisLevel;
     const destinationState = plannerDecision.destinationState;
-    const canSkip = plannerDecision.canSkip === true;
+    const authorized =
+        plannerDecision.authorization?.authorized === true;
 
-    // MISSING takes precedence over analysisLevel NONE (inventory MISSING
-    // still yields analyzer analysisLevel NONE today).
+    // Inventory enforcement (planner MISSING rule applied at execute time
+    // so user Skip cannot omit a missing dependency).
     if (destinationState === 'MISSING') {
         return applyAnalyzerChoiceToIndexedItem({
             indexed: context.indexed,
@@ -608,21 +613,7 @@ function executeAnalyzerPlannerDecision(plannerDecision, context) {
         });
     }
 
-    const analyzerUnavailable =
-        analysisLevel === 'NONE' ||
-        analysisLevel == null ||
-        destinationState === 'UNKNOWN' ||
-        destinationState == null;
-
-    if (analyzerUnavailable) {
-        return executeLegacyPlannerDecision(plannerDecision, context);
-    }
-
-    if (
-        analysisLevel === 'EXISTENCE' &&
-        destinationState === 'EXISTS' &&
-        canSkip
-    ) {
+    if (authorized) {
         return applyAnalyzerChoiceToIndexedItem({
             indexed: context.indexed,
             index: context.index,
