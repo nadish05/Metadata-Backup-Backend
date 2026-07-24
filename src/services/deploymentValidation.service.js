@@ -33,6 +33,9 @@ const {
     buildDestinationShapeIndex,
     serializeDestinationShapeIndex
 } = require('./destinationShape/destinationShapeBuilder.service');
+const {
+    buildSourceCustomFieldShapeIndexFromRepo
+} = require('./deploymentPlannerCompatibility/contract/sourceCustomFieldShapeBuilder.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -415,6 +418,8 @@ async function validateDeployment({
     let destinationStatesForAnalyzer = new Map();
     // Phase 9B — CustomField structural facts for future CONTRACT (unused by planner).
     let destinationShapeIndex = null;
+    // Phase 9C — source CustomField structural facts for CONTRACT evaluation.
+    let sourceShapeIndex = null;
 
     let accessTokenForDownstream = null;
     let resolvedInstanceUrl = instanceUrl;
@@ -729,6 +734,20 @@ async function validateDeployment({
             };
         }
 
+        // Phase 9C — source CustomField shapes (repo XML). No destination describe.
+        try {
+            sourceShapeIndex = await buildSourceCustomFieldShapeIndexFromRepo({
+                items: inventoryItems,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            });
+        } catch (sourceShapeError) {
+            console.error('SOURCE CUSTOM FIELD SHAPE BUILDER ERROR');
+            console.error(sourceShapeError);
+            sourceShapeIndex = new Map();
+        }
+
         // Retain for Planner Compatibility Analyzer enrichment (Step 5).
         // Does not mutate planner inputs; analyzer receives enriched copies only.
         destinationStatesForAnalyzer = destinationStates;
@@ -799,7 +818,10 @@ async function validateDeployment({
                     resolvedDependencies: analyzerResolvedDependencies,
                     // Graph evaluation deferred until post-planner package (Phase 6F).
                     includeGraphEvaluation: false,
-                    graphTruncated: graphTruncatedForCompatibility
+                    graphTruncated: graphTruncatedForCompatibility,
+                    // Phase 9C — CONTRACT facts (CustomField); not trusted yet.
+                    destinationShapeIndex,
+                    sourceShapeIndex
                 }
             );
     } catch (error) {
@@ -1060,7 +1082,9 @@ async function validateDeployment({
                         discoveredReferences,
                         discoveredEdges,
                         graphTruncated: graphTruncatedForCompatibility,
-                        generatedDeploymentPackage
+                        generatedDeploymentPackage,
+                        destinationShapeIndex,
+                        sourceShapeIndex
                     }
                 );
 

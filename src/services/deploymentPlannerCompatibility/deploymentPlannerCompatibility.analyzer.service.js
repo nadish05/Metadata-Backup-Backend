@@ -29,7 +29,14 @@
  * Phase 7B:
  * - Compatibility rows expose a capabilities map (facts only).
  * - Does not authorize Skip; planner routing unchanged.
+ *
+ * Phase 9C:
+ * - CONTRACT facts for CustomField via source vs destination shape.
  */
+
+const {
+    evaluateContractCapability
+} = require('./contract/contractEvaluator.service');
 
 const ANALYSIS_LEVEL = Object.freeze({
     NONE: 'NONE',
@@ -140,8 +147,9 @@ function buildCapabilityEntry({
 }
 
 /**
- * Phase 7B — assemble capability facts from today's analyzer outputs.
- * EXISTENCE / GRAPH populated; CONTRACT / SEMANTIC remain NOT_EVALUATED.
+ * Phase 7B / 9C — assemble capability facts from analyzer outputs.
+ * EXISTENCE / GRAPH populated; CONTRACT evaluated for CustomField (Phase 9C);
+ * SEMANTIC remain NOT_EVALUATED.
  *
  * @param {object} params
  * @returns {object}
@@ -152,7 +160,11 @@ function buildCapabilities({
     graphSafe = false,
     graphReasons = [],
     graphEvaluation = null,
-    graphDeferred = false
+    graphDeferred = false,
+    metadataType = null,
+    metadataName = null,
+    destinationShapeIndex = null,
+    sourceShapeIndex = null
 } = {}) {
     let existenceStatus = CAPABILITY_STATUS.UNKNOWN;
     let existenceReason = 'Destination existence is unknown.';
@@ -197,6 +209,14 @@ function buildCapabilities({
                 : 'Graph closure is not safe.';
     }
 
+    const contractCapability = evaluateContractCapability({
+        metadataType,
+        metadataName,
+        existsInDestination,
+        destinationShapeIndex,
+        sourceShapeIndex
+    });
+
     return {
         [CAPABILITY_IDS.EXISTENCE]: buildCapabilityEntry({
             status: existenceStatus,
@@ -221,11 +241,7 @@ function buildCapabilities({
             },
             reason: graphReason
         }),
-        [CAPABILITY_IDS.CONTRACT]: buildCapabilityEntry({
-            status: CAPABILITY_STATUS.NOT_EVALUATED,
-            evidence: {},
-            reason: 'CONTRACT capability is not evaluated yet.'
-        }),
+        [CAPABILITY_IDS.CONTRACT]: contractCapability,
         [CAPABILITY_IDS.SEMANTIC]: buildCapabilityEntry({
             status: CAPABILITY_STATUS.NOT_EVALUATED,
             evidence: {},
@@ -780,7 +796,11 @@ function buildCompatibilityResult(item, evaluationContext = {}) {
         graphSafe,
         graphReasons,
         graphEvaluation,
-        graphDeferred: includeGraphEvaluation !== true
+        graphDeferred: includeGraphEvaluation !== true,
+        metadataType,
+        metadataName,
+        destinationShapeIndex: evaluationContext.destinationShapeIndex || null,
+        sourceShapeIndex: evaluationContext.sourceShapeIndex || null
     });
 
     return {
@@ -899,6 +919,8 @@ function buildSummary(results, graphIndex = null) {
  * @param {boolean} [params.graphTruncated]
  * @param {boolean} [params.includeGraphEvaluation=true]
  * @param {Set<string>|null} [params.packageMembershipKeys] - optional override
+ * @param {object|null} [params.destinationShapeIndex]
+ * @param {Map|object|null} [params.sourceShapeIndex]
  * @returns {{ plannerCompatibility: { results: Array<object>, summary: object } }}
  */
 function analyzePlannerCompatibility({
@@ -909,7 +931,9 @@ function analyzePlannerCompatibility({
     discoveredEdges = [],
     graphTruncated = false,
     includeGraphEvaluation = true,
-    packageMembershipKeys = null
+    packageMembershipKeys = null,
+    destinationShapeIndex = null,
+    sourceShapeIndex = null
 } = {}) {
     const selected = Array.isArray(selectedMetadata) ? selectedMetadata : [];
     const resolved = Array.isArray(resolvedDependencies)
@@ -940,7 +964,9 @@ function analyzePlannerCompatibility({
                 ? packageMembershipKeys
                 : buildPackageMembershipKeys(selected, resolved),
         graphTruncated: graphTruncated === true,
-        includeGraphEvaluation: includeGraphEvaluation !== false
+        includeGraphEvaluation: includeGraphEvaluation !== false,
+        destinationShapeIndex,
+        sourceShapeIndex
     };
 
     const results = inventory.map((item) =>
@@ -973,7 +999,9 @@ function synchronizePlannerCompatibilityGraph(
         discoveredEdges = [],
         graphTruncated = false,
         packageMembershipKeys = null,
-        generatedDeploymentPackage = null
+        generatedDeploymentPackage = null,
+        destinationShapeIndex = null,
+        sourceShapeIndex = null
     } = {}
 ) {
     const results = plannerCompatibilityReport?.plannerCompatibility?.results;
@@ -1030,7 +1058,11 @@ function synchronizePlannerCompatibilityGraph(
             graphSafe: graphResult.graphSafe,
             graphReasons: graphResult.graphReasons,
             graphEvaluation: graphResult.graphEvaluation,
-            graphDeferred: false
+            graphDeferred: false,
+            metadataType: row.metadataType,
+            metadataName: row.metadataName,
+            destinationShapeIndex,
+            sourceShapeIndex
         });
 
         return {
