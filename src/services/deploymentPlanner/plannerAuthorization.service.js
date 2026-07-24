@@ -1,11 +1,11 @@
 /**
- * Planner Authorization Framework — Phase 7C / 8B / 8D.
+ * Planner Authorization Framework — Phase 7C / 8B / 8D / 8F.
  *
  * Separates policy (authorization) from analyzer facts (capabilities).
  *
  * Phase 7C rules:
  * - EXISTENCE authorization matches today's computeCanSkip() exactly.
- * - Does not mutate TRUST_POLICY, executors, or package generation.
+ * - Does not mutate TRUST_POLICY or package generation.
  *
  * Phase 8B (report-only):
  * - CustomObject GRAPH trust shadow: authorize as if trusted ['EXISTENCE','GRAPH'].
@@ -14,7 +14,11 @@
  * Phase 8D:
  * - GRAPH is an active capability when included in trustedCapabilities.
  * - Trusted EXISTENCE + GRAPH → AND policy (GRAPH PASS required).
- * - TRUST_POLICY unchanged — no type trusts GRAPH yet → runtime unchanged.
+ *
+ * Phase 8F:
+ * - availability GRANTED | DENIED | UNAVAILABLE for executor enforcement.
+ * - DENIED = trusted policy evaluated and Skip not authorized.
+ * - UNAVAILABLE = no active trusted capabilities (Legacy may apply).
  */
 
 const {
@@ -37,6 +41,13 @@ const PASSIVE_AUTHORIZATION_CAPABILITIES = Object.freeze([
     CAPABILITY_IDS.CONTRACT,
     CAPABILITY_IDS.SEMANTIC
 ]);
+
+/** Phase 8F — executor uses availability to decide Legacy fallback. */
+const AUTHORIZATION_AVAILABILITY = Object.freeze({
+    GRANTED: 'GRANTED',
+    DENIED: 'DENIED',
+    UNAVAILABLE: 'UNAVAILABLE'
+});
 
 function getCapabilityStatus(capabilities, capabilityId) {
     const entry = capabilities?.[capabilityId];
@@ -72,6 +83,7 @@ function resolveGraphStatus(capabilities) {
  * - Trusted EXISTENCE only → canSkip/authorized identical to computeCanSkip().
  * - Trusted EXISTENCE + GRAPH → AND; GRAPH must be PASS (Phase 8D).
  * - GRAPH FAIL / UNKNOWN / DEFERRED / NOT_EVALUATED → authorization denied.
+ * - Phase 8F availability: GRANTED | DENIED | UNAVAILABLE.
  *
  * @param {object} [params]
  * @param {string[]} [params.trustedCapabilities]
@@ -81,6 +93,7 @@ function resolveGraphStatus(capabilities) {
  * @returns {{
  *   canSkip: boolean,
  *   authorized: boolean,
+ *   availability: string,
  *   reasons: string[],
  *   trace: object
  * }}
@@ -211,29 +224,51 @@ function authorizeCapabilities({
         authorized = existenceOk === true && graphPass === true;
     }
 
-    if (graphTrusted && existenceOk && graphPass) {
-        reasons.push(
-            'Authorization granted (trusted EXISTENCE AND GRAPH both PASS).'
-        );
-    } else if (graphTrusted && !authorized) {
-        if (!existenceOk) {
-            reasons.push('Authorization denied: EXISTENCE capability failed.');
-        }
-        if (!graphPass) {
-            reasons.push('Authorization denied: GRAPH capability failed.');
-        }
-    }
-
     const activeTrusted = trusted.filter((capabilityId) =>
         ACTIVE_AUTHORIZATION_CAPABILITIES.includes(capabilityId)
     );
 
+    // Phase 8F — availability for enforcement (DENIED never falls back to Legacy).
+    let availability = AUTHORIZATION_AVAILABILITY.UNAVAILABLE;
+
+    if (activeTrusted.length === 0) {
+        availability = AUTHORIZATION_AVAILABILITY.UNAVAILABLE;
+        reasons.push(
+            'Authorization UNAVAILABLE: no active trusted capabilities for this type.'
+        );
+    } else if (authorized) {
+        availability = AUTHORIZATION_AVAILABILITY.GRANTED;
+        if (graphTrusted && existenceOk && graphPass) {
+            reasons.push(
+                'Authorization GRANTED (trusted EXISTENCE AND GRAPH both PASS).'
+            );
+        } else {
+            reasons.push(
+                'Authorization GRANTED under trusted capability policy.'
+            );
+        }
+    } else {
+        availability = AUTHORIZATION_AVAILABILITY.DENIED;
+        if (!existenceOk) {
+            reasons.push('Authorization DENIED: EXISTENCE capability failed.');
+        }
+        if (graphTrusted && !graphPass) {
+            reasons.push('Authorization DENIED: GRAPH capability failed.');
+        }
+        if (existenceOk && !graphTrusted) {
+            reasons.push(
+                'Authorization DENIED: trusted policy did not grant Skip.'
+            );
+        }
+    }
+
     return {
         canSkip: authorized,
         authorized,
+        availability,
         reasons,
         trace: {
-            phase: '8D',
+            phase: '8F',
             trustedCapabilities: trusted,
             activeTrustedCapabilities: activeTrusted,
             activeCapabilities: [...ACTIVE_AUTHORIZATION_CAPABILITIES],
@@ -241,6 +276,7 @@ function authorizeCapabilities({
             analysisLevel: analysisLevel || null,
             destinationState: destinationState || null,
             graphTrusted,
+            availability,
             evaluated
         }
     };
@@ -453,6 +489,7 @@ function attachCustomObjectGraphTrustShadow(plannerCompatibilityReport) {
 module.exports = {
     ACTIVE_AUTHORIZATION_CAPABILITIES,
     PASSIVE_AUTHORIZATION_CAPABILITIES,
+    AUTHORIZATION_AVAILABILITY,
     authorizeCapabilities,
     authorizeExistenceAndGraphShadow,
     buildCustomObjectGraphTrustShadowComparison,

@@ -59,7 +59,8 @@ const PLANNER_CONFIDENCE = Object.freeze({
 });
 
 const {
-    authorizeCapabilities
+    authorizeCapabilities,
+    AUTHORIZATION_AVAILABILITY
 } = require('./plannerAuthorization.service');
 
 function logSection(title) {
@@ -412,17 +413,16 @@ function buildPlannerDecision({
             allowOverride = true;
             decision = PLANNER_DECISION_OUTCOME.APPLY;
             reason =
-                'Analyzer: authorization granted; honor user Deploy/Skip.';
+                'Analyzer: authorization GRANTED; honor user Deploy/Skip.';
             confidence = PLANNER_CONFIDENCE.HIGH;
         } else {
-            fallbackUsed = true;
-            allowOverride = editable;
-            decision = editable
-                ? PLANNER_DECISION_OUTCOME.APPLY
-                : PLANNER_DECISION_OUTCOME.IGNORE_MANDATORY;
+            // Phase 8F: authorization DENIED — enforce Deploy; no Legacy fallback.
+            fallbackUsed = false;
+            allowOverride = true;
+            decision = PLANNER_DECISION_OUTCOME.APPLY;
             reason =
-                'Analyzer authorization not granted; executor falls back to legacy.';
-            confidence = PLANNER_CONFIDENCE.MEDIUM;
+                'Analyzer: authorization DENIED; Deploy required (Skip not authorized).';
+            confidence = PLANNER_CONFIDENCE.HIGH;
         }
     } else if (!editable) {
         allowOverride = false;
@@ -582,12 +582,13 @@ function executeLegacyPlannerDecision(plannerDecision, context) {
 }
 
 /**
- * Analyzer Executor — Phase 7F authorization-aligned execution.
+ * Analyzer Executor — Phase 7F / 8F authorization-aligned execution.
  *
  * Trusts PlannerDecision as the source of truth:
  * - destination MISSING → force Deploy (inventory enforcement)
- * - authorization.authorized → honor user Deploy/Skip
- * - otherwise → Legacy Executor fallback
+ * - authorization GRANTED → honor user Deploy/Skip
+ * - authorization DENIED → force Deploy (no Legacy fallback)
+ * - authorization UNAVAILABLE → Legacy Executor
  *
  * Does not inspect analysisLevel, EXISTENCE, graphSafe, or capability maps.
  *
@@ -597,8 +598,9 @@ function executeLegacyPlannerDecision(plannerDecision, context) {
  */
 function executeAnalyzerPlannerDecision(plannerDecision, context) {
     const destinationState = plannerDecision.destinationState;
-    const authorized =
-        plannerDecision.authorization?.authorized === true;
+    const authorization = plannerDecision.authorization || null;
+    const authorized = authorization?.authorized === true;
+    const availability = authorization?.availability || null;
 
     // Inventory enforcement (planner MISSING rule applied at execute time
     // so user Skip cannot omit a missing dependency).
@@ -614,7 +616,16 @@ function executeAnalyzerPlannerDecision(plannerDecision, context) {
         });
     }
 
-    if (authorized) {
+    // Phase 8F — UNAVAILABLE may still use Legacy Executor.
+    if (availability === AUTHORIZATION_AVAILABILITY.UNAVAILABLE) {
+        return executeLegacyPlannerDecision(plannerDecision, context);
+    }
+
+    // Phase 8F — GRANTED honors user Deploy/Skip.
+    if (
+        availability === AUTHORIZATION_AVAILABILITY.GRANTED ||
+        (authorized && availability !== AUTHORIZATION_AVAILABILITY.DENIED)
+    ) {
         return applyAnalyzerChoiceToIndexedItem({
             indexed: context.indexed,
             index: context.index,
@@ -626,7 +637,16 @@ function executeAnalyzerPlannerDecision(plannerDecision, context) {
         });
     }
 
-    return executeLegacyPlannerDecision(plannerDecision, context);
+    // Phase 8F — DENIED (or authorized=false on analyzer path): enforce Deploy.
+    return applyAnalyzerChoiceToIndexedItem({
+        indexed: context.indexed,
+        index: context.index,
+        choice: plannerDecision.choice,
+        summary: context.summary,
+        metadataType: plannerDecision.metadataType,
+        metadataName: plannerDecision.metadataName,
+        forceDeploy: true
+    });
 }
 
 /**

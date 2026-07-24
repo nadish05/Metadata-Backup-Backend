@@ -44,7 +44,7 @@ runTest('runtime authorizeCapabilities ignores GRAPH even if present', () => {
 
     assert.strictEqual(auth.authorized, true);
     assert.strictEqual(auth.canSkip, true);
-    assert.strictEqual(auth.trace.phase, '8D');
+    assert.strictEqual(auth.trace.phase, '8F');
     assert.strictEqual(auth.trace.graphTrusted, false);
 });
 
@@ -232,7 +232,7 @@ runTest('planner authorizeCapabilities export Category-A unchanged', () => {
     });
 
     assert.strictEqual(auth.authorized, true);
-    assert.strictEqual(auth.trace.phase, '8D');
+    assert.strictEqual(auth.trace.phase, '8F');
     assert.strictEqual(auth.trace.graphTrusted, false);
 });
 

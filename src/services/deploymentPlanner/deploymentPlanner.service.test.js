@@ -213,7 +213,7 @@ runTest('C2. Optional CustomObject Skip when EXISTS+GRAPH PASS — excluded', ()
     );
 });
 
-runTest('C3. Optional CustomObject GRAPH FAIL — analyzer denies; legacy editable Skip may apply', () => {
+runTest('C3. Optional CustomObject GRAPH FAIL — Skip denied; Deploy enforced (Phase 8F)', () => {
     const existingOptional = {
         ...optionalDeployDecision,
         destinationState: 'EXISTS'
@@ -245,6 +245,65 @@ runTest('C3. Optional CustomObject GRAPH FAIL — analyzer denies; legacy editab
         }
     };
 
+    const { resolvedDependencies, selectedMetadata } = applyPlannerOverrides({
+        selectedMetadata: [{ ...otherPrimary }],
+        resolvedDependencies: [existingOptional],
+        deploymentSelections: [
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Optional_Object__c',
+                choice: 'SKIP'
+            }
+        ],
+        plannerCompatibilityReport
+    });
+
+    // Phase 8F: DENIED does not fall back to Legacy — Skip is not applied.
+    assert.strictEqual(resolvedDependencies[0].selected, true);
+    assert.strictEqual(resolvedDependencies[0].action, 'DEPLOY');
+    assert.strictEqual(resolvedDependencies[0].destinationState, 'EXISTS');
+    assert.strictEqual(
+        isIncluded(
+            generatePackage(selectedMetadata, resolvedDependencies),
+            'CustomObject',
+            'Optional_Object__c'
+        ),
+        true
+    );
+});
+
+runTest('C4. Optional CustomObject GRAPH UNKNOWN — Skip denied; Deploy enforced', () => {
+    const existingOptional = {
+        ...optionalDeployDecision,
+        destinationState: 'EXISTS'
+    };
+
+    const plannerCompatibilityReport = {
+        plannerCompatibility: {
+            results: [
+                {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Optional_Object__c',
+                    existsInDestination: true,
+                    analysisLevel: 'EXISTENCE',
+                    capabilities: {
+                        EXISTENCE: {
+                            status: 'PASS',
+                            evidence: {
+                                destinationState: 'EXISTS',
+                                existsInDestination: true
+                            }
+                        },
+                        GRAPH: {
+                            status: 'UNKNOWN',
+                            reason: 'inconclusive'
+                        }
+                    }
+                }
+            ]
+        }
+    };
+
     const { resolvedDependencies } = applyPlannerOverrides({
         selectedMetadata: [{ ...otherPrimary }],
         resolvedDependencies: [existingOptional],
@@ -258,11 +317,55 @@ runTest('C3. Optional CustomObject GRAPH FAIL — analyzer denies; legacy editab
         plannerCompatibilityReport
     });
 
-    // Authorization denies GRAPH FAIL; Analyzer Executor falls back to Legacy.
-    // Editable optional Skip still applies under that fallback (executor unchanged).
-    assert.strictEqual(resolvedDependencies[0].selected, false);
-    assert.strictEqual(resolvedDependencies[0].action, 'DEPLOY');
-    assert.strictEqual(resolvedDependencies[0].destinationState, 'EXISTS');
+    assert.strictEqual(resolvedDependencies[0].selected, true);
+});
+
+runTest('C5. Optional CustomObject GRAPH DEFERRED — Skip denied; Deploy enforced', () => {
+    const existingOptional = {
+        ...optionalDeployDecision,
+        destinationState: 'EXISTS'
+    };
+
+    const plannerCompatibilityReport = {
+        plannerCompatibility: {
+            results: [
+                {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Optional_Object__c',
+                    existsInDestination: true,
+                    analysisLevel: 'EXISTENCE',
+                    capabilities: {
+                        EXISTENCE: {
+                            status: 'PASS',
+                            evidence: {
+                                destinationState: 'EXISTS',
+                                existsInDestination: true
+                            }
+                        },
+                        GRAPH: {
+                            status: 'DEFERRED',
+                            reason: 'deferred'
+                        }
+                    }
+                }
+            ]
+        }
+    };
+
+    const { resolvedDependencies } = applyPlannerOverrides({
+        selectedMetadata: [{ ...otherPrimary }],
+        resolvedDependencies: [existingOptional],
+        deploymentSelections: [
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Optional_Object__c',
+                choice: 'SKIP'
+            }
+        ],
+        plannerCompatibilityReport
+    });
+
+    assert.strictEqual(resolvedDependencies[0].selected, true);
 });
 
 runTest('D. Mandatory CustomObject Skip when MISSING — still deployed (Phase 8E)', () => {

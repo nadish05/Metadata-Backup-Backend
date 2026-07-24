@@ -113,7 +113,7 @@ for (const status of ['FAIL', 'UNKNOWN', 'DEFERRED', 'NOT_EVALUATED']) {
         );
         assert.ok(
             auth.reasons.some((r) =>
-                /Authorization denied: GRAPH capability failed/i.test(r)
+                /Authorization DENIED: GRAPH capability failed/i.test(r)
             )
         );
     });
@@ -155,7 +155,7 @@ runTest('shadow equals active authorizeCapabilities for EXISTENCE+GRAPH', () => 
     assert.strictEqual(shadow.canSkip, active.canSkip);
     assert.deepStrictEqual(shadow.reasons, active.reasons);
     assert.strictEqual(shadow.trace.mode, 'SHADOW');
-    assert.strictEqual(shadow.trace.phase, '8D');
+    assert.strictEqual(shadow.trace.phase, '8F');
 });
 
 if (!process.exitCode) {
