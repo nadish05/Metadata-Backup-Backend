@@ -19,6 +19,10 @@
  * - availability GRANTED | DENIED | UNAVAILABLE for executor enforcement.
  * - DENIED = trusted policy evaluated and Skip not authorized.
  * - UNAVAILABLE = no active trusted capabilities (Legacy may apply).
+ *
+ * Phase 9D (report-only):
+ * - CustomField CONTRACT trust shadow: EXISTENCE AND GRAPH AND CONTRACT.
+ * - CONTRACT remains passive in runtime authorizeCapabilities.
  */
 
 const {
@@ -486,12 +490,308 @@ function attachCustomObjectGraphTrustShadow(plannerCompatibilityReport) {
     };
 }
 
+/**
+ * Phase 9D — shadow authorization as if TRUST_POLICY were
+ * ['EXISTENCE','GRAPH','CONTRACT'].
+ * Report-only. Calls authorizeCapabilities with that trust list, then ANDs
+ * CONTRACT PASS (runtime helper still treats CONTRACT as passive).
+ *
+ * @param {object} [params]
+ * @param {object|null} [params.capabilities]
+ * @param {string|null} [params.destinationState]
+ * @param {string|null} [params.analysisLevel]
+ * @returns {{
+ *   canSkip: boolean,
+ *   authorized: boolean,
+ *   availability: string,
+ *   reasons: string[],
+ *   trace: object
+ * }}
+ */
+function authorizeExistenceGraphAndContractShadow({
+    capabilities = null,
+    destinationState = null,
+    analysisLevel = null
+} = {}) {
+    const caps =
+        capabilities && typeof capabilities === 'object' ? capabilities : {};
+
+    const authorization = authorizeCapabilities({
+        trustedCapabilities: [
+            CAPABILITY_IDS.EXISTENCE,
+            CAPABILITY_IDS.GRAPH,
+            CAPABILITY_IDS.CONTRACT
+        ],
+        capabilities: caps,
+        destinationState,
+        analysisLevel
+    });
+
+    const contractStatus =
+        getCapabilityStatus(caps, CAPABILITY_IDS.CONTRACT) ||
+        CAPABILITY_STATUS.NOT_EVALUATED;
+    const contractPass = contractStatus === CAPABILITY_STATUS.PASS;
+    const contractReason =
+        caps[CAPABILITY_IDS.CONTRACT]?.reason || `status=${contractStatus}`;
+
+    // Shadow AND: helper result (EXISTENCE+GRAPH active) AND CONTRACT PASS.
+    const authorized =
+        authorization.authorized === true && contractPass === true;
+
+    const reasons = [...(authorization.reasons || [])];
+
+    if (contractPass) {
+        reasons.push(
+            'CONTRACT policy (shadow): status PASS; capability granted.'
+        );
+    } else {
+        reasons.push(
+            `CONTRACT policy (shadow): authorization denied (status=${contractStatus}); ${contractReason}`
+        );
+        reasons.push('Authorization DENIED: CONTRACT capability failed.');
+    }
+
+    if (authorized) {
+        reasons.push(
+            'Shadow authorization granted (EXISTENCE AND GRAPH AND CONTRACT PASS).'
+        );
+    } else {
+        reasons.push(
+            'Shadow authorization denied (require EXISTENCE AND GRAPH AND CONTRACT PASS).'
+        );
+    }
+
+    const evaluated = Array.isArray(authorization.trace?.evaluated)
+        ? authorization.trace.evaluated.map((entry) => {
+              if (entry?.capability !== CAPABILITY_IDS.CONTRACT) {
+                  return entry;
+              }
+
+              return {
+                  ...entry,
+                  role: 'ACTIVE',
+                  trusted: true,
+                  contributedToCanSkip: contractPass === true
+              };
+          })
+        : [];
+
+    if (
+        !evaluated.some(
+            (entry) => entry?.capability === CAPABILITY_IDS.CONTRACT
+        )
+    ) {
+        evaluated.push({
+            capability: CAPABILITY_IDS.CONTRACT,
+            role: 'ACTIVE',
+            status: contractStatus,
+            trusted: true,
+            contributedToCanSkip: contractPass === true
+        });
+    }
+
+    return {
+        canSkip: authorized,
+        authorized,
+        availability: authorized
+            ? AUTHORIZATION_AVAILABILITY.GRANTED
+            : AUTHORIZATION_AVAILABILITY.DENIED,
+        reasons,
+        trace: {
+            ...authorization.trace,
+            phase: '9D',
+            mode: 'SHADOW',
+            shadowedTrust: [
+                CAPABILITY_IDS.EXISTENCE,
+                CAPABILITY_IDS.GRAPH,
+                CAPABILITY_IDS.CONTRACT
+            ],
+            contractStatus,
+            contractPass,
+            evaluated,
+            passiveCapabilities: (
+                authorization.trace?.passiveCapabilities || []
+            ).filter((capabilityId) => capabilityId !== CAPABILITY_IDS.CONTRACT)
+        }
+    };
+}
+
+/**
+ * Phase 9D — compare today's runtime authorization vs EXISTENCE+GRAPH+CONTRACT shadow.
+ * CustomField only. Never used for planner decisions.
+ *
+ * @param {object} [params]
+ * @param {object|null} [params.capabilities]
+ * @param {string|null} [params.destinationState]
+ * @param {string|null} [params.analysisLevel]
+ * @param {boolean|null} [params.existsInDestination]
+ * @returns {object}
+ */
+function buildCustomFieldContractTrustShadowComparison({
+    capabilities = null,
+    destinationState = null,
+    analysisLevel = null,
+    existsInDestination = null
+} = {}) {
+    const resolvedDestinationState =
+        destinationState ||
+        capabilities?.EXISTENCE?.evidence?.destinationState ||
+        (existsInDestination === true
+            ? 'EXISTS'
+            : existsInDestination === false
+              ? 'MISSING'
+              : null);
+
+    const resolvedAnalysisLevel =
+        analysisLevel ||
+        (resolvedDestinationState === 'EXISTS' ? 'EXISTENCE' : 'NONE');
+
+    // Today's TRUST_POLICY.CustomField = [] — EXISTENCE canSkip still computed.
+    const runtimeAuth = authorizeCapabilities({
+        trustedCapabilities: [],
+        capabilities,
+        destinationState: resolvedDestinationState,
+        analysisLevel: resolvedAnalysisLevel
+    });
+
+    const shadowAuth = authorizeExistenceGraphAndContractShadow({
+        capabilities,
+        destinationState: resolvedDestinationState,
+        analysisLevel: resolvedAnalysisLevel
+    });
+
+    const runtimeDecision = runtimeAuth.authorized ? 'Skip' : 'Deploy';
+    const shadowDecision = shadowAuth.authorized ? 'Skip' : 'Deploy';
+    const decisionDifference = runtimeDecision !== shadowDecision;
+
+    let differenceReason = 'Both policies agree.';
+
+    if (decisionDifference) {
+        if (runtimeDecision === 'Skip' && shadowDecision === 'Deploy') {
+            differenceReason =
+                shadowAuth.reasons.find((reason) =>
+                    /CONTRACT.*(denied|failed)/i.test(reason)
+                ) ||
+                shadowAuth.reasons.find((reason) =>
+                    /GRAPH.*(denied|failed)/i.test(reason)
+                ) ||
+                shadowAuth.reasons.join(' ') ||
+                'Shadow denied Skip; runtime allowed Skip.';
+        } else if (
+            runtimeDecision === 'Deploy' &&
+            shadowDecision === 'Skip'
+        ) {
+            differenceReason =
+                'Shadow would allow Skip (EXISTENCE+GRAPH+CONTRACT PASS) while runtime requires Deploy.';
+        } else {
+            differenceReason = shadowAuth.reasons.join(' ');
+        }
+    }
+
+    return {
+        shadowAuthorized: shadowAuth.authorized,
+        shadowReasons: shadowAuth.reasons,
+        shadowTrace: shadowAuth.trace,
+        contractTrustShadow: {
+            runtimeAuthorized: runtimeAuth.authorized,
+            runtimeDecision,
+            shadowAuthorized: shadowAuth.authorized,
+            shadowDecision,
+            decisionDifference,
+            differenceReason,
+            runtimeReasons: runtimeAuth.reasons,
+            shadowReasons: shadowAuth.reasons
+        }
+    };
+}
+
+/**
+ * Phase 9D — attach CustomField-only CONTRACT trust shadow comparison.
+ * Never mutates runtime authorization used by the planner.
+ *
+ * @param {object|null} plannerCompatibilityReport
+ * @returns {object|null}
+ */
+function attachCustomFieldContractTrustShadow(plannerCompatibilityReport) {
+    const results = plannerCompatibilityReport?.plannerCompatibility?.results;
+
+    if (!Array.isArray(results)) {
+        return plannerCompatibilityReport;
+    }
+
+    let compared = 0;
+    let differences = 0;
+    const sampleDifferences = [];
+
+    const shadowedResults = results.map((row) => {
+        if (row?.metadataType !== 'CustomField') {
+            return row;
+        }
+
+        compared += 1;
+
+        const comparison = buildCustomFieldContractTrustShadowComparison({
+            capabilities: row.capabilities || null,
+            destinationState:
+                row.capabilities?.EXISTENCE?.evidence?.destinationState ||
+                null,
+            analysisLevel: row.analysisLevel || null,
+            existsInDestination: row.existsInDestination
+        });
+
+        if (comparison.contractTrustShadow.decisionDifference) {
+            differences += 1;
+
+            if (sampleDifferences.length < 10) {
+                sampleDifferences.push({
+                    metadataType: row.metadataType,
+                    metadataName: row.metadataName,
+                    runtimeDecision:
+                        comparison.contractTrustShadow.runtimeDecision,
+                    shadowDecision:
+                        comparison.contractTrustShadow.shadowDecision,
+                    differenceReason:
+                        comparison.contractTrustShadow.differenceReason
+                });
+            }
+        }
+
+        return {
+            ...row,
+            shadowAuthorized: comparison.shadowAuthorized,
+            shadowReasons: comparison.shadowReasons,
+            shadowTrace: comparison.shadowTrace,
+            contractTrustShadow: comparison.contractTrustShadow
+        };
+    });
+
+    return {
+        plannerCompatibility: {
+            ...plannerCompatibilityReport.plannerCompatibility,
+            results: shadowedResults,
+            contractTrustShadowSummary: {
+                phase: '9D',
+                metadataType: 'CustomField',
+                shadowedTrust: ['EXISTENCE', 'GRAPH', 'CONTRACT'],
+                compared,
+                differences,
+                sampleDifferences,
+                runtimeTrustUnchanged: true,
+                contractTrustEnabled: false
+            }
+        }
+    };
+}
+
 module.exports = {
     ACTIVE_AUTHORIZATION_CAPABILITIES,
     PASSIVE_AUTHORIZATION_CAPABILITIES,
     AUTHORIZATION_AVAILABILITY,
     authorizeCapabilities,
     authorizeExistenceAndGraphShadow,
+    authorizeExistenceGraphAndContractShadow,
     buildCustomObjectGraphTrustShadowComparison,
-    attachCustomObjectGraphTrustShadow
+    buildCustomFieldContractTrustShadowComparison,
+    attachCustomObjectGraphTrustShadow,
+    attachCustomFieldContractTrustShadow
 };

@@ -23,7 +23,8 @@ const {
 const deploymentPlannerService = require('./deploymentPlanner/deploymentPlanner.service');
 const deploymentPlannerCompatibilityAnalyzerService = require('./deploymentPlannerCompatibility/deploymentPlannerCompatibility.analyzer.service');
 const {
-    attachCustomObjectGraphTrustShadow
+    attachCustomObjectGraphTrustShadow,
+    attachCustomFieldContractTrustShadow
 } = require('./deploymentPlanner/plannerAuthorization.service');
 const {
     buildDestinationInventory,
@@ -1091,6 +1092,11 @@ async function validateDeployment({
             // Phase 8B — CustomObject GRAPH trust shadow (report-only).
             // Does not change TRUST_POLICY, planner decisions, or package.
             plannerCompatibilityReport = attachCustomObjectGraphTrustShadow(
+                plannerCompatibilityReport
+            );
+
+            // Phase 9D — CustomField CONTRACT trust shadow (report-only).
+            plannerCompatibilityReport = attachCustomFieldContractTrustShadow(
                 plannerCompatibilityReport
             );
         }
