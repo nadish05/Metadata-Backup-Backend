@@ -26,11 +26,20 @@ const existsCaps = (graphStatus, graphReason = 'graph') => ({
     GRAPH: { status: graphStatus, reason: graphReason }
 });
 
-runTest('TRUST_POLICY still has no GRAPH trust entries', () => {
+runTest('TRUST_POLICY: only CustomObject trusts GRAPH', () => {
+    assert.deepStrictEqual([...TRUST_POLICY.CustomObject], [
+        'EXISTENCE',
+        'GRAPH'
+    ]);
+
     for (const [type, trusted] of Object.entries(TRUST_POLICY)) {
+        if (type === 'CustomObject') {
+            continue;
+        }
+
         assert.ok(
             !trusted.includes('GRAPH'),
-            `${type} must not trust GRAPH yet`
+            `${type} must not trust GRAPH`
         );
     }
 });
@@ -57,7 +66,7 @@ runTest('Category-A EXISTENCE-only trust ignores GRAPH FAIL', () => {
     assert.strictEqual(graphEval.role, 'PASSIVE');
 });
 
-runTest('empty trust (CustomObject today) ignores GRAPH FAIL', () => {
+runTest('empty trust ignores GRAPH FAIL (policy without GRAPH)', () => {
     const auth = authorizeCapabilities({
         trustedCapabilities: [],
         capabilities: existsCaps('FAIL', 'related object missing'),

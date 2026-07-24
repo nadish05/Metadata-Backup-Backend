@@ -126,7 +126,9 @@ runTest('B. Optional dependency Deploy — included in package', () => {
     );
 });
 
-runTest('C. Optional dependency Skip — excluded from package', () => {
+runTest('C. Optional CustomObject Skip when MISSING — force Deploy (Phase 8E)', () => {
+    // Phase 8E: CustomObject trusts EXISTENCE+GRAPH → Analyzer Executor.
+    // destination MISSING always force-Deploys (Skip cannot omit missing deps).
     const { resolvedDependencies, selectedMetadata, summary } =
         applyPlannerOverrides({
             selectedMetadata: [{ ...otherPrimary }],
@@ -140,9 +142,67 @@ runTest('C. Optional dependency Skip — excluded from package', () => {
             ]
         });
 
+    assert.strictEqual(resolvedDependencies[0].selected, true);
+    assert.strictEqual(resolvedDependencies[0].action, 'DEPLOY');
+    assert.strictEqual(
+        isIncluded(
+            generatePackage(selectedMetadata, resolvedDependencies),
+            'CustomObject',
+            'Optional_Object__c'
+        ),
+        true
+    );
+    void summary;
+});
+
+runTest('C2. Optional CustomObject Skip when EXISTS+GRAPH PASS — excluded', () => {
+    const existingOptional = {
+        ...optionalDeployDecision,
+        destinationState: 'EXISTS'
+    };
+
+    const plannerCompatibilityReport = {
+        plannerCompatibility: {
+            results: [
+                {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Optional_Object__c',
+                    existsInDestination: true,
+                    analysisLevel: 'EXISTENCE',
+                    capabilities: {
+                        EXISTENCE: {
+                            status: 'PASS',
+                            evidence: {
+                                destinationState: 'EXISTS',
+                                existsInDestination: true
+                            }
+                        },
+                        GRAPH: {
+                            status: 'PASS',
+                            reason: 'Graph closure is safe.'
+                        }
+                    }
+                }
+            ]
+        }
+    };
+
+    const { resolvedDependencies, selectedMetadata, summary } =
+        applyPlannerOverrides({
+            selectedMetadata: [{ ...otherPrimary }],
+            resolvedDependencies: [existingOptional],
+            deploymentSelections: [
+                {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Optional_Object__c',
+                    choice: 'SKIP'
+                }
+            ],
+            plannerCompatibilityReport
+        });
+
     assert.strictEqual(summary.overridesApplied, 1);
     assert.strictEqual(resolvedDependencies[0].selected, false);
-    assert.strictEqual(resolvedDependencies[0].action, 'DEPLOY');
     assert.strictEqual(
         isIncluded(
             generatePackage(selectedMetadata, resolvedDependencies),
@@ -153,7 +213,60 @@ runTest('C. Optional dependency Skip — excluded from package', () => {
     );
 });
 
-runTest('D. Mandatory dependency Skip — ignored, still deployed', () => {
+runTest('C3. Optional CustomObject GRAPH FAIL — analyzer denies; legacy editable Skip may apply', () => {
+    const existingOptional = {
+        ...optionalDeployDecision,
+        destinationState: 'EXISTS'
+    };
+
+    const plannerCompatibilityReport = {
+        plannerCompatibility: {
+            results: [
+                {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Optional_Object__c',
+                    existsInDestination: true,
+                    analysisLevel: 'EXISTENCE',
+                    capabilities: {
+                        EXISTENCE: {
+                            status: 'PASS',
+                            evidence: {
+                                destinationState: 'EXISTS',
+                                existsInDestination: true
+                            }
+                        },
+                        GRAPH: {
+                            status: 'FAIL',
+                            reason: 'related object missing'
+                        }
+                    }
+                }
+            ]
+        }
+    };
+
+    const { resolvedDependencies } = applyPlannerOverrides({
+        selectedMetadata: [{ ...otherPrimary }],
+        resolvedDependencies: [existingOptional],
+        deploymentSelections: [
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Optional_Object__c',
+                choice: 'SKIP'
+            }
+        ],
+        plannerCompatibilityReport
+    });
+
+    // Authorization denies GRAPH FAIL; Analyzer Executor falls back to Legacy.
+    // Editable optional Skip still applies under that fallback (executor unchanged).
+    assert.strictEqual(resolvedDependencies[0].selected, false);
+    assert.strictEqual(resolvedDependencies[0].action, 'DEPLOY');
+    assert.strictEqual(resolvedDependencies[0].destinationState, 'EXISTS');
+});
+
+runTest('D. Mandatory CustomObject Skip when MISSING — still deployed (Phase 8E)', () => {
+    // Analyzer MISSING force-Deploy keeps mandatory CustomObject in package.
     const { resolvedDependencies, selectedMetadata, summary } =
         applyPlannerOverrides({
             selectedMetadata: [{ ...otherPrimary }],
@@ -167,8 +280,6 @@ runTest('D. Mandatory dependency Skip — ignored, still deployed', () => {
             ]
         });
 
-    assert.strictEqual(summary.mandatoryIgnored, 1);
-    assert.strictEqual(summary.overridesApplied, 0);
     assert.strictEqual(resolvedDependencies[0].selected, true);
     assert.strictEqual(
         isIncluded(
@@ -178,6 +289,7 @@ runTest('D. Mandatory dependency Skip — ignored, still deployed', () => {
         ),
         true
     );
+    void summary;
 });
 
 runTest('E. Unknown metadata — ignored safely', () => {

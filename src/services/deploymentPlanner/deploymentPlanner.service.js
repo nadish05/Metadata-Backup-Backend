@@ -123,7 +123,8 @@ function createEmptySummary(selectionsReceived) {
 const TRUST_POLICY = Object.freeze({
     ApexClass: Object.freeze([]),
     ApexTrigger: Object.freeze([]),
-    CustomObject: Object.freeze([]),
+    // Phase 8E — first production GRAPH trust (EXISTENCE AND GRAPH).
+    CustomObject: Object.freeze(['EXISTENCE', 'GRAPH']),
     CustomField: Object.freeze([]),
     CustomLabel: Object.freeze(['EXISTENCE']),
     CustomMetadata: Object.freeze(['EXISTENCE']),

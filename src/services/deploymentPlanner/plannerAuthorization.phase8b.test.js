@@ -22,9 +22,11 @@ function runTest(name, fn) {
     }
 }
 
-runTest('TRUST_POLICY.CustomObject remains empty (no GRAPH trust)', () => {
-    assert.deepStrictEqual([...TRUST_POLICY.CustomObject], []);
-    assert.ok(!TRUST_POLICY.CustomObject.includes('GRAPH'));
+runTest('TRUST_POLICY.CustomObject trusts EXISTENCE and GRAPH (Phase 8E)', () => {
+    assert.deepStrictEqual([...TRUST_POLICY.CustomObject], [
+        'EXISTENCE',
+        'GRAPH'
+    ]);
 });
 
 runTest('runtime authorizeCapabilities ignores GRAPH even if present', () => {
