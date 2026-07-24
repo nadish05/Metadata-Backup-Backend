@@ -29,6 +29,10 @@ const {
     buildDestinationInventory,
     toDestinationStateMap
 } = require('./destinationInventory/destinationInventoryBuilder.service');
+const {
+    buildDestinationShapeIndex,
+    serializeDestinationShapeIndex
+} = require('./destinationShape/destinationShapeBuilder.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -409,6 +413,8 @@ async function validateDeployment({
         deploymentPackage.requiredDependencies || [];
     // Destination Inventory state map retained for analyzer enrichment (Step 5).
     let destinationStatesForAnalyzer = new Map();
+    // Phase 9B — CustomField structural facts for future CONTRACT (unused by planner).
+    let destinationShapeIndex = null;
 
     let accessTokenForDownstream = null;
     let resolvedInstanceUrl = instanceUrl;
@@ -662,9 +668,10 @@ async function validateDeployment({
         // Inventory Map → toDestinationStateMap → context.destinationStates.
         let destinationStates = new Map();
         let destinationStateWarnings = [];
+        let inventoryItems = [];
 
         try {
-            const inventoryItems = collectDestinationInventoryItems({
+            inventoryItems = collectDestinationInventoryItems({
                 selectedMetadata: artifactEnrichedSelectedMetadata,
                 requiredDependencies: enrichedRequiredDependencies,
                 discoveredReferences
@@ -692,6 +699,34 @@ async function validateDeployment({
                 inventoryError.message ||
                     'Destination inventory failed; continuing with UNKNOWN destination states.'
             ];
+        }
+
+        // Phase 9B — Destination Shape (CustomField structural facts only).
+        // Does not feed planner / authorization / CONTRACT evaluation yet.
+        try {
+            destinationShapeIndex = await buildDestinationShapeIndex({
+                items: inventoryItems,
+                accessToken: accessTokenForDownstream,
+                instanceUrl: resolvedInstanceUrl
+            });
+        } catch (shapeError) {
+            console.error('DESTINATION SHAPE BUILDER ERROR');
+            console.error(shapeError);
+            destinationShapeIndex = {
+                shapes: new Map(),
+                summary: {
+                    requested: 0,
+                    resolved: 0,
+                    missing: 0,
+                    unknown: 0,
+                    unsupported: 0,
+                    objectsDescribed: 0,
+                    warnings: [
+                        shapeError.message ||
+                            'Destination shape build failed; continuing without shape facts.'
+                    ]
+                }
+            };
         }
 
         // Retain for Planner Compatibility Analyzer enrichment (Step 5).
@@ -1304,7 +1339,11 @@ async function validateDeployment({
         deploymentCompatibility,
         compatibilitySummary,
         compatibilityFindings,
-        dependencyResolutionSummary
+        dependencyResolutionSummary,
+        // Phase 9B — facts only; not consumed by planner / authorization / package.
+        destinationShape: destinationShapeIndex
+            ? serializeDestinationShapeIndex(destinationShapeIndex)
+            : null
     };
 
     if (deploymentMode === 'DEPLOY') {
