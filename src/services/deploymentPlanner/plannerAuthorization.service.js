@@ -1,5 +1,5 @@
 /**
- * Planner Authorization Framework — Phase 7C / 8B / 8D / 8F.
+ * Planner Authorization Framework — Phase 7C / 8B / 8D / 8F / 9F.
  *
  * Separates policy (authorization) from analyzer facts (capabilities).
  *
@@ -22,7 +22,11 @@
  *
  * Phase 9D (report-only):
  * - CustomField CONTRACT trust shadow: EXISTENCE AND GRAPH AND CONTRACT.
- * - CONTRACT remains passive in runtime authorizeCapabilities.
+ *
+ * Phase 9F:
+ * - CONTRACT is an active capability when included in trustedCapabilities.
+ * - Trusted CONTRACT → PASS required (FAIL / UNKNOWN / DEFERRED / NOT_EVALUATED deny).
+ * - TRUST_POLICY unchanged (CustomField still []); no production behavior change.
  */
 
 const {
@@ -34,15 +38,16 @@ const {
 /**
  * Capabilities that may influence Skip authorization when trusted.
  * GRAPH is active only when requested via trustedCapabilities (Phase 8D).
+ * CONTRACT is active only when requested via trustedCapabilities (Phase 9F).
  */
 const ACTIVE_AUTHORIZATION_CAPABILITIES = Object.freeze([
     CAPABILITY_IDS.EXISTENCE,
-    CAPABILITY_IDS.GRAPH
+    CAPABILITY_IDS.GRAPH,
+    CAPABILITY_IDS.CONTRACT
 ]);
 
 /** Capabilities observed but ignored by policy unless later activated. */
 const PASSIVE_AUTHORIZATION_CAPABILITIES = Object.freeze([
-    CAPABILITY_IDS.CONTRACT,
     CAPABILITY_IDS.SEMANTIC
 ]);
 
@@ -81,12 +86,20 @@ function resolveGraphStatus(capabilities) {
     );
 }
 
+function resolveContractStatus(capabilities) {
+    return (
+        getCapabilityStatus(capabilities, CAPABILITY_IDS.CONTRACT) ||
+        CAPABILITY_STATUS.NOT_EVALUATED
+    );
+}
+
 /**
  * Authorize planner Skip using trusted capabilities + capability facts.
  *
  * - Trusted EXISTENCE only → canSkip/authorized identical to computeCanSkip().
  * - Trusted EXISTENCE + GRAPH → AND; GRAPH must be PASS (Phase 8D).
- * - GRAPH FAIL / UNKNOWN / DEFERRED / NOT_EVALUATED → authorization denied.
+ * - Trusted CONTRACT → AND; CONTRACT must be PASS (Phase 9F).
+ * - GRAPH/CONTRACT FAIL / UNKNOWN / DEFERRED / NOT_EVALUATED → authorization denied.
  * - Phase 8F availability: GRANTED | DENIED | UNAVAILABLE.
  *
  * @param {object} [params]
@@ -116,6 +129,7 @@ function authorizeCapabilities({
 
     const existenceTrusted = trusted.includes(CAPABILITY_IDS.EXISTENCE);
     const graphTrusted = trusted.includes(CAPABILITY_IDS.GRAPH);
+    const contractTrusted = trusted.includes(CAPABILITY_IDS.CONTRACT);
 
     // EXISTENCE Skip policy identical to today's computeCanSkip.
     const existenceOk = computeCanSkip({
@@ -126,6 +140,8 @@ function authorizeCapabilities({
     const existenceStatus = resolveExistenceStatus(caps, destinationState);
     const graphStatus = resolveGraphStatus(caps);
     const graphPass = graphStatus === CAPABILITY_STATUS.PASS;
+    const contractStatus = resolveContractStatus(caps);
+    const contractPass = contractStatus === CAPABILITY_STATUS.PASS;
 
     const reasons = [];
     const evaluated = [];
@@ -196,6 +212,45 @@ function authorizeCapabilities({
         }
     }
 
+    let contractContributed = false;
+
+    if (contractTrusted) {
+        // Phase 9F — CONTRACT is active when trusted; PASS required.
+        if (contractPass) {
+            reasons.push('CONTRACT policy: status PASS; capability granted.');
+            contractContributed = true;
+        } else {
+            const contractReason =
+                caps[CAPABILITY_IDS.CONTRACT]?.reason ||
+                `status=${contractStatus}`;
+            reasons.push(
+                `CONTRACT policy: authorization denied (status=${contractStatus}); ${contractReason}`
+            );
+        }
+
+        evaluated.push({
+            capability: CAPABILITY_IDS.CONTRACT,
+            role: 'ACTIVE',
+            status: contractStatus,
+            trusted: true,
+            contributedToCanSkip: contractContributed
+        });
+    } else {
+        // CONTRACT not trusted — record passively when status is present.
+        const status = getCapabilityStatus(caps, CAPABILITY_IDS.CONTRACT);
+
+        if (status != null) {
+            passiveCapabilities.push(CAPABILITY_IDS.CONTRACT);
+            evaluated.push({
+                capability: CAPABILITY_IDS.CONTRACT,
+                role: 'PASSIVE',
+                status,
+                trusted: false,
+                contributedToCanSkip: false
+            });
+        }
+    }
+
     for (const capabilityId of PASSIVE_AUTHORIZATION_CAPABILITIES) {
         const status = getCapabilityStatus(caps, capabilityId);
         const isTrusted = trusted.includes(capabilityId);
@@ -221,11 +276,15 @@ function authorizeCapabilities({
     }
 
     // EXISTENCE-only trust (or empty trust): authorized mirrors existenceOk.
-    // EXISTENCE + GRAPH trust: both must pass.
+    // EXISTENCE + GRAPH and/or CONTRACT trust: each trusted capability must PASS.
     let authorized = existenceOk === true;
 
     if (graphTrusted) {
-        authorized = existenceOk === true && graphPass === true;
+        authorized = authorized && graphPass === true;
+    }
+
+    if (contractTrusted) {
+        authorized = authorized && contractPass === true;
     }
 
     const activeTrusted = trusted.filter((capabilityId) =>
@@ -242,9 +301,23 @@ function authorizeCapabilities({
         );
     } else if (authorized) {
         availability = AUTHORIZATION_AVAILABILITY.GRANTED;
-        if (graphTrusted && existenceOk && graphPass) {
+        if (
+            graphTrusted &&
+            contractTrusted &&
+            existenceOk &&
+            graphPass &&
+            contractPass
+        ) {
+            reasons.push(
+                'Authorization GRANTED (trusted EXISTENCE AND GRAPH AND CONTRACT all PASS).'
+            );
+        } else if (graphTrusted && existenceOk && graphPass) {
             reasons.push(
                 'Authorization GRANTED (trusted EXISTENCE AND GRAPH both PASS).'
+            );
+        } else if (contractTrusted && existenceOk && contractPass) {
+            reasons.push(
+                'Authorization GRANTED (trusted EXISTENCE AND CONTRACT both PASS).'
             );
         } else {
             reasons.push(
@@ -259,7 +332,10 @@ function authorizeCapabilities({
         if (graphTrusted && !graphPass) {
             reasons.push('Authorization DENIED: GRAPH capability failed.');
         }
-        if (existenceOk && !graphTrusted) {
+        if (contractTrusted && !contractPass) {
+            reasons.push('Authorization DENIED: CONTRACT capability failed.');
+        }
+        if (existenceOk && !graphTrusted && !contractTrusted) {
             reasons.push(
                 'Authorization DENIED: trusted policy did not grant Skip.'
             );
@@ -280,6 +356,7 @@ function authorizeCapabilities({
             analysisLevel: analysisLevel || null,
             destinationState: destinationState || null,
             graphTrusted,
+            contractTrusted,
             availability,
             evaluated
         }
@@ -493,8 +570,8 @@ function attachCustomObjectGraphTrustShadow(plannerCompatibilityReport) {
 /**
  * Phase 9D — shadow authorization as if TRUST_POLICY were
  * ['EXISTENCE','GRAPH','CONTRACT'].
- * Report-only. Calls authorizeCapabilities with that trust list, then ANDs
- * CONTRACT PASS (runtime helper still treats CONTRACT as passive).
+ * Report-only. Delegates to authorizeCapabilities so shadow equals active
+ * policy when CONTRACT is eventually trusted (Phase 9F).
  *
  * @param {object} [params]
  * @param {object|null} [params.capabilities]
@@ -531,72 +608,9 @@ function authorizeExistenceGraphAndContractShadow({
         getCapabilityStatus(caps, CAPABILITY_IDS.CONTRACT) ||
         CAPABILITY_STATUS.NOT_EVALUATED;
     const contractPass = contractStatus === CAPABILITY_STATUS.PASS;
-    const contractReason =
-        caps[CAPABILITY_IDS.CONTRACT]?.reason || `status=${contractStatus}`;
-
-    // Shadow AND: helper result (EXISTENCE+GRAPH active) AND CONTRACT PASS.
-    const authorized =
-        authorization.authorized === true && contractPass === true;
-
-    const reasons = [...(authorization.reasons || [])];
-
-    if (contractPass) {
-        reasons.push(
-            'CONTRACT policy (shadow): status PASS; capability granted.'
-        );
-    } else {
-        reasons.push(
-            `CONTRACT policy (shadow): authorization denied (status=${contractStatus}); ${contractReason}`
-        );
-        reasons.push('Authorization DENIED: CONTRACT capability failed.');
-    }
-
-    if (authorized) {
-        reasons.push(
-            'Shadow authorization granted (EXISTENCE AND GRAPH AND CONTRACT PASS).'
-        );
-    } else {
-        reasons.push(
-            'Shadow authorization denied (require EXISTENCE AND GRAPH AND CONTRACT PASS).'
-        );
-    }
-
-    const evaluated = Array.isArray(authorization.trace?.evaluated)
-        ? authorization.trace.evaluated.map((entry) => {
-              if (entry?.capability !== CAPABILITY_IDS.CONTRACT) {
-                  return entry;
-              }
-
-              return {
-                  ...entry,
-                  role: 'ACTIVE',
-                  trusted: true,
-                  contributedToCanSkip: contractPass === true
-              };
-          })
-        : [];
-
-    if (
-        !evaluated.some(
-            (entry) => entry?.capability === CAPABILITY_IDS.CONTRACT
-        )
-    ) {
-        evaluated.push({
-            capability: CAPABILITY_IDS.CONTRACT,
-            role: 'ACTIVE',
-            status: contractStatus,
-            trusted: true,
-            contributedToCanSkip: contractPass === true
-        });
-    }
 
     return {
-        canSkip: authorized,
-        authorized,
-        availability: authorized
-            ? AUTHORIZATION_AVAILABILITY.GRANTED
-            : AUTHORIZATION_AVAILABILITY.DENIED,
-        reasons,
+        ...authorization,
         trace: {
             ...authorization.trace,
             phase: '9D',
@@ -607,11 +621,7 @@ function authorizeExistenceGraphAndContractShadow({
                 CAPABILITY_IDS.CONTRACT
             ],
             contractStatus,
-            contractPass,
-            evaluated,
-            passiveCapabilities: (
-                authorization.trace?.passiveCapabilities || []
-            ).filter((capabilityId) => capabilityId !== CAPABILITY_IDS.CONTRACT)
+            contractPass
         }
     };
 }

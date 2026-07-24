@@ -45,8 +45,8 @@ runTest('TRUST_POLICY.CustomField does not trust CONTRACT', () => {
     assert.ok(!TRUST_POLICY.CustomField.includes('CONTRACT'));
 });
 
-runTest('CONTRACT remains passive in runtime authorizeCapabilities', () => {
-    assert.ok(PASSIVE_AUTHORIZATION_CAPABILITIES.includes('CONTRACT'));
+runTest('CONTRACT is active in authorizeCapabilities when trusted', () => {
+    assert.ok(!PASSIVE_AUTHORIZATION_CAPABILITIES.includes('CONTRACT'));
 
     const auth = authorizeCapabilities({
         trustedCapabilities: ['EXISTENCE', 'GRAPH', 'CONTRACT'],
@@ -55,8 +55,30 @@ runTest('CONTRACT remains passive in runtime authorizeCapabilities', () => {
         analysisLevel: 'EXISTENCE'
     });
 
-    // Runtime helper ignores CONTRACT (passive) — still GRANTED if EXISTENCE+GRAPH PASS.
+    // Phase 9F — helper evaluates CONTRACT; FAIL denies authorization.
+    assert.strictEqual(auth.authorized, false);
+    assert.ok(
+        auth.reasons.some((reason) =>
+            /Authorization DENIED: CONTRACT capability failed/i.test(reason)
+        )
+    );
+});
+
+runTest('empty TRUST_POLICY still ignores CONTRACT FAIL (runtime unchanged)', () => {
+    const auth = authorizeCapabilities({
+        trustedCapabilities: [...TRUST_POLICY.CustomField],
+        capabilities: caps({ contract: 'FAIL' }),
+        destinationState: 'EXISTS',
+        analysisLevel: 'EXISTENCE'
+    });
+
     assert.strictEqual(auth.authorized, true);
+    assert.strictEqual(auth.availability, 'UNAVAILABLE');
+    const contractEval = auth.trace.evaluated.find(
+        (entry) => entry.capability === 'CONTRACT'
+    );
+    assert.strictEqual(contractEval.role, 'PASSIVE');
+    assert.strictEqual(contractEval.trusted, false);
 });
 
 runTest('shadow denies Skip when CONTRACT FAIL', () => {

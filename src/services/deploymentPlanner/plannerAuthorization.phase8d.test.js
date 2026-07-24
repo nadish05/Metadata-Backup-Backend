@@ -44,10 +44,11 @@ runTest('TRUST_POLICY: only CustomObject trusts GRAPH', () => {
     }
 });
 
-runTest('ACTIVE capabilities include EXISTENCE and GRAPH', () => {
+runTest('ACTIVE capabilities include EXISTENCE, GRAPH, and CONTRACT', () => {
     assert.deepStrictEqual([...ACTIVE_AUTHORIZATION_CAPABILITIES], [
         'EXISTENCE',
-        'GRAPH'
+        'GRAPH',
+        'CONTRACT'
     ]);
 });
 
