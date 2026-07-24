@@ -25,10 +25,32 @@
  * - Graph edges attached; graphSafe from transitive blocking dependsOn closure.
  * - Package membership for graphSafe uses the effective deploy set (post-planner).
  * - analysisLevel and canSkip remain EXISTENCE-only.
+ *
+ * Phase 7B:
+ * - Compatibility rows expose a capabilities map (facts only).
+ * - Does not authorize Skip; planner routing unchanged.
  */
 
 const ANALYSIS_LEVEL = Object.freeze({
     NONE: 'NONE',
+    EXISTENCE: 'EXISTENCE',
+    GRAPH: 'GRAPH',
+    CONTRACT: 'CONTRACT',
+    SEMANTIC: 'SEMANTIC'
+});
+
+/**
+ * Capability evaluation statuses (facts only — not authorization).
+ */
+const CAPABILITY_STATUS = Object.freeze({
+    PASS: 'PASS',
+    FAIL: 'FAIL',
+    UNKNOWN: 'UNKNOWN',
+    DEFERRED: 'DEFERRED',
+    NOT_EVALUATED: 'NOT_EVALUATED'
+});
+
+const CAPABILITY_IDS = Object.freeze({
     EXISTENCE: 'EXISTENCE',
     GRAPH: 'GRAPH',
     CONTRACT: 'CONTRACT',
@@ -93,6 +115,123 @@ function computeCanSkip({
 
     // MISSING, UNKNOWN, null, or any other value.
     return false;
+}
+
+/**
+ * Build one capability fact entry.
+ * Does not authorize Skip or encode planner policy.
+ *
+ * @param {object} params
+ * @param {string} params.status
+ * @param {object} [params.evidence]
+ * @param {string|null} [params.reason]
+ * @returns {{ status: string, evidence: object, reason: string|null }}
+ */
+function buildCapabilityEntry({
+    status,
+    evidence = {},
+    reason = null
+} = {}) {
+    return {
+        status,
+        evidence: evidence && typeof evidence === 'object' ? { ...evidence } : {},
+        reason: reason || null
+    };
+}
+
+/**
+ * Phase 7B — assemble capability facts from today's analyzer outputs.
+ * EXISTENCE / GRAPH populated; CONTRACT / SEMANTIC remain NOT_EVALUATED.
+ *
+ * @param {object} params
+ * @returns {object}
+ */
+function buildCapabilities({
+    destinationState = null,
+    existsInDestination = null,
+    graphSafe = false,
+    graphReasons = [],
+    graphEvaluation = null,
+    graphDeferred = false
+} = {}) {
+    let existenceStatus = CAPABILITY_STATUS.UNKNOWN;
+    let existenceReason = 'Destination existence is unknown.';
+
+    if (existsInDestination === true || destinationState === 'EXISTS') {
+        existenceStatus = CAPABILITY_STATUS.PASS;
+        existenceReason = 'Destination metadata located.';
+    } else if (
+        existsInDestination === false ||
+        destinationState === 'MISSING'
+    ) {
+        existenceStatus = CAPABILITY_STATUS.FAIL;
+        existenceReason = 'Metadata not found in destination.';
+    }
+
+    let graphStatus = CAPABILITY_STATUS.NOT_EVALUATED;
+    let graphReason = 'Graph capability not evaluated.';
+
+    if (graphDeferred === true) {
+        graphStatus = CAPABILITY_STATUS.DEFERRED;
+        graphReason =
+            Array.isArray(graphReasons) && graphReasons.length
+                ? graphReasons[0]
+                : 'Graph evaluation deferred until effective package (Phase 6F).';
+    } else if (graphSafe === true) {
+        graphStatus = CAPABILITY_STATUS.PASS;
+        graphReason =
+            Array.isArray(graphReasons) && graphReasons.length
+                ? graphReasons[0]
+                : 'Graph closure is safe.';
+    } else if (graphEvaluation?.status === 'UNKNOWN') {
+        graphStatus = CAPABILITY_STATUS.UNKNOWN;
+        graphReason =
+            Array.isArray(graphReasons) && graphReasons.length
+                ? graphReasons[0]
+                : 'Graph evaluation inconclusive.';
+    } else {
+        graphStatus = CAPABILITY_STATUS.FAIL;
+        graphReason =
+            Array.isArray(graphReasons) && graphReasons.length
+                ? graphReasons[0]
+                : 'Graph closure is not safe.';
+    }
+
+    return {
+        [CAPABILITY_IDS.EXISTENCE]: buildCapabilityEntry({
+            status: existenceStatus,
+            evidence: {
+                destinationState: destinationState || null,
+                existsInDestination
+            },
+            reason: existenceReason
+        }),
+        [CAPABILITY_IDS.GRAPH]: buildCapabilityEntry({
+            status: graphStatus,
+            evidence: {
+                graphSafe: graphSafe === true,
+                graphEvaluationStatus: graphEvaluation?.status || null,
+                blockingDependsOn: graphEvaluation?.blockingDependsOn ?? null,
+                dependsOnChecked: graphEvaluation?.dependsOnChecked ?? null,
+                dependsOnSatisfied: graphEvaluation?.dependsOnSatisfied ?? null,
+                truncated: graphEvaluation?.truncated === true,
+                unresolvedCount: Array.isArray(graphEvaluation?.unresolved)
+                    ? graphEvaluation.unresolved.length
+                    : 0
+            },
+            reason: graphReason
+        }),
+        [CAPABILITY_IDS.CONTRACT]: buildCapabilityEntry({
+            status: CAPABILITY_STATUS.NOT_EVALUATED,
+            evidence: {},
+            reason: 'CONTRACT capability is not evaluated yet.'
+        }),
+        [CAPABILITY_IDS.SEMANTIC]: buildCapabilityEntry({
+            status: CAPABILITY_STATUS.NOT_EVALUATED,
+            evidence: {},
+            reason: 'SEMANTIC capability is not evaluated yet.'
+        })
+    };
 }
 
 /**
@@ -585,6 +724,7 @@ function evaluateGraphSafety({
  * Build a planner compatibility row using destination existence analysis.
  * canSkip is capability only (Phase 4D); it does not authorize Skip.
  * Graph fields are Phase 6B–6F report-only.
+ * Phase 7B: capabilities map is facts-only (no authorization).
  */
 function buildCompatibilityResult(item, evaluationContext = {}) {
     const metadataType = getMetadataType(item);
@@ -634,6 +774,15 @@ function buildCompatibilityResult(item, evaluationContext = {}) {
         graphEvaluation = graphResult.graphEvaluation;
     }
 
+    const capabilities = buildCapabilities({
+        destinationState,
+        existsInDestination,
+        graphSafe,
+        graphReasons,
+        graphEvaluation,
+        graphDeferred: includeGraphEvaluation !== true
+    });
+
     return {
         metadataType,
         metadataName,
@@ -642,6 +791,7 @@ function buildCompatibilityResult(item, evaluationContext = {}) {
         graphReasons,
         graphEdges,
         graphEvaluation,
+        capabilities,
         canSkip: computeCanSkip({
             destinationState,
             analysisLevel
@@ -871,12 +1021,25 @@ function synchronizePlannerCompatibilityGraph(
             graphTruncated: truncated
         });
 
+        const capabilities = buildCapabilities({
+            destinationState:
+                stateByKey.get(
+                    buildKey(row.metadataType, row.metadataName)
+                ) || null,
+            existsInDestination: row.existsInDestination,
+            graphSafe: graphResult.graphSafe,
+            graphReasons: graphResult.graphReasons,
+            graphEvaluation: graphResult.graphEvaluation,
+            graphDeferred: false
+        });
+
         return {
             ...row,
             graphSafe: graphResult.graphSafe,
             graphReasons: graphResult.graphReasons,
             graphEdges: graphResult.graphEdges,
-            graphEvaluation: graphResult.graphEvaluation
+            graphEvaluation: graphResult.graphEvaluation,
+            capabilities
         };
     });
 
@@ -890,7 +1053,10 @@ function synchronizePlannerCompatibilityGraph(
 
 module.exports = {
     ANALYSIS_LEVEL,
+    CAPABILITY_STATUS,
+    CAPABILITY_IDS,
     computeCanSkip,
+    buildCapabilities,
     normalizeDependencyGraph,
     evaluateGraphSafety,
     buildPackageMembershipKeysFromGeneratedPackage,
