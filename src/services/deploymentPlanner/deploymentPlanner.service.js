@@ -31,6 +31,8 @@
  * destination states); no metadata-type name checks in routing.
  * Phase 7C: Skip capability computed via authorizeCapabilities() (EXISTENCE
  * policy identical to computeCanSkip; GRAPH/CONTRACT/SEMANTIC passive).
+ * Phase 7D: PlannerDecision gates consume authorization.authorized only —
+ * no EXISTENCE / analysisLevel literals in Skip authorization decisions.
  * PlannerDecision is not returned via REST.
  *
  * Package Generation is unchanged: it still includes all selectedMetadata and
@@ -217,12 +219,11 @@ function resolvePlannerDecision({
     });
     const canSkip = authorization.canSkip;
 
-    const trustsExistence = trustedLevels.includes('EXISTENCE');
     const trustMatched = trustedLevels.includes(analysisLevel);
 
-    // Phase 5B: any type that trusts EXISTENCE is routed to Analyzer Executor
-    // for all destination states. Other trusted levels use trustMatched only.
-    const useAnalyzer = trustsExistence || trustMatched;
+    // Phase 7D: route Analyzer when any capabilities are trusted for the type
+    // (current TRUST_POLICY entries are EXISTENCE-only → identical routing).
+    const useAnalyzer = trustedLevels.length > 0;
 
     if (useAnalyzer) {
         return {
@@ -238,7 +239,7 @@ function resolvePlannerDecision({
                 decisionPath: 'ANALYZER',
                 fallbackReason: trustMatched
                     ? null
-                    : 'EXISTENCE trust; analyzer executor applies destination-state rules.',
+                    : 'Trusted capabilities configured; analyzer uses authorization + destination state.',
                 authorizationTrace: authorization.trace
             }
         };
@@ -256,7 +257,7 @@ function resolvePlannerDecision({
             trustMatched: false,
             decisionPath: 'LEGACY_EDITABLE',
             fallbackReason:
-                'Analysis level not trusted for metadata type.',
+                'No trusted capabilities for metadata type.',
             authorizationTrace: authorization.trace
         }
     };
@@ -364,7 +365,7 @@ function buildPlannerDecision({
         null;
 
     const useAnalyzer = resolved.useAnalyzer === true;
-    // Phase 7C: canSkip from authorization helper (identical to computeCanSkip today).
+    // Phase 7C/7D: authorization helper is the single Skip policy source.
     const authorization =
         resolved.authorization ||
         authorizeCapabilities({
@@ -374,6 +375,7 @@ function buildPlannerDecision({
             analysisLevel
         });
     const canSkip = authorization.canSkip === true;
+    const authorized = authorization.authorized === true;
     let fallbackUsed = !useAnalyzer;
     const decisionPath =
         resolved.trace?.decisionPath || 'LEGACY_EDITABLE';
@@ -395,36 +397,19 @@ function buildPlannerDecision({
             'Selection does not match selectedMetadata or resolvedDependencies.';
         confidence = PLANNER_CONFIDENCE.NONE;
     } else if (useAnalyzer) {
-        // Phase 5B: analyzer-backed path for any EXISTENCE-trusted type.
+        // Destination MISSING remains an inventory rule (force Deploy).
+        // Skip honor/deny uses authorization.authorized only (Phase 7D).
         if (destinationState === 'MISSING') {
             allowOverride = true;
             decision = PLANNER_DECISION_OUTCOME.APPLY;
             reason =
                 'Analyzer: destination MISSING; Deploy required.';
             confidence = PLANNER_CONFIDENCE.HIGH;
-        } else if (
-            destinationState === 'UNKNOWN' ||
-            destinationState == null ||
-            analysisLevel === 'NONE'
-        ) {
-            // Executor falls back to legacy for UNKNOWN / unavailable analysis.
-            fallbackUsed = true;
-            allowOverride = editable;
-            decision = editable
-                ? PLANNER_DECISION_OUTCOME.APPLY
-                : PLANNER_DECISION_OUTCOME.IGNORE_MANDATORY;
-            reason =
-                'Analyzer UNKNOWN or unavailable; executor falls back to legacy.';
-            confidence = PLANNER_CONFIDENCE.MEDIUM;
-        } else if (
-            destinationState === 'EXISTS' &&
-            analysisLevel === 'EXISTENCE' &&
-            canSkip === true
-        ) {
+        } else if (authorized) {
             allowOverride = true;
             decision = PLANNER_DECISION_OUTCOME.APPLY;
             reason =
-                'Analyzer: EXISTS with canSkip; honor user Deploy/Skip.';
+                'Analyzer: authorization granted; honor user Deploy/Skip.';
             confidence = PLANNER_CONFIDENCE.HIGH;
         } else {
             fallbackUsed = true;
@@ -433,7 +418,7 @@ function buildPlannerDecision({
                 ? PLANNER_DECISION_OUTCOME.APPLY
                 : PLANNER_DECISION_OUTCOME.IGNORE_MANDATORY;
             reason =
-                'Analyzer conditions not met; executor falls back to legacy.';
+                'Analyzer authorization not granted; executor falls back to legacy.';
             confidence = PLANNER_CONFIDENCE.MEDIUM;
         }
     } else if (!editable) {
