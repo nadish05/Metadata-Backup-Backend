@@ -23,6 +23,9 @@ const {
 const deploymentPlannerService = require('./deploymentPlanner/deploymentPlanner.service');
 const deploymentPlannerCompatibilityAnalyzerService = require('./deploymentPlannerCompatibility/deploymentPlannerCompatibility.analyzer.service');
 const {
+    attachCustomObjectGraphTrustShadow
+} = require('./deploymentPlanner/plannerAuthorization.service');
+const {
     buildDestinationInventory,
     toDestinationStateMap
 } = require('./destinationInventory/destinationInventoryBuilder.service');
@@ -1025,6 +1028,12 @@ async function validateDeployment({
                         generatedDeploymentPackage
                     }
                 );
+
+            // Phase 8B — CustomObject GRAPH trust shadow (report-only).
+            // Does not change TRUST_POLICY, planner decisions, or package.
+            plannerCompatibilityReport = attachCustomObjectGraphTrustShadow(
+                plannerCompatibilityReport
+            );
         }
     } catch (error) {
         console.error('PLANNER COMPATIBILITY GRAPH SYNC ERROR');
