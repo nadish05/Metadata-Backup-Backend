@@ -42,7 +42,8 @@ runTest('runtime authorizeCapabilities ignores GRAPH even if present', () => {
 
     assert.strictEqual(auth.authorized, true);
     assert.strictEqual(auth.canSkip, true);
-    assert.strictEqual(auth.trace.phase, '7C');
+    assert.strictEqual(auth.trace.phase, '8D');
+    assert.strictEqual(auth.trace.graphTrusted, false);
 });
 
 runTest('shadow denies Skip when EXISTENCE PASS and GRAPH FAIL', () => {
@@ -65,7 +66,9 @@ runTest('shadow denies Skip when EXISTENCE PASS and GRAPH FAIL', () => {
     });
 
     assert.strictEqual(shadow.authorized, false);
-    assert.ok(shadow.reasons.some((r) => /GRAPH failed/i.test(r)));
+    assert.ok(
+        shadow.reasons.some((r) => /GRAPH.*(denied|failed)/i.test(r))
+    );
 });
 
 runTest('shadow allows Skip when EXISTENCE PASS and GRAPH PASS', () => {
@@ -110,7 +113,9 @@ runTest('comparison reports Runtime Skip vs Shadow Deploy on GRAPH fail', () => 
     assert.strictEqual(comparison.graphTrustShadow.shadowDecision, 'Deploy');
     assert.strictEqual(comparison.graphTrustShadow.decisionDifference, true);
     assert.ok(
-        /GRAPH failed/i.test(comparison.graphTrustShadow.differenceReason)
+        /GRAPH.*(denied|failed)/i.test(
+            comparison.graphTrustShadow.differenceReason
+        )
     );
     assert.strictEqual(comparison.shadowAuthorized, false);
     assert.ok(Array.isArray(comparison.shadowReasons));
@@ -213,7 +218,7 @@ runTest('attachCustomObjectGraphTrustShadow only shadows CustomObject rows', () 
     );
 });
 
-runTest('planner authorizeCapabilities export still Phase 7C runtime', () => {
+runTest('planner authorizeCapabilities export Category-A unchanged', () => {
     const auth = plannerAuthorize({
         trustedCapabilities: ['EXISTENCE'],
         capabilities: {
@@ -225,7 +230,8 @@ runTest('planner authorizeCapabilities export still Phase 7C runtime', () => {
     });
 
     assert.strictEqual(auth.authorized, true);
-    assert.strictEqual(auth.trace.phase, '7C');
+    assert.strictEqual(auth.trace.phase, '8D');
+    assert.strictEqual(auth.trace.graphTrusted, false);
 });
 
 if (!process.exitCode) {

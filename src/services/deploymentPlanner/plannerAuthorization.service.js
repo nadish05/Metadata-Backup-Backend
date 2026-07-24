@@ -1,16 +1,20 @@
 /**
- * Planner Authorization Framework — Phase 7C / 8B.
+ * Planner Authorization Framework — Phase 7C / 8B / 8D.
  *
  * Separates policy (authorization) from analyzer facts (capabilities).
  *
  * Phase 7C rules:
  * - EXISTENCE authorization matches today's computeCanSkip() exactly.
- * - GRAPH / CONTRACT / SEMANTIC are recorded as passive (no policy effect).
  * - Does not mutate TRUST_POLICY, executors, or package generation.
  *
  * Phase 8B (report-only):
  * - CustomObject GRAPH trust shadow: authorize as if trusted ['EXISTENCE','GRAPH'].
  * - Shadow never drives planner / package / executors.
+ *
+ * Phase 8D:
+ * - GRAPH is an active capability when included in trustedCapabilities.
+ * - Trusted EXISTENCE + GRAPH → AND policy (GRAPH PASS required).
+ * - TRUST_POLICY unchanged — no type trusts GRAPH yet → runtime unchanged.
  */
 
 const {
@@ -19,14 +23,17 @@ const {
     CAPABILITY_STATUS
 } = require('../deploymentPlannerCompatibility/deploymentPlannerCompatibility.analyzer.service');
 
-/** Capabilities that may influence Skip authorization in this phase. */
+/**
+ * Capabilities that may influence Skip authorization when trusted.
+ * GRAPH is active only when requested via trustedCapabilities (Phase 8D).
+ */
 const ACTIVE_AUTHORIZATION_CAPABILITIES = Object.freeze([
-    CAPABILITY_IDS.EXISTENCE
+    CAPABILITY_IDS.EXISTENCE,
+    CAPABILITY_IDS.GRAPH
 ]);
 
-/** Capabilities observed but ignored by policy in Phase 7C. */
+/** Capabilities observed but ignored by policy unless later activated. */
 const PASSIVE_AUTHORIZATION_CAPABILITIES = Object.freeze([
-    CAPABILITY_IDS.GRAPH,
     CAPABILITY_IDS.CONTRACT,
     CAPABILITY_IDS.SEMANTIC
 ]);
@@ -41,10 +48,30 @@ function getCapabilityStatus(capabilities, capabilityId) {
     return entry.status || null;
 }
 
+function resolveExistenceStatus(capabilities, destinationState) {
+    return (
+        getCapabilityStatus(capabilities, CAPABILITY_IDS.EXISTENCE) ||
+        (destinationState === 'EXISTS'
+            ? CAPABILITY_STATUS.PASS
+            : destinationState === 'MISSING'
+              ? CAPABILITY_STATUS.FAIL
+              : CAPABILITY_STATUS.UNKNOWN)
+    );
+}
+
+function resolveGraphStatus(capabilities) {
+    return (
+        getCapabilityStatus(capabilities, CAPABILITY_IDS.GRAPH) ||
+        CAPABILITY_STATUS.NOT_EVALUATED
+    );
+}
+
 /**
  * Authorize planner Skip using trusted capabilities + capability facts.
  *
- * Phase 7C: only EXISTENCE is active; canSkip is identical to computeCanSkip().
+ * - Trusted EXISTENCE only → canSkip/authorized identical to computeCanSkip().
+ * - Trusted EXISTENCE + GRAPH → AND; GRAPH must be PASS (Phase 8D).
+ * - GRAPH FAIL / UNKNOWN / DEFERRED / NOT_EVALUATED → authorization denied.
  *
  * @param {object} [params]
  * @param {string[]} [params.trustedCapabilities]
@@ -70,14 +97,22 @@ function authorizeCapabilities({
     const caps =
         capabilities && typeof capabilities === 'object' ? capabilities : {};
 
-    // Phase 7C — EXISTENCE Skip policy identical to today's computeCanSkip.
-    const canSkip = computeCanSkip({
+    const existenceTrusted = trusted.includes(CAPABILITY_IDS.EXISTENCE);
+    const graphTrusted = trusted.includes(CAPABILITY_IDS.GRAPH);
+
+    // EXISTENCE Skip policy identical to today's computeCanSkip.
+    const existenceOk = computeCanSkip({
         destinationState,
         analysisLevel
     });
 
+    const existenceStatus = resolveExistenceStatus(caps, destinationState);
+    const graphStatus = resolveGraphStatus(caps);
+    const graphPass = graphStatus === CAPABILITY_STATUS.PASS;
+
     const reasons = [];
     const evaluated = [];
+    const passiveCapabilities = [];
 
     if (!analysisLevel || analysisLevel === 'NONE') {
         reasons.push(
@@ -85,7 +120,7 @@ function authorizeCapabilities({
         );
     } else if (analysisLevel !== 'EXISTENCE') {
         reasons.push(
-            `EXISTENCE policy: analysisLevel ${analysisLevel} does not authorize Skip (Phase 7C).`
+            `EXISTENCE policy: analysisLevel ${analysisLevel} does not authorize Skip.`
         );
     } else if (destinationState === 'EXISTS') {
         reasons.push(
@@ -100,18 +135,49 @@ function authorizeCapabilities({
     evaluated.push({
         capability: CAPABILITY_IDS.EXISTENCE,
         role: 'ACTIVE',
-        status:
-            getCapabilityStatus(caps, CAPABILITY_IDS.EXISTENCE) ||
-            (destinationState === 'EXISTS'
-                ? CAPABILITY_STATUS.PASS
-                : destinationState === 'MISSING'
-                  ? CAPABILITY_STATUS.FAIL
-                  : CAPABILITY_STATUS.UNKNOWN),
-        trusted: trusted.includes(CAPABILITY_IDS.EXISTENCE),
-        contributedToCanSkip: canSkip === true
+        status: existenceStatus,
+        trusted: existenceTrusted,
+        contributedToCanSkip: existenceOk === true
     });
 
-    const passiveCapabilities = [];
+    let graphContributed = false;
+
+    if (graphTrusted) {
+        // Phase 8D — GRAPH is active when trusted; PASS required.
+        if (graphPass) {
+            reasons.push('GRAPH policy: status PASS; capability granted.');
+            graphContributed = true;
+        } else {
+            const graphReason =
+                caps[CAPABILITY_IDS.GRAPH]?.reason ||
+                `status=${graphStatus}`;
+            reasons.push(
+                `GRAPH policy: authorization denied (status=${graphStatus}); ${graphReason}`
+            );
+        }
+
+        evaluated.push({
+            capability: CAPABILITY_IDS.GRAPH,
+            role: 'ACTIVE',
+            status: graphStatus,
+            trusted: true,
+            contributedToCanSkip: graphContributed
+        });
+    } else {
+        // GRAPH not trusted — record passively when status is present.
+        const status = getCapabilityStatus(caps, CAPABILITY_IDS.GRAPH);
+
+        if (status != null) {
+            passiveCapabilities.push(CAPABILITY_IDS.GRAPH);
+            evaluated.push({
+                capability: CAPABILITY_IDS.GRAPH,
+                role: 'PASSIVE',
+                status,
+                trusted: false,
+                contributedToCanSkip: false
+            });
+        }
+    }
 
     for (const capabilityId of PASSIVE_AUTHORIZATION_CAPABILITIES) {
         const status = getCapabilityStatus(caps, capabilityId);
@@ -132,8 +198,29 @@ function authorizeCapabilities({
 
         if (isTrusted) {
             reasons.push(
-                `${capabilityId} is trusted but remains passive in Phase 7C authorization.`
+                `${capabilityId} is trusted but remains passive in authorization.`
             );
+        }
+    }
+
+    // EXISTENCE-only trust (or empty trust): authorized mirrors existenceOk.
+    // EXISTENCE + GRAPH trust: both must pass.
+    let authorized = existenceOk === true;
+
+    if (graphTrusted) {
+        authorized = existenceOk === true && graphPass === true;
+    }
+
+    if (graphTrusted && existenceOk && graphPass) {
+        reasons.push(
+            'Authorization granted (trusted EXISTENCE AND GRAPH both PASS).'
+        );
+    } else if (graphTrusted && !authorized) {
+        if (!existenceOk) {
+            reasons.push('Authorization denied: EXISTENCE capability failed.');
+        }
+        if (!graphPass) {
+            reasons.push('Authorization denied: GRAPH capability failed.');
         }
     }
 
@@ -142,19 +229,18 @@ function authorizeCapabilities({
     );
 
     return {
-        // Phase 7C: Skip capability bit — identical to computeCanSkip().
-        canSkip,
-        // Phase 7C: policy authorization mirrors canSkip while only EXISTENCE is active.
-        authorized: canSkip,
+        canSkip: authorized,
+        authorized,
         reasons,
         trace: {
-            phase: '7C',
+            phase: '8D',
             trustedCapabilities: trusted,
             activeTrustedCapabilities: activeTrusted,
             activeCapabilities: [...ACTIVE_AUTHORIZATION_CAPABILITIES],
             passiveCapabilities,
             analysisLevel: analysisLevel || null,
             destinationState: destinationState || null,
+            graphTrusted,
             evaluated
         }
     };
@@ -162,9 +248,8 @@ function authorizeCapabilities({
 
 /**
  * Phase 8B — shadow authorization as if TRUST_POLICY were ['EXISTENCE','GRAPH'].
- * Report-only. Does not affect runtime authorizeCapabilities() / TRUST_POLICY.
- *
- * Policy: Skip authorized only when EXISTENCE canSkip AND GRAPH PASS (AND).
+ * Report-only. Delegates to authorizeCapabilities so shadow equals active policy
+ * when GRAPH is eventually trusted (Phase 8D).
  *
  * @param {object} [params]
  * @param {object|null} [params.capabilities]
@@ -182,95 +267,21 @@ function authorizeExistenceAndGraphShadow({
     destinationState = null,
     analysisLevel = null
 } = {}) {
-    const caps =
-        capabilities && typeof capabilities === 'object' ? capabilities : {};
-    const trustedCapabilities = [
-        CAPABILITY_IDS.EXISTENCE,
-        CAPABILITY_IDS.GRAPH
-    ];
-
-    const existenceStatus =
-        getCapabilityStatus(caps, CAPABILITY_IDS.EXISTENCE) ||
-        (destinationState === 'EXISTS'
-            ? CAPABILITY_STATUS.PASS
-            : destinationState === 'MISSING'
-              ? CAPABILITY_STATUS.FAIL
-              : CAPABILITY_STATUS.UNKNOWN);
-
-    const graphStatus =
-        getCapabilityStatus(caps, CAPABILITY_IDS.GRAPH) ||
-        CAPABILITY_STATUS.NOT_EVALUATED;
-
-    // EXISTENCE half identical to today's runtime canSkip / authorizeCapabilities.
-    const existenceOk = computeCanSkip({
+    const authorization = authorizeCapabilities({
+        trustedCapabilities: [
+            CAPABILITY_IDS.EXISTENCE,
+            CAPABILITY_IDS.GRAPH
+        ],
+        capabilities,
         destinationState,
         analysisLevel
     });
-    const graphPass = graphStatus === CAPABILITY_STATUS.PASS;
-    const authorized = existenceOk === true && graphPass === true;
-
-    const reasons = [];
-
-    if (!existenceOk) {
-        reasons.push(
-            `EXISTENCE failed or incomplete (status=${existenceStatus}); Skip denied under shadow EXISTENCE+GRAPH.`
-        );
-    } else {
-        reasons.push(
-            'EXISTENCE passed under shadow EXISTENCE+GRAPH policy.'
-        );
-    }
-
-    if (!graphPass) {
-        const graphReason =
-            caps[CAPABILITY_IDS.GRAPH]?.reason ||
-            `GRAPH status=${graphStatus}`;
-        reasons.push(
-            `GRAPH failed under shadow EXISTENCE+GRAPH policy: ${graphReason}`
-        );
-    } else {
-        reasons.push('GRAPH passed under shadow EXISTENCE+GRAPH policy.');
-    }
-
-    if (authorized) {
-        reasons.push(
-            'Shadow authorization granted (EXISTENCE AND GRAPH both PASS).'
-        );
-    } else {
-        reasons.push(
-            'Shadow authorization denied (require EXISTENCE AND GRAPH PASS).'
-        );
-    }
 
     return {
-        canSkip: authorized,
-        authorized,
-        reasons,
+        ...authorization,
         trace: {
-            phase: '8B',
-            mode: 'SHADOW',
-            trustedCapabilities,
-            activeTrustedCapabilities: trustedCapabilities,
-            activeCapabilities: trustedCapabilities,
-            passiveCapabilities: [],
-            analysisLevel: analysisLevel || null,
-            destinationState: destinationState || null,
-            evaluated: [
-                {
-                    capability: CAPABILITY_IDS.EXISTENCE,
-                    role: 'ACTIVE',
-                    status: existenceStatus,
-                    trusted: true,
-                    contributedToCanSkip: existenceOk === true
-                },
-                {
-                    capability: CAPABILITY_IDS.GRAPH,
-                    role: 'ACTIVE',
-                    status: graphStatus,
-                    trusted: true,
-                    contributedToCanSkip: graphPass === true
-                }
-            ]
+            ...authorization.trace,
+            mode: 'SHADOW'
         }
     };
 }
@@ -329,7 +340,7 @@ function buildCustomObjectGraphTrustShadowComparison({
         if (runtimeDecision === 'Skip' && shadowDecision === 'Deploy') {
             differenceReason =
                 shadowAuth.reasons.find((reason) =>
-                    /GRAPH failed/i.test(reason)
+                    /GRAPH.*(denied|failed)/i.test(reason)
                 ) ||
                 shadowAuth.reasons.join(' ') ||
                 'Shadow denied Skip; runtime allowed Skip.';
