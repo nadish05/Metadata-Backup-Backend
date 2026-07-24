@@ -23,6 +23,9 @@ const compareRoutes =
 const aiRoutes =
     require('./routes/ai.routes');
 
+const aiAdvisorRoutes =
+    require('./routes/aiAdvisor.routes');
+
 const deploymentRoutes =
     require(
         './routes/deployment.routes'
@@ -64,6 +67,7 @@ app.use('/api/metadata', metadataRoutes);
 app.use('/api/github',githubRoutes);
 app.use('/api/compare',compareRoutes);
 app.use('/api/ai',aiRoutes);
+app.use('/api/ai', aiAdvisorRoutes);
 app.use('/api/deployment',deploymentRoutes);
 app.use('/api/deployment', deploymentReviewRoutes);
 app.use('/api/deployment', sourceValidateRoutes);
