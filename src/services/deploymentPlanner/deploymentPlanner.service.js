@@ -126,7 +126,8 @@ const TRUST_POLICY = Object.freeze({
     ApexTrigger: Object.freeze([]),
     // Phase 8E — first production GRAPH trust (EXISTENCE AND GRAPH).
     CustomObject: Object.freeze(['EXISTENCE', 'GRAPH']),
-    CustomField: Object.freeze([]),
+    // Phase 9G — first production CONTRACT trust (EXISTENCE AND GRAPH AND CONTRACT).
+    CustomField: Object.freeze(['EXISTENCE', 'GRAPH', 'CONTRACT']),
     CustomLabel: Object.freeze(['EXISTENCE']),
     CustomMetadata: Object.freeze(['EXISTENCE']),
     Layout: Object.freeze([]),

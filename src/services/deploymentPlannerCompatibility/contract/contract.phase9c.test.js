@@ -239,8 +239,12 @@ runTest('buildCapabilities keeps ApexClass CONTRACT NOT_EVALUATED', () => {
     );
 });
 
-runTest('TRUST_POLICY and authorization ignore CONTRACT', () => {
-    assert.ok(!TRUST_POLICY.CustomField.includes('CONTRACT'));
+runTest('TRUST_POLICY: CustomField trusts CONTRACT; CustomObject does not', () => {
+    assert.deepStrictEqual([...TRUST_POLICY.CustomField], [
+        'EXISTENCE',
+        'GRAPH',
+        'CONTRACT'
+    ]);
     assert.ok(!TRUST_POLICY.CustomObject.includes('CONTRACT'));
 
     const auth = authorizeCapabilities({

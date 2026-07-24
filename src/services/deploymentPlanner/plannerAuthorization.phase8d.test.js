@@ -26,14 +26,19 @@ const existsCaps = (graphStatus, graphReason = 'graph') => ({
     GRAPH: { status: graphStatus, reason: graphReason }
 });
 
-runTest('TRUST_POLICY: only CustomObject trusts GRAPH', () => {
+runTest('TRUST_POLICY: CustomObject and CustomField trust GRAPH', () => {
     assert.deepStrictEqual([...TRUST_POLICY.CustomObject], [
         'EXISTENCE',
         'GRAPH'
     ]);
+    assert.deepStrictEqual([...TRUST_POLICY.CustomField], [
+        'EXISTENCE',
+        'GRAPH',
+        'CONTRACT'
+    ]);
 
     for (const [type, trusted] of Object.entries(TRUST_POLICY)) {
-        if (type === 'CustomObject') {
+        if (type === 'CustomObject' || type === 'CustomField') {
             continue;
         }
 

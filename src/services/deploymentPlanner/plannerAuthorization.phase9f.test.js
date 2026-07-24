@@ -40,13 +40,16 @@ function caps({
     };
 }
 
-runTest('TRUST_POLICY unchanged (CustomField empty; CustomObject EXISTENCE+GRAPH)', () => {
-    assert.deepStrictEqual([...TRUST_POLICY.CustomField], []);
+runTest('TRUST_POLICY: CustomField trusts CONTRACT; CustomObject unchanged', () => {
+    assert.deepStrictEqual([...TRUST_POLICY.CustomField], [
+        'EXISTENCE',
+        'GRAPH',
+        'CONTRACT'
+    ]);
     assert.deepStrictEqual([...TRUST_POLICY.CustomObject], [
         'EXISTENCE',
         'GRAPH'
     ]);
-    assert.ok(!TRUST_POLICY.CustomField.includes('CONTRACT'));
     assert.ok(!TRUST_POLICY.CustomObject.includes('CONTRACT'));
 });
 
