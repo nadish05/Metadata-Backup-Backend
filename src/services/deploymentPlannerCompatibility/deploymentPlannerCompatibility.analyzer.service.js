@@ -137,12 +137,14 @@ function computeCanSkip({
 function buildCapabilityEntry({
     status,
     evidence = {},
-    reason = null
+    reason = null,
+    authorizationReady = true
 } = {}) {
     return {
         status,
         evidence: evidence && typeof evidence === 'object' ? { ...evidence } : {},
-        reason: reason || null
+        reason: reason || null,
+        authorizationReady: authorizationReady === true
     };
 }
 
@@ -217,6 +219,13 @@ function buildCapabilities({
         sourceShapeIndex
     });
 
+    const graphAuthorizationReady =
+        graphDeferred !== true &&
+        graphStatus !== CAPABILITY_STATUS.NOT_EVALUATED;
+    const contractAuthorizationReady =
+        contractCapability?.status !== CAPABILITY_STATUS.DEFERRED &&
+        contractCapability?.status !== CAPABILITY_STATUS.NOT_EVALUATED;
+
     return {
         [CAPABILITY_IDS.EXISTENCE]: buildCapabilityEntry({
             status: existenceStatus,
@@ -224,7 +233,8 @@ function buildCapabilities({
                 destinationState: destinationState || null,
                 existsInDestination
             },
-            reason: existenceReason
+            reason: existenceReason,
+            authorizationReady: true
         }),
         [CAPABILITY_IDS.GRAPH]: buildCapabilityEntry({
             status: graphStatus,
@@ -239,13 +249,18 @@ function buildCapabilities({
                     ? graphEvaluation.unresolved.length
                     : 0
             },
-            reason: graphReason
+            reason: graphReason,
+            authorizationReady: graphAuthorizationReady
         }),
-        [CAPABILITY_IDS.CONTRACT]: contractCapability,
+        [CAPABILITY_IDS.CONTRACT]: {
+            ...contractCapability,
+            authorizationReady: contractAuthorizationReady
+        },
         [CAPABILITY_IDS.SEMANTIC]: buildCapabilityEntry({
             status: CAPABILITY_STATUS.NOT_EVALUATED,
             evidence: {},
-            reason: 'SEMANTIC capability is not evaluated yet.'
+            reason: 'SEMANTIC capability is not evaluated yet.',
+            authorizationReady: false
         })
     };
 }

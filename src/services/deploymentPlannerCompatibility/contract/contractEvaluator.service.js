@@ -363,7 +363,7 @@ function evaluateContractCapability({
 
     if (existsInDestination !== true) {
         return buildCapabilityEntry({
-            status: CONTRACT_STATUS.UNKNOWN,
+            status: CONTRACT_STATUS.DEFERRED,
             evidence: {
                 rulesChecked: [],
                 mismatches: [],
@@ -385,20 +385,20 @@ function evaluateContractCapability({
 
     if (!sourceEntry?.attributes) {
         return buildCapabilityEntry({
-            status: CONTRACT_STATUS.UNKNOWN,
+            status: CONTRACT_STATUS.DEFERRED,
             evidence: {
                 rulesChecked: [],
                 mismatches: [],
                 sourceSummary: sourceEntry || null,
                 destinationSummary: destinationEntry || null
             },
-            reason: 'CONTRACT UNKNOWN: source CustomField structure unavailable.'
+            reason: 'CONTRACT DEFERRED: source CustomField structure unavailable.'
         });
     }
 
     if (!destinationEntry?.found || !destinationEntry?.attributes) {
         return buildCapabilityEntry({
-            status: CONTRACT_STATUS.UNKNOWN,
+            status: CONTRACT_STATUS.DEFERRED,
             evidence: {
                 rulesChecked: [],
                 mismatches: [],
@@ -406,7 +406,7 @@ function evaluateContractCapability({
                 destinationSummary: destinationEntry || null
             },
             reason:
-                'CONTRACT UNKNOWN: destination CustomField shape unavailable.'
+                'CONTRACT DEFERRED: destination CustomField shape unavailable.'
         });
     }
 

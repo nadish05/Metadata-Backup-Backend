@@ -68,6 +68,24 @@ function getCapabilityStatus(capabilities, capabilityId) {
     return entry.status || null;
 }
 
+function isAuthorizationCapabilityReady(
+    capabilities,
+    capabilityId,
+    fallback = true
+) {
+    const entry = capabilities?.[capabilityId];
+
+    if (!entry || typeof entry !== 'object') {
+        return fallback === true;
+    }
+
+    if (typeof entry.authorizationReady === 'boolean') {
+        return entry.authorizationReady === true;
+    }
+
+    return fallback === true;
+}
+
 function resolveExistenceStatus(capabilities, destinationState) {
     return (
         getCapabilityStatus(capabilities, CAPABILITY_IDS.EXISTENCE) ||
@@ -130,6 +148,12 @@ function authorizeCapabilities({
     const existenceTrusted = trusted.includes(CAPABILITY_IDS.EXISTENCE);
     const graphTrusted = trusted.includes(CAPABILITY_IDS.GRAPH);
     const contractTrusted = trusted.includes(CAPABILITY_IDS.CONTRACT);
+    const graphReady = graphTrusted
+        ? isAuthorizationCapabilityReady(caps, CAPABILITY_IDS.GRAPH, true)
+        : false;
+    const contractReady = contractTrusted
+        ? isAuthorizationCapabilityReady(caps, CAPABILITY_IDS.CONTRACT, true)
+        : false;
 
     // EXISTENCE Skip policy identical to today's computeCanSkip.
     const existenceOk = computeCanSkip({
@@ -175,7 +199,18 @@ function authorizeCapabilities({
 
     let graphContributed = false;
 
-    if (graphTrusted) {
+    if (graphTrusted && !graphReady) {
+        reasons.push(
+            'GRAPH policy: capability deferred for current phase; authorization gate inactive.'
+        );
+        evaluated.push({
+            capability: CAPABILITY_IDS.GRAPH,
+            role: 'DEFERRED',
+            status: graphStatus,
+            trusted: true,
+            contributedToCanSkip: false
+        });
+    } else if (graphTrusted) {
         // Phase 8D — GRAPH is active when trusted; PASS required.
         if (graphPass) {
             reasons.push('GRAPH policy: status PASS; capability granted.');
@@ -214,7 +249,18 @@ function authorizeCapabilities({
 
     let contractContributed = false;
 
-    if (contractTrusted) {
+    if (contractTrusted && !contractReady) {
+        reasons.push(
+            'CONTRACT policy: capability deferred for current phase; authorization gate inactive.'
+        );
+        evaluated.push({
+            capability: CAPABILITY_IDS.CONTRACT,
+            role: 'DEFERRED',
+            status: contractStatus,
+            trusted: true,
+            contributedToCanSkip: false
+        });
+    } else if (contractTrusted) {
         // Phase 9F — CONTRACT is active when trusted; PASS required.
         if (contractPass) {
             reasons.push('CONTRACT policy: status PASS; capability granted.');
@@ -279,16 +325,18 @@ function authorizeCapabilities({
     // EXISTENCE + GRAPH and/or CONTRACT trust: each trusted capability must PASS.
     let authorized = existenceOk === true;
 
-    if (graphTrusted) {
+    if (graphTrusted && graphReady) {
         authorized = authorized && graphPass === true;
     }
 
-    if (contractTrusted) {
+    if (contractTrusted && contractReady) {
         authorized = authorized && contractPass === true;
     }
 
     const activeTrusted = trusted.filter((capabilityId) =>
-        ACTIVE_AUTHORIZATION_CAPABILITIES.includes(capabilityId)
+        ACTIVE_AUTHORIZATION_CAPABILITIES.includes(capabilityId) &&
+        (capabilityId === CAPABILITY_IDS.EXISTENCE ||
+            isAuthorizationCapabilityReady(caps, capabilityId, true))
     );
 
     // Phase 8F — availability for enforcement (DENIED never falls back to Legacy).
@@ -329,10 +377,10 @@ function authorizeCapabilities({
         if (!existenceOk) {
             reasons.push('Authorization DENIED: EXISTENCE capability failed.');
         }
-        if (graphTrusted && !graphPass) {
+        if (graphTrusted && graphReady && !graphPass) {
             reasons.push('Authorization DENIED: GRAPH capability failed.');
         }
-        if (contractTrusted && !contractPass) {
+        if (contractTrusted && contractReady && !contractPass) {
             reasons.push('Authorization DENIED: CONTRACT capability failed.');
         }
         if (existenceOk && !graphTrusted && !contractTrusted) {

@@ -107,7 +107,7 @@ runTest('CONTRACT FAIL on field type mismatch with evidence', () => {
     );
 });
 
-runTest('CONTRACT UNKNOWN when destination facts missing', () => {
+runTest('CONTRACT DEFERRED when destination facts missing', () => {
     const capability = evaluateContractCapability({
         metadataType: 'CustomField',
         metadataName: 'Account.Name',
@@ -130,7 +130,7 @@ runTest('CONTRACT UNKNOWN when destination facts missing', () => {
         ])
     });
 
-    assert.strictEqual(capability.status, 'UNKNOWN');
+    assert.strictEqual(capability.status, 'DEFERRED');
 });
 
 runTest('Non-CustomField remains NOT_EVALUATED', () => {
