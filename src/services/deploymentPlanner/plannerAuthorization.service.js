@@ -139,6 +139,17 @@ function authorizeCapabilities({
     destinationState = null,
     analysisLevel = null
 } = {}) {
+    // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+    console.log('\n==============================');
+    console.log('AUTHORIZATION DEBUG');
+    console.log('==============================');
+
+    console.log({
+        destinationState,
+        trustPolicy: trustedCapabilities,
+        analysisLevel
+    });
+
     const trusted = Array.isArray(trustedCapabilities)
         ? [...trustedCapabilities]
         : [];
@@ -389,6 +400,13 @@ function authorizeCapabilities({
             );
         }
     }
+
+    // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+    console.log({
+        authorized,
+        availability,
+        reason: reasons
+    });
 
     return {
         canSkip: authorized,

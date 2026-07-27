@@ -369,12 +369,58 @@ function buildPlannerDecision({
         plannerCompatibilityRow?.destinationState ||
         null;
 
+    // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+    console.log('\n==============================');
+    console.log('DESTINATION STATE DEBUG');
+    console.log('==============================');
+
+    console.log('Metadata Type:', metadataType);
+    console.log('Metadata Name:', metadataName);
+
+    console.log(
+        'metadataItem.destinationState:',
+        metadataItem?.destinationState
+    );
+
+    console.log(
+        'plannerCompatibilityRow.destinationState:',
+        plannerCompatibilityRow?.destinationState
+    );
+
+    console.log(
+        'Resolved destinationState:',
+        destinationState
+    );
+
+    console.log(
+        'plannerCompatibilityRow:',
+        JSON.stringify(plannerCompatibilityRow, null, 2)
+    );
+
     const useAnalyzer = resolved.useAnalyzer === true;
+    const trustPolicy = resolved.trace?.trustedLevels || [];
+    const editable =
+        found && metadataItem
+            ? isPlannerEditable(metadataItem, collectionKind)
+            : false;
+
+    // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+    console.log('\nPlanner Authorization Input');
+
+    console.log({
+        metadataType,
+        metadataName,
+        destinationState,
+        useAnalyzer,
+        editable,
+        trustPolicy
+    });
+
     // Phase 7C/7D: authorization helper is the single Skip policy source.
     const authorization =
         resolved.authorization ||
         authorizeCapabilities({
-            trustedCapabilities: resolved.trace?.trustedLevels || [],
+            trustedCapabilities: trustPolicy,
             capabilities: plannerCompatibilityRow?.capabilities || null,
             destinationState,
             analysisLevel
@@ -384,11 +430,6 @@ function buildPlannerDecision({
     let fallbackUsed = !useAnalyzer;
     const decisionPath =
         resolved.trace?.decisionPath || 'LEGACY_EDITABLE';
-
-    const editable =
-        found && metadataItem
-            ? isPlannerEditable(metadataItem, collectionKind)
-            : false;
 
     let allowOverride = false;
     let decision = PLANNER_DECISION_OUTCOME.IGNORE_UNKNOWN;
@@ -484,6 +525,16 @@ function applyChoiceToIndexedItem({
 }) {
     const item = indexed[index];
 
+    // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+    console.log('\nApply Choice');
+
+    console.log({
+        metadataType,
+        metadataName,
+        choice,
+        beforeSelected: item.selected
+    });
+
     if (!isPlannerEditable(item, collectionKind)) {
         summary.mandatoryIgnored += 1;
         summary.overridesIgnored += 1;
@@ -491,6 +542,11 @@ function applyChoiceToIndexedItem({
             'Mandatory metadata ignored:',
             `${metadataType}:${metadataName}`
         );
+        // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+        console.log({
+            afterSelected: item.selected,
+            overrideApplied: item.selected === false
+        });
         return false;
     }
 
@@ -498,6 +554,11 @@ function applyChoiceToIndexedItem({
     const currentSelected = item.selected !== false;
 
     if (currentSelected === nextSelected) {
+        // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+        console.log({
+            afterSelected: item.selected,
+            overrideApplied: item.selected === false
+        });
         return false;
     }
 
@@ -514,6 +575,12 @@ function applyChoiceToIndexedItem({
         choice,
         `(${collectionKind})`
     );
+
+    // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+    console.log({
+        afterSelected: indexed[index].selected,
+        overrideApplied: indexed[index].selected === false
+    });
 
     return true;
 }
@@ -536,7 +603,23 @@ function applyAnalyzerChoiceToIndexedItem({
     const nextSelected = effectiveChoice === 'DEPLOY';
     const currentSelected = item.selected !== false;
 
+    // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+    // CustomField analyzer path uses this mutator (not applyChoiceToIndexedItem).
+    console.log('\nApply Choice');
+
+    console.log({
+        metadataType,
+        metadataName,
+        choice: effectiveChoice,
+        beforeSelected: item.selected
+    });
+
     if (currentSelected === nextSelected) {
+        // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+        console.log({
+            afterSelected: item.selected,
+            overrideApplied: item.selected === false
+        });
         return false;
     }
 
@@ -553,6 +636,12 @@ function applyAnalyzerChoiceToIndexedItem({
         effectiveChoice,
         forceDeploy ? '(force Deploy)' : ''
     );
+
+    // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+    console.log({
+        afterSelected: indexed[index].selected,
+        overrideApplied: indexed[index].selected === false
+    });
 
     return true;
 }
@@ -783,6 +872,17 @@ function applyPlannerOverrides({
                 found: true
             });
 
+            // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+            console.log('\nPlanner Decision');
+
+            console.log({
+                metadataType: plannerDecision.metadataType,
+                metadataName: plannerDecision.metadataName,
+                decision: plannerDecision.decision,
+                allowOverride: plannerDecision.allowOverride,
+                editable: plannerDecision.editable
+            });
+
             plannerDecisions.push(plannerDecision);
 
             if (plannerDecision.shadowValidation) {
@@ -809,6 +909,17 @@ function applyPlannerOverrides({
                 choice,
                 collectionKind: 'requiredDependencies',
                 found: true
+            });
+
+            // TEMPORARY DEBUG — remove after Skip destinationState investigation.
+            console.log('\nPlanner Decision');
+
+            console.log({
+                metadataType: plannerDecision.metadataType,
+                metadataName: plannerDecision.metadataName,
+                decision: plannerDecision.decision,
+                allowOverride: plannerDecision.allowOverride,
+                editable: plannerDecision.editable
             });
 
             plannerDecisions.push(plannerDecision);
