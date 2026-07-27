@@ -164,6 +164,10 @@ const TRUST_POLICY = Object.freeze({
     CustomField: Object.freeze(['EXISTENCE', 'GRAPH', 'CONTRACT']),
     CustomLabel: Object.freeze(['EXISTENCE']),
     CustomMetadata: Object.freeze(['EXISTENCE']),
+    // Category-A EXISTENCE trust — Analyzer Executor for optional UI metadata Skip.
+    FlexiPage: Object.freeze(['EXISTENCE']),
+    LightningComponentBundle: Object.freeze(['EXISTENCE']),
+    ListView: Object.freeze(['EXISTENCE']),
     Layout: Object.freeze([]),
     Flow: Object.freeze([]),
     NamedCredential: Object.freeze(['EXISTENCE']),
