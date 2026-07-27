@@ -81,6 +81,40 @@ function getItemName(item) {
     return item?.metadataName || item?.name || null;
 }
 
+/**
+ * Resolve destinationState for planner authorization.
+ *
+ * "UNKNOWN" on the metadata item is a placeholder/default (resolution /
+ * enrichment default when no concrete inventory fact is attached to the item).
+ * Prefer a concrete analyzer compatibility-row fact (EXISTS / MISSING) over
+ * that placeholder. Do not invent EXISTS/MISSING.
+ *
+ * @param {object|null} metadataItem
+ * @param {object|null} plannerCompatibilityRow
+ * @returns {string|null}
+ */
+function resolvePlannerDestinationState(
+    metadataItem = null,
+    plannerCompatibilityRow = null
+) {
+    const itemState = metadataItem?.destinationState || null;
+    const rowState = plannerCompatibilityRow?.destinationState || null;
+
+    if (itemState === 'EXISTS' || itemState === 'MISSING') {
+        return itemState;
+    }
+
+    if (rowState === 'EXISTS' || rowState === 'MISSING') {
+        return rowState;
+    }
+
+    if (itemState) {
+        return itemState;
+    }
+
+    return rowState || null;
+}
+
 function buildItemIndex(items) {
     const index = new Map();
 
@@ -206,10 +240,10 @@ function resolvePlannerDecision({
         null;
     const analysisLevel =
         plannerCompatibilityRow?.analysisLevel || 'NONE';
-    const destinationState =
-        metadataItem?.destinationState ||
-        plannerCompatibilityRow?.destinationState ||
-        null;
+    const destinationState = resolvePlannerDestinationState(
+        metadataItem,
+        plannerCompatibilityRow
+    );
 
     const trustedLevels = Array.isArray(TRUST_POLICY[metadataType])
         ? [...TRUST_POLICY[metadataType]]
@@ -364,10 +398,10 @@ function buildPlannerDecision({
         null;
 
     const analysisLevel = resolved.trace?.analysisLevel || 'NONE';
-    const destinationState =
-        metadataItem?.destinationState ||
-        plannerCompatibilityRow?.destinationState ||
-        null;
+    const destinationState = resolvePlannerDestinationState(
+        metadataItem,
+        plannerCompatibilityRow
+    );
 
     // TEMPORARY DEBUG — remove after Skip destinationState investigation.
     console.log('\n==============================');
