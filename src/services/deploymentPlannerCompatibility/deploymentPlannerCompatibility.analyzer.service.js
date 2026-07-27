@@ -821,6 +821,9 @@ function buildCompatibilityResult(item, evaluationContext = {}) {
     return {
         metadataType,
         metadataName,
+        // Propagate analyzer destination facts for planner authorization wiring.
+        // Planner already reads plannerCompatibilityRow.destinationState.
+        destinationState,
         existsInDestination,
         graphSafe,
         graphReasons,
