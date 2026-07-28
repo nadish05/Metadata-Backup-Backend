@@ -14,6 +14,9 @@ const customObjectFlexiPageAnalyzer = require('./deploymentReview/customObjectFl
 const dependencySelection = require('./dependencySelection.service');
 const apiVersionValidator = require('./apiVersionValidator.service');
 const testClassValidator = require('./testClassValidator.service');
+const {
+    normalizeDeployableMetadata
+} = require('./deployableMetadataNormalizer.service');
 
 const APEX_REVIEW_METADATA_TYPE = 'ApexClass';
 const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
@@ -80,17 +83,46 @@ function buildEmptyDependencyAnalysisResult() {
     };
 }
 
+/**
+ * Prefer a bundle member path whose basename matches the logical component name.
+ * Keeps existing Review naming (path.basename) without changing processMetadataItem.
+ */
+function resolveReviewIngressFilePath(item) {
+    const sources = Array.isArray(item?.sourceFiles) ? item.sourceFiles : [];
+    const jsMember = sources.find(
+        (filePath) =>
+            typeof filePath === 'string' &&
+            filePath.endsWith('.js') &&
+            !filePath.endsWith('.js-meta.xml')
+    );
+
+    if (jsMember) {
+        return jsMember;
+    }
+
+    const nonMetaMember = sources.find(
+        (filePath) =>
+            typeof filePath === 'string' && !filePath.endsWith('-meta.xml')
+    );
+
+    if (nonMetaMember) {
+        return nonMetaMember;
+    }
+
+    return item?.filePath || null;
+}
+
 function normalizeSelectedMetadata(selectedMetadata) {
     if (!Array.isArray(selectedMetadata)) {
         return [];
     }
 
     return selectedMetadata
-        .filter((item) => item?.filePath)
         .map((item) => ({
-            metadataType: item.metadataType || null,
-            filePath: item.filePath
-        }));
+            metadataType: item?.metadataType || null,
+            filePath: resolveReviewIngressFilePath(item)
+        }))
+        .filter((item) => item.filePath);
 }
 
 function normalizeDeploymentPackage(payload) {
@@ -100,7 +132,10 @@ function normalizeDeploymentPackage(payload) {
             repoUrl: payload.repoUrl,
             sourceBranch: payload.sourceBranch || null,
             destinationBranch: payload.destinationBranch,
-            selectedMetadata: normalizeSelectedMetadata(payload.selectedMetadata)
+            // Collapse physical LWC files → logical components before Review.
+            selectedMetadata: normalizeSelectedMetadata(
+                normalizeDeployableMetadata(payload.selectedMetadata)
+            )
         };
     }
 
@@ -110,12 +145,15 @@ function normalizeDeploymentPackage(payload) {
             repoUrl: payload.repoUrl,
             sourceBranch: payload.sourceBranch || payload.branch,
             destinationBranch: payload.destinationBranch || payload.branch,
-            selectedMetadata: [
-                {
-                    metadataType: payload.metadataType || APEX_REVIEW_METADATA_TYPE,
-                    filePath: payload.filePath
-                }
-            ]
+            selectedMetadata: normalizeSelectedMetadata(
+                normalizeDeployableMetadata([
+                    {
+                        metadataType:
+                            payload.metadataType || APEX_REVIEW_METADATA_TYPE,
+                        filePath: payload.filePath
+                    }
+                ])
+            )
         };
     }
 
@@ -557,5 +595,6 @@ module.exports = {
     reviewDeployableMetadataItems,
     resolveMetadataFilePath,
     isSupportedReviewMetadataType,
+    normalizeDeploymentPackage,
     SUPPORTED_REVIEW_METADATA_TYPES
 };
