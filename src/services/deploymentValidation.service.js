@@ -4,6 +4,7 @@ const metadataValidationService = require('./metadataValidation.service');
 const dependencyValidationService = require('./dependencyValidation.service');
 const deploymentReadinessService = require('./deploymentReadiness.service');
 const deploymentPackageService = require('./deploymentPackage.service');
+const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
 const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
@@ -1058,6 +1059,17 @@ async function validateDeployment({
             deploymentPackageWithResolvedDependencies
         );
 
+    // Report-only: explain WHY members exist in the generated package.
+    // Must not influence package, validation, planner, manifest, workspace, or deploy.
+    const deploymentPackageProvenance =
+        deploymentPackageProvenanceService.buildDeploymentPackageProvenance({
+            generatedDeploymentPackage,
+            selectedMetadata: artifactEnrichedSelectedMetadata,
+            discoveredRelationships,
+            discoveredReferences,
+            resolvedDependencies: resolvedRequiredDependencies
+        });
+
     // Phase 6F — synchronize graphSafe to the effective generated package.
     // Does not re-run planner; preserves analysisLevel / canSkip from pre-planner report.
     try {
@@ -1373,7 +1385,9 @@ async function validateDeployment({
         // Phase 9B — facts only; not consumed by planner / authorization / package.
         destinationShape: destinationShapeIndex
             ? serializeDestinationShapeIndex(destinationShapeIndex)
-            : null
+            : null,
+        // Additive report-only provenance. Output only — never consumed by backend.
+        deploymentPackageProvenance
     };
 
     if (deploymentMode === 'DEPLOY') {
