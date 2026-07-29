@@ -14,6 +14,33 @@
 const ALLOWED_CHOICES = new Set(['DEPLOY', 'SKIP']);
 
 /**
+ * TEMPORARY DIAGNOSTIC — remove after deploymentSelections origin investigation.
+ * Does not mutate data or change return values.
+ */
+function logDeploymentSelectionDiagnostic({
+    event = 'DEPLOYMENT SELECTION CREATED',
+    caller,
+    file,
+    method,
+    selections,
+    lastAddedEntry = null
+}) {
+    console.log('------------------------------------------');
+    console.log(event);
+    console.log('Caller');
+    console.log(caller);
+    console.log('File');
+    console.log(file);
+    console.log('Method');
+    console.log(method);
+    console.log('Current Selection Count');
+    console.log(Array.isArray(selections) ? selections.length : 0);
+    console.log('Last Added Entry');
+    console.log(JSON.stringify(lastAddedEntry, null, 2));
+    console.log('------------------------------------------');
+}
+
+/**
  * Normalize a single selection entry into a stable internal shape.
  * Invalid or incomplete entries are discarded.
  *
@@ -39,11 +66,30 @@ function normalizeSelectionItem(item) {
         return null;
     }
 
-    return {
+    const normalized = {
         metadataType: String(metadataType),
         metadataName: String(metadataName),
         choice
     };
+
+    // TEMPORARY DIAGNOSTIC — metadataType assigned here from request fields only.
+    logDeploymentSelectionDiagnostic({
+        event: 'DEPLOYMENT SELECTION CREATED',
+        caller: 'normalizeSelectionItem',
+        file: 'deploymentSelections.foundation.js',
+        method: 'normalizeSelectionItem',
+        selections: [normalized],
+        lastAddedEntry: {
+            sourceMetadataType: item.metadataType ?? null,
+            sourceType: item.type ?? null,
+            assignedMetadataType: normalized.metadataType,
+            assignedMetadataName: normalized.metadataName,
+            choice: normalized.choice,
+            rawItem: item
+        }
+    });
+
+    return normalized;
 }
 
 /**
@@ -71,10 +117,20 @@ function normalizeDeploymentSelections(selections) {
 
         if (!byKey.has(key)) {
             byKey.set(key, normalized);
+
+            // TEMPORARY DIAGNOSTIC — each unique selection appended to map.
+            logDeploymentSelectionDiagnostic({
+                event: 'DEPLOYMENT SELECTION APPENDED',
+                caller: 'normalizeDeploymentSelections',
+                file: 'deploymentSelections.foundation.js',
+                method: 'normalizeDeploymentSelections',
+                selections: [...byKey.values()],
+                lastAddedEntry: normalized
+            });
         }
     }
 
-    return [...byKey.values()].sort((a, b) => {
+    const result = [...byKey.values()].sort((a, b) => {
         const typeCompare = a.metadataType.localeCompare(b.metadataType);
 
         if (typeCompare !== 0) {
@@ -83,6 +139,18 @@ function normalizeDeploymentSelections(selections) {
 
         return a.metadataName.localeCompare(b.metadataName);
     });
+
+    // TEMPORARY DIAGNOSTIC — final normalized collection after merge/dedupe.
+    logDeploymentSelectionDiagnostic({
+        event: 'DEPLOYMENT SELECTION MERGED',
+        caller: 'normalizeDeploymentSelections',
+        file: 'deploymentSelections.foundation.js',
+        method: 'normalizeDeploymentSelections',
+        selections: result,
+        lastAddedEntry: result.length ? result[result.length - 1] : null
+    });
+
+    return result;
 }
 
 /**
@@ -98,9 +166,23 @@ function extractDeploymentSelections(deploymentPackage) {
         return [];
     }
 
-    return normalizeDeploymentSelections(
+    const selections = normalizeDeploymentSelections(
         deploymentPackage.deploymentSelections
     );
+
+    // TEMPORARY DIAGNOSTIC — package-path extract.
+    logDeploymentSelectionDiagnostic({
+        event: 'DEPLOYMENT SELECTION EXTRACTED',
+        caller: 'extractDeploymentSelections',
+        file: 'deploymentSelections.foundation.js',
+        method: 'extractDeploymentSelections',
+        selections,
+        lastAddedEntry: selections.length
+            ? selections[selections.length - 1]
+            : null
+    });
+
+    return selections;
 }
 
 /**
@@ -126,6 +208,25 @@ function attachReservedDeploymentSelections(
     const fromPackage = extractDeploymentSelections(deploymentPackage);
     const selections =
         fromTopLevel.length > 0 ? fromTopLevel : fromPackage;
+
+    // TEMPORARY DIAGNOSTIC — merge of top-level vs package selections.
+    logDeploymentSelectionDiagnostic({
+        event: 'DEPLOYMENT SELECTION MERGED',
+        caller: 'attachReservedDeploymentSelections',
+        file: 'deploymentSelections.foundation.js',
+        method: 'attachReservedDeploymentSelections',
+        selections,
+        lastAddedEntry: {
+            source:
+                fromTopLevel.length > 0
+                    ? 'req.body.deploymentSelections (top-level)'
+                    : 'deploymentPackage.deploymentSelections',
+            topLevelCount: fromTopLevel.length,
+            packageCount: fromPackage.length,
+            chosenCount: selections.length,
+            entries: selections
+        }
+    });
 
     if (selections.length === 0) {
         return deploymentPackage;

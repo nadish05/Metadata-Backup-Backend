@@ -321,6 +321,37 @@ exports.validateDeployment = async (req, res) => {
             deploymentSelections
         } = req.body;
 
+        // TEMPORARY DIAGNOSTIC — first backend sight of client selections.
+        console.log('------------------------------------------');
+        console.log('DEPLOYMENT SELECTION CREATED');
+        console.log('Caller');
+        console.log('POST /api/deployment/validate (client request body)');
+        console.log('File');
+        console.log('deployment.controller.js');
+        console.log('Method');
+        console.log('validateDeployment');
+        console.log('Current Selection Count');
+        console.log(
+            Array.isArray(deploymentSelections)
+                ? deploymentSelections.length
+                : Array.isArray(deploymentPackage?.deploymentSelections)
+                  ? deploymentPackage.deploymentSelections.length
+                  : 0
+        );
+        console.log('Last Added Entry');
+        console.log(
+            JSON.stringify(
+                {
+                    topLevelDeploymentSelections: deploymentSelections ?? null,
+                    packageDeploymentSelections:
+                        deploymentPackage?.deploymentSelections ?? null
+                },
+                null,
+                2
+            )
+        );
+        console.log('------------------------------------------');
+
         // Attach selections when present. Existing clients that omit this
         // field keep the same package reference and behaviour.
         const packageForValidation = attachReservedDeploymentSelections(

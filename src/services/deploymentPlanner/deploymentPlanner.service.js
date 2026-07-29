@@ -830,6 +830,27 @@ function applyPlannerOverrides({
         ? deploymentSelections
         : [];
 
+    // TEMPORARY DIAGNOSTIC — planner consumes selections; does not create types.
+    console.log('------------------------------------------');
+    console.log('DEPLOYMENT SELECTION CREATED');
+    console.log('Caller');
+    console.log('Deployment Planner consume (no type invent)');
+    console.log('File');
+    console.log('deploymentPlanner.service.js');
+    console.log('Method');
+    console.log('applyPlannerOverrides');
+    console.log('Current Selection Count');
+    console.log(selections.length);
+    console.log('Last Added Entry');
+    console.log(
+        JSON.stringify(
+            selections.length ? selections[selections.length - 1] : null,
+            null,
+            2
+        )
+    );
+    console.log('------------------------------------------');
+
     const summary = createEmptySummary(selections.length);
     const compatibilityRowIndex = buildCompatibilityRowIndex(
         plannerCompatibilityReport

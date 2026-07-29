@@ -325,6 +325,27 @@ function createHistory({
             Array.isArray(deploymentSelections) &&
             deploymentSelections.length > 0
         ) {
+            // TEMPORARY DIAGNOSTIC — history stores selections; does not invent types.
+            console.log('------------------------------------------');
+            console.log('DEPLOYMENT SELECTION CREATED');
+            console.log('Caller');
+            console.log('Deployment History persist');
+            console.log('File');
+            console.log('deploymentHistory.service.js');
+            console.log('Method');
+            console.log('createHistory');
+            console.log('Current Selection Count');
+            console.log(deploymentSelections.length);
+            console.log('Last Added Entry');
+            console.log(
+                JSON.stringify(
+                    deploymentSelections[deploymentSelections.length - 1],
+                    null,
+                    2
+                )
+            );
+            console.log('------------------------------------------');
+
             history.deploymentSelections = deploymentSelections;
         }
 
