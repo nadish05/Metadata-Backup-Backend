@@ -159,6 +159,60 @@ runTest('untyped /lwc path still normalizes to LightningComponentBundle', () => 
     assert.strictEqual(result[0].metadataName, 'backupDashboard');
 });
 
+runTest(
+    'metadataType LWC with four bundle files → one LightningComponentBundle',
+    () => {
+        const result = normalizeDeployableMetadata([
+            {
+                metadataType: 'LWC',
+                filePath: `${LWC_BASE}/backupDashboard.html`
+            },
+            {
+                metadataType: 'LWC',
+                filePath: `${LWC_BASE}/backupDashboard.js`
+            },
+            {
+                metadataType: 'LWC',
+                filePath: `${LWC_BASE}/backupDashboard.css`
+            },
+            {
+                metadataType: 'LWC',
+                filePath: `${LWC_BASE}/backupDashboard.js-meta.xml`
+            }
+        ]);
+
+        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result[0].metadataType, 'LightningComponentBundle');
+        assert.strictEqual(result[0].metadataName, 'backupDashboard');
+        assert.strictEqual(
+            result[0].filePath,
+            `${LWC_BASE}/backupDashboard.js-meta.xml`
+        );
+        assert.strictEqual(result[0].sourceFiles.length, 4);
+    }
+);
+
+runTest(
+    'metadataType LWC mixed with LightningComponentBundle collapses to one',
+    () => {
+        const result = normalizeDeployableMetadata([
+            {
+                metadataType: 'LWC',
+                filePath: `${LWC_BASE}/backupDashboard.css`
+            },
+            {
+                metadataType: 'LightningComponentBundle',
+                filePath: `${LWC_BASE}/backupDashboard.js`
+            }
+        ]);
+
+        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result[0].metadataType, 'LightningComponentBundle');
+        assert.strictEqual(result[0].metadataName, 'backupDashboard');
+        assert.strictEqual(result[0].sourceFiles.length, 2);
+    }
+);
+
 runTest('ApexClass is not collapsed even if path contains lwc segment oddly', () => {
     const item = {
         metadataType: 'ApexClass',

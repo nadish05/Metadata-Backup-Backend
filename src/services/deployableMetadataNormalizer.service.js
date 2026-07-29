@@ -14,6 +14,16 @@ const {
 
 const LIGHTNING_COMPONENT_BUNDLE = 'LightningComponentBundle';
 
+/** Application aliases that represent the same deployable LWC bundle type. */
+const LIGHTNING_COMPONENT_BUNDLE_TYPE_ALIASES = new Set([
+    LIGHTNING_COMPONENT_BUNDLE,
+    'LWC'
+]);
+
+function isLightningComponentBundleType(metadataType) {
+    return LIGHTNING_COMPONENT_BUNDLE_TYPE_ALIASES.has(metadataType);
+}
+
 function normalizePath(filePath) {
     if (!filePath) {
         return null;
@@ -91,8 +101,9 @@ function resolveLightningComponentBundleIdentity(item) {
     const pathBundleName = extractBundleNameFromPath(filePath, rule.folder);
     const explicitName = item.metadataName || item.name || null;
 
-    // Explicit LCB type → logical bundle (name from path preferred, then explicit).
-    if (metadataType === LIGHTNING_COMPONENT_BUNDLE) {
+    // Explicit LCB type (or app alias "LWC") → logical bundle.
+    // Path extraction and identity generation are unchanged.
+    if (isLightningComponentBundleType(metadataType)) {
         const metadataName = pathBundleName || explicitName;
 
         if (!metadataName) {
