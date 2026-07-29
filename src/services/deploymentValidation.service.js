@@ -38,6 +38,9 @@ const {
 const {
     buildSourceCustomFieldShapeIndexFromRepo
 } = require('./deploymentPlannerCompatibility/contract/sourceCustomFieldShapeBuilder.service');
+const {
+    normalizeDeployableMetadata
+} = require('./deployableMetadataNormalizer.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -67,6 +70,24 @@ function resolveDeploymentMode(deploymentPackage) {
     }
 
     return 'VALIDATE';
+}
+
+/**
+ * Collapse physical LWC file rows into logical deployable components
+ * before any Validation-stage consumer reads selectedMetadata.
+ * Does not mutate the callers original package object.
+ */
+function prepareDeploymentPackageForValidation(deploymentPackage) {
+    if (!deploymentPackage || typeof deploymentPackage !== 'object') {
+        return deploymentPackage;
+    }
+
+    return {
+        ...deploymentPackage,
+        selectedMetadata: normalizeDeployableMetadata(
+            deploymentPackage.selectedMetadata
+        )
+    };
 }
 
 /**
@@ -326,6 +347,11 @@ async function validateDeployment({
     if (!deploymentPackage) {
         return connectivityResult;
     }
+
+    // Normalize physical LWC files → logical components once, before every
+    // Validation consumer (metadata validation, discovery, package, etc.).
+    deploymentPackage =
+        prepareDeploymentPackageForValidation(deploymentPackage);
 
     // Deployment Planner selections (preferences). Applied after Dependency
     // Resolution and before Compatibility; Package Generation is unchanged.
@@ -1438,5 +1464,6 @@ async function validateDeployment({
 
 module.exports = {
     validateDestinationConnectivity,
-    validateDeployment
+    validateDeployment,
+    prepareDeploymentPackageForValidation
 };
