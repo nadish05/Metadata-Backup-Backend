@@ -125,8 +125,42 @@ function normalizeSelectedMetadata(selectedMetadata) {
         .filter((item) => item.filePath);
 }
 
+function logTemporaryMetadataDiagnostic(label, metadata) {
+    // TEMPORARY DIAGNOSTIC — remove after payload analysis.
+    console.log('----------------------------------------');
+    console.log(label);
+    console.log('----------------------------------------');
+    console.log(
+        Array.isArray(metadata) ? metadata.length : 0
+    );
+    console.log(
+        JSON.stringify(
+            Array.isArray(metadata) && metadata.length ? metadata[0] : null,
+            null,
+            2
+        )
+    );
+}
+
 function normalizeDeploymentPackage(payload) {
     if (Array.isArray(payload.selectedMetadata)) {
+        const rawSelectedMetadata = payload.selectedMetadata;
+
+        // TEMPORARY DIAGNOSTIC — remove after payload analysis.
+        logTemporaryMetadataDiagnostic(
+            'RAW SELECTED METADATA',
+            rawSelectedMetadata
+        );
+
+        const normalizedSelectedMetadata =
+            normalizeDeployableMetadata(rawSelectedMetadata);
+
+        // TEMPORARY DIAGNOSTIC — remove after payload analysis.
+        logTemporaryMetadataDiagnostic(
+            'NORMALIZED METADATA',
+            normalizedSelectedMetadata
+        );
+
         return {
             comparisonId: payload.comparisonId || null,
             repoUrl: payload.repoUrl,
@@ -134,25 +168,42 @@ function normalizeDeploymentPackage(payload) {
             destinationBranch: payload.destinationBranch,
             // Collapse physical LWC files → logical components before Review.
             selectedMetadata: normalizeSelectedMetadata(
-                normalizeDeployableMetadata(payload.selectedMetadata)
+                normalizedSelectedMetadata
             )
         };
     }
 
     if (payload.filePath) {
+        const rawSelectedMetadata = [
+            {
+                metadataType:
+                    payload.metadataType || APEX_REVIEW_METADATA_TYPE,
+                filePath: payload.filePath
+            }
+        ];
+
+        // TEMPORARY DIAGNOSTIC — remove after payload analysis.
+        logTemporaryMetadataDiagnostic(
+            'RAW SELECTED METADATA',
+            rawSelectedMetadata
+        );
+
+        const normalizedSelectedMetadata =
+            normalizeDeployableMetadata(rawSelectedMetadata);
+
+        // TEMPORARY DIAGNOSTIC — remove after payload analysis.
+        logTemporaryMetadataDiagnostic(
+            'NORMALIZED METADATA',
+            normalizedSelectedMetadata
+        );
+
         return {
             comparisonId: null,
             repoUrl: payload.repoUrl,
             sourceBranch: payload.sourceBranch || payload.branch,
             destinationBranch: payload.destinationBranch || payload.branch,
             selectedMetadata: normalizeSelectedMetadata(
-                normalizeDeployableMetadata([
-                    {
-                        metadataType:
-                            payload.metadataType || APEX_REVIEW_METADATA_TYPE,
-                        filePath: payload.filePath
-                    }
-                ])
+                normalizedSelectedMetadata
             )
         };
     }
