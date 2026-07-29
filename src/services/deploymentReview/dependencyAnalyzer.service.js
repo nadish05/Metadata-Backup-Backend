@@ -29,6 +29,7 @@ const SYSTEM_CLASSES = new Set([
     'Blob',
     'Exception',
     'CalloutException',
+    'AuraHandledException',
     'UserInfo',
     'LoggingLevel',
     'Test',
@@ -39,7 +40,8 @@ const SYSTEM_CLASSES = new Set([
     'Limits',
     'ApexPages',
     'PageReference',
-    'SelectOption'
+    'SelectOption',
+    'URL'
 ]);
 
 function stripLiteralsAndComments(content) {
