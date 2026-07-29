@@ -82,11 +82,46 @@ function prepareDeploymentPackageForValidation(deploymentPackage) {
         return deploymentPackage;
     }
 
+    // TEMPORARY DIAGNOSTIC — remove after LWC alias evidence collection.
+    console.log('==================================================');
+    console.log('DEPLOYMENT PACKAGE');
+    console.log('==================================================');
+    console.log('Selected Metadata');
+    console.log(
+        JSON.stringify(deploymentPackage.selectedMetadata ?? null, null, 2)
+    );
+    console.log('Required Dependencies');
+    console.log(
+        JSON.stringify(
+            deploymentPackage.requiredDependencies ?? null,
+            null,
+            2
+        )
+    );
+    console.log('Deployment Selections');
+    console.log(
+        JSON.stringify(
+            deploymentPackage.deploymentSelections ?? null,
+            null,
+            2
+        )
+    );
+    console.log('==================================================');
+
+    const normalizedSelectedMetadata = normalizeDeployableMetadata(
+        deploymentPackage.selectedMetadata
+    );
+
+    // TEMPORARY DIAGNOSTIC — remove after LWC alias evidence collection.
+    console.log('==================================================');
+    console.log('NORMALIZED SELECTED METADATA');
+    console.log('==================================================');
+    console.log(JSON.stringify(normalizedSelectedMetadata, null, 2));
+    console.log('==================================================');
+
     return {
         ...deploymentPackage,
-        selectedMetadata: normalizeDeployableMetadata(
-            deploymentPackage.selectedMetadata
-        )
+        selectedMetadata: normalizedSelectedMetadata
     };
 }
 
