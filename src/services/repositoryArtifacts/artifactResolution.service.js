@@ -308,6 +308,50 @@ async function resolveRepositoryArtifacts({
             const enriched = enrichNode(node, files);
             const key = getNodeKey(enriched);
 
+            // TEMPORARY DIAGNOSTIC — workspace-missing artifact investigation.
+            {
+                const diagnosticNames = new Set([
+                    'Connected_Org__c.Instance_Url__c',
+                    'Connected_Org__c.Org_Id__c',
+                    'AuraHandledException',
+                    'URL'
+                ]);
+                const nodeName = enriched?.name || node?.name;
+
+                if (diagnosticNames.has(nodeName)) {
+                    console.log('========================================');
+                    console.log('MISSING ARTIFACT DIAGNOSTIC');
+                    console.log('========================================');
+                    console.log('Name:');
+                    console.log(nodeName);
+                    console.log('Type:');
+                    console.log(
+                        enriched?.metadataType || node?.metadataType || null
+                    );
+                    console.log('Incoming filePath:');
+                    console.log(node?.filePath || null);
+                    console.log('Resolved filePath:');
+                    console.log(enriched?.filePath || null);
+                    console.log('sourceExists:');
+                    console.log(enriched?.sourceExists);
+                    console.log('artifactResolved:');
+                    console.log(enriched?.artifactResolved);
+                    console.log('Expected CustomField path pattern:');
+                    console.log(
+                        nodeName && String(nodeName).includes('.')
+                            ? `.../objects/${String(nodeName).split('.')[0]}/fields/${String(nodeName).split('.')[1]}.field-meta.xml`
+                            : '(n/a — not Object.Field)'
+                    );
+                    console.log('Expected ApexClass path pattern:');
+                    console.log(
+                        nodeName && !String(nodeName).includes('.')
+                            ? `.../classes/${nodeName}.cls`
+                            : '(n/a)'
+                    );
+                    console.log('========================================');
+                }
+            }
+
             if (node.metadataType === 'CustomObject') {
                 console.log('----------------------------------------');
                 console.log('Resolver decision');

@@ -1120,6 +1120,42 @@ async function validateDeployment({
             deploymentPackageWithResolvedDependencies
         );
 
+    // TEMPORARY DIAGNOSTIC — workspace-missing artifact investigation.
+    {
+        const diagnosticNames = new Set([
+            'Connected_Org__c.Instance_Url__c',
+            'Connected_Org__c.Org_Id__c',
+            'AuraHandledException',
+            'URL'
+        ]);
+        const inventory = [
+            ...(generatedDeploymentPackage?.metadata || []).map((item) => ({
+                collection: 'metadata',
+                metadataType: item.metadataType || item.type || null,
+                metadataName: item.metadataName || item.name || null,
+                filePath: item.filePath || null,
+                sourceExists: item.sourceExists,
+                artifactResolved: item.artifactResolved
+            })),
+            ...(generatedDeploymentPackage?.dependencies || []).map((item) => ({
+                collection: 'dependencies',
+                metadataType: item.type || item.metadataType || null,
+                metadataName: item.name || item.metadataName || null,
+                filePath: item.filePath || null,
+                sourceExists: item.sourceExists,
+                artifactResolved: item.artifactResolved,
+                action: item.action || null,
+                selected: item.selected
+            }))
+        ].filter((item) => diagnosticNames.has(item.metadataName));
+
+        console.log('========================================');
+        console.log('PACKAGE MEMBERSHIP DIAGNOSTIC');
+        console.log('========================================');
+        console.log(JSON.stringify(inventory, null, 2));
+        console.log('========================================');
+    }
+
     // Report-only: explain WHY members exist in the generated package.
     // Must not influence package, validation, planner, manifest, workspace, or deploy.
     const deploymentPackageProvenance =
@@ -1351,6 +1387,22 @@ async function validateDeployment({
             'Workspace Builder skipped due to missing source artifacts:',
             missingArtifacts
         );
+
+        // TEMPORARY DIAGNOSTIC — expand artifact.exists FAIL findings.
+        {
+            const diagnosticFindings = (compatibilityFindings || []).filter(
+                (finding) =>
+                    finding.ruleId === 'artifact.exists' &&
+                    (finding.status === 'FAIL' ||
+                        finding.status === 'BLOCK' ||
+                        finding.blocking === true)
+            );
+            console.log('========================================');
+            console.log('WORKSPACE SKIP ARTIFACT.EXISTS FINDINGS');
+            console.log('========================================');
+            console.log(JSON.stringify(diagnosticFindings, null, 2));
+            console.log('========================================');
+        }
     } else {
         generatedWorkspace =
             await deploymentWorkspaceService.buildDeploymentWorkspace({
