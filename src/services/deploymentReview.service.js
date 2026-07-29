@@ -17,6 +17,9 @@ const testClassValidator = require('./testClassValidator.service');
 const {
     normalizeDeployableMetadata
 } = require('./deployableMetadataNormalizer.service');
+const {
+    canonicalizeCustomFieldDependencies
+} = require('./deploymentReview/customFieldCanonicalizer.service');
 
 const APEX_REVIEW_METADATA_TYPE = 'ApexClass';
 const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
@@ -242,10 +245,21 @@ async function reviewSingleMetadataItem({
         listRepoFiles
     );
 
-    const dependencyAnalysis = dependencySelection.buildDependencySelection(
+    const builtDependencyAnalysis = dependencySelection.buildDependencySelection(
         rawDependencyAnalysis,
         testValidation
     );
+
+    // Canonicalize CustomField API names against repo field files (case only).
+    // Analyzer extraction stays unchanged; graph receives canonical identities.
+    const repoFiles = await listRepoFiles();
+    const dependencyAnalysis = {
+        ...builtDependencyAnalysis,
+        requiredDependencies: canonicalizeCustomFieldDependencies(
+            builtDependencyAnalysis.requiredDependencies,
+            repoFiles
+        )
+    };
 
     return {
         dependencyAnalysis,
