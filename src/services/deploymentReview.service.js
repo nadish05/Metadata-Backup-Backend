@@ -23,6 +23,12 @@ const {
 const flowReview = require('./deploymentReview/flowReview.service');
 const flowDestinationValidation = require('./deploymentReview/flowDestinationValidation.service');
 
+const {
+    METADATA_ORIGINS,
+    shouldEnumerateCustomObjectChildren,
+    resolveMetadataOrigin
+} = require('./dependencyResolution/metadataGraphOrigin.model');
+
 const APEX_REVIEW_METADATA_TYPE = 'ApexClass';
 const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
     'ApexClass',
@@ -288,6 +294,7 @@ async function processMetadataItem(
 ) {
     const { metadataType, filePath } = item;
     const metadataName = getMetadataName(filePath);
+    const origin = resolveMetadataOrigin(item);
 
     if (!isSupportedReviewMetadataType(metadataType)) {
         return buildNotSupportedResult({ metadataType, filePath });
@@ -379,6 +386,26 @@ async function processMetadataItem(
             metadataName;
 
         try {
+            // Context-aware CustomObject review:
+            // PRIMARY_SELECTION → full child enumeration (fields, rules, etc.)
+            // RELATIONSHIP_TARGET / other non-primary → preserve already-discovered
+            // field deps only; do not invent artificial field dependencies.
+            if (!shouldEnumerateCustomObjectChildren(origin)) {
+                return {
+                    metadataType,
+                    metadataName: customObjectName,
+                    filePath,
+                    status: 'SUCCESS',
+                    origin,
+                    reviewStrategy: 'RELATIONSHIP_ONLY',
+                    dependencyAnalysis: {
+                        requiredDependencies: [],
+                        recommendedTestClasses: [],
+                        optionalDependencies: []
+                    }
+                };
+            }
+
             const repoFiles = await listRepoFiles();
 
             const fieldAnalysis =
@@ -447,6 +474,8 @@ async function processMetadataItem(
                 metadataName: customObjectName,
                 filePath,
                 status: 'SUCCESS',
+                origin,
+                reviewStrategy: 'FULL_OBJECT',
                 dependencyAnalysis: {
                     requiredDependencies: dedupedRequiredDependencies,
                     recommendedTestClasses:
@@ -463,6 +492,7 @@ async function processMetadataItem(
                 metadataName: customObjectName,
                 filePath,
                 status: 'FAILED',
+                origin,
                 error:
                     error.stderr ||
                     error.stdout ||
@@ -537,9 +567,14 @@ async function runDeploymentReview(payload) {
         { repoUrl, branch: sourceBranch },
         async (readRepoFile, listRepoFiles) => {
             const reviewResult = await reviewDeployableMetadataItems({
-                items: selectedMetadata,
+                items: selectedMetadata.map((item) => ({
+                    ...item,
+                    origin:
+                        item.origin || METADATA_ORIGINS.PRIMARY_SELECTION
+                })),
                 readRepoFile,
                 listRepoFiles,
+                defaultOrigin: METADATA_ORIGINS.PRIMARY_SELECTION,
                 destinationCredentials
             });
 
@@ -556,9 +591,10 @@ async function runDeploymentReview(payload) {
  * Used by both the original user-selection review and Relationship Discovery.
  *
  * @param {{
- *   items: Array<{ metadataType?: string, type?: string, metadataName?: string, name?: string, filePath?: string }>,
+ *   items: Array<{ metadataType?: string, type?: string, metadataName?: string, name?: string, filePath?: string, origin?: string }>,
  *   readRepoFile: Function,
  *   listRepoFiles: Function,
+ *   defaultOrigin?: string,
  *   destinationCredentials?: {
  *     refreshToken?: string|null,
  *     accessToken?: string|null,
@@ -570,6 +606,7 @@ async function reviewDeployableMetadataItems({
     items,
     readRepoFile,
     listRepoFiles,
+    defaultOrigin = METADATA_ORIGINS.PRIMARY_SELECTION,
     destinationCredentials = null
 }) {
     const deploymentReview = [];
@@ -594,6 +631,7 @@ async function reviewDeployableMetadataItems({
     for (const item of items) {
         const metadataType = item?.metadataType || item?.type || null;
         const metadataName = item?.metadataName || item?.name || null;
+        const origin = resolveMetadataOrigin(item, defaultOrigin);
         let filePath = item?.filePath ? normalizePath(item.filePath) : null;
 
         if (!filePath && metadataType && metadataName) {
@@ -621,7 +659,7 @@ async function reviewDeployableMetadataItems({
         }
 
         const result = await processMetadataItem(
-            { metadataType, filePath },
+            { metadataType, filePath, origin },
             readRepoFile,
             listRepoFiles,
             destinationCredentials
@@ -647,6 +685,9 @@ async function reviewDeployableMetadataItems({
             dependencyKeys.add(key);
             aggregatedDependencies.push({
                 ...dependency,
+                origin:
+                    dependency.origin ||
+                    METADATA_ORIGINS.DIRECT_DEPENDENCY,
                 sourceMetadata:
                     result.metadataName || metadataName || dependency.sourceMetadata,
                 discoveredBy: 'DeploymentReview',
@@ -674,5 +715,6 @@ module.exports = {
     resolveMetadataFilePath,
     isSupportedReviewMetadataType,
     normalizeDeploymentPackage,
-    SUPPORTED_REVIEW_METADATA_TYPES
+    SUPPORTED_REVIEW_METADATA_TYPES,
+    METADATA_ORIGINS
 };

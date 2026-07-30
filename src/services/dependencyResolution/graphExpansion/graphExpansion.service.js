@@ -18,6 +18,9 @@ const {
     getEdgeKey
 } = require('./discoveryContract');
 const { buildGraphNodeId } = require('../graphId');
+const {
+    METADATA_ORIGINS
+} = require('../metadataGraphOrigin.model');
 
 const execAsync = util.promisify(exec);
 
@@ -50,7 +53,8 @@ function toFrontierNode(item, depth = 0) {
         filePath: item.filePath || null,
         depth: item.depth != null ? item.depth : depth,
         deployable: item.deployable !== false,
-        blocking: item.blocking !== false
+        blocking: item.blocking !== false,
+        origin: item.origin || null
     };
 }
 
@@ -85,20 +89,40 @@ function collectSeedNodes({
     }
 
     for (const item of selectedMetadata || []) {
-        addSeed(item, 0);
+        addSeed(
+            {
+                ...item,
+                origin: item.origin || METADATA_ORIGINS.PRIMARY_SELECTION
+            },
+            0
+        );
     }
 
     for (const item of discoveredRelationships || []) {
         const type = item?.metadataType || item?.type;
 
         if (relationshipSeedTypes.has(type)) {
-            addSeed(item, item.depth || 1);
+            addSeed(
+                {
+                    ...item,
+                    origin:
+                        item.origin || METADATA_ORIGINS.RELATIONSHIP_TARGET
+                },
+                item.depth || 1
+            );
         }
     }
 
     for (const item of discoveredReferences || []) {
         if (item?.deployable === true) {
-            addSeed(item, item.depth || 1);
+            addSeed(
+                {
+                    ...item,
+                    origin:
+                        item.origin || METADATA_ORIGINS.SECONDARY_DEPENDENCY
+                },
+                item.depth || 1
+            );
         }
     }
 
@@ -107,7 +131,14 @@ function collectSeedNodes({
         const type = item?.type || item?.metadataType;
 
         if (relationshipSeedTypes.has(type)) {
-            addSeed(item, item.depth || 1);
+            addSeed(
+                {
+                    ...item,
+                    origin:
+                        item.origin || METADATA_ORIGINS.DIRECT_DEPENDENCY
+                },
+                item.depth || 1
+            );
         }
     }
 

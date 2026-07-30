@@ -24,7 +24,8 @@ function createGraphNode({
     relationship = null,
     reason = null,
     depth = 1,
-    filePath = null
+    filePath = null,
+    origin = null
 }) {
     return {
         name,
@@ -39,7 +40,8 @@ function createGraphNode({
         relationship,
         reason,
         depth,
-        filePath
+        filePath,
+        origin
     };
 }
 

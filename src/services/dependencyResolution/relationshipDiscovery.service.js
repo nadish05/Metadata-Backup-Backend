@@ -5,6 +5,9 @@ const { exec } = require('child_process');
 
 const { getRegisteredDiscoverers } = require('./relationshipRegistry');
 const deploymentReviewService = require('../deploymentReview.service');
+const {
+    METADATA_ORIGINS
+} = require('./metadataGraphOrigin.model');
 
 const execAsync = util.promisify(exec);
 
@@ -57,6 +60,8 @@ function toDependencyGraphItem(relationship) {
         relationship: relationship.relationship,
         required: relationship.required !== false,
         selected: relationship.selected !== false,
+        origin:
+            relationship.origin || METADATA_ORIGINS.RELATIONSHIP_TARGET,
         discoveredBy: relationship.discoveredBy,
         sourceMetadata: relationship.sourceMetadata,
         sourceField: relationship.sourceField,
@@ -405,11 +410,15 @@ async function reviewNewlyDiscoveredMetadata({
                             metadataType,
                             metadataName,
                             name: metadataName,
-                            filePath: discovered.filePath || null
+                            filePath: discovered.filePath || null,
+                            origin:
+                                discovered.origin ||
+                                METADATA_ORIGINS.RELATIONSHIP_TARGET
                         }
                     ],
                     readRepoFile,
-                    listRepoFiles
+                    listRepoFiles,
+                    defaultOrigin: METADATA_ORIGINS.RELATIONSHIP_TARGET
                 });
 
             reviewsExecuted += reviewResult.reviewsExecuted || 0;
@@ -417,6 +426,14 @@ async function reviewNewlyDiscoveredMetadata({
             warnings.push(...(reviewResult.warnings || []));
 
             console.log('Deployment Review Complete');
+            console.log(
+                'Origin:',
+                discovered.origin || METADATA_ORIGINS.RELATIONSHIP_TARGET
+            );
+            console.log(
+                'Strategy:',
+                reviewResult.deploymentReview?.[0]?.reviewStrategy || 'N/A'
+            );
             logReviewMerge(metadataName, reviewResult.requiredDependencies);
             console.log('Merged into Deployment Graph');
 
@@ -434,6 +451,9 @@ async function reviewNewlyDiscoveredMetadata({
                     relationship: dependency.relationship || 'DeploymentReview',
                     required: dependency.required !== false,
                     selected: dependency.selected !== false,
+                    origin:
+                        dependency.origin ||
+                        METADATA_ORIGINS.SECONDARY_DEPENDENCY,
                     discoveredBy: 'DeploymentReview',
                     sourceMetadata: metadataName,
                     sourceField: dependency.sourceField || null,
@@ -461,7 +481,10 @@ async function reviewNewlyDiscoveredMetadata({
                     });
 
                     if (scanTarget) {
-                        reviewFrontierAdditions.push(scanTarget);
+                        reviewFrontierAdditions.push({
+                            ...scanTarget,
+                            origin: METADATA_ORIGINS.SECONDARY_DEPENDENCY
+                        });
                     }
                 }
             }
@@ -602,9 +625,16 @@ async function discoverUntilStable({
                 continue;
             }
 
+            const withOrigin = {
+                ...relationship,
+                origin:
+                    relationship.origin ||
+                    METADATA_ORIGINS.RELATIONSHIP_TARGET
+            };
+
             relationshipKeys.add(key);
-            allRelationships.push(relationship);
-            newlyDiscovered.push(relationship);
+            allRelationships.push(withOrigin);
+            newlyDiscovered.push(withOrigin);
             newDependencies += 1;
         }
 

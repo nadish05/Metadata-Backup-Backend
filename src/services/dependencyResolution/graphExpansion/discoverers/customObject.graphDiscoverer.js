@@ -1,6 +1,7 @@
 /**
  * CustomObject graph discoverer.
  * Reuses existing relationship discoverers and Deployment Review for child metadata.
+ * Origin is preserved so Review can apply primary vs relationship-target strategies.
  */
 
 const { getRegisteredDiscoverers } = require('../../relationshipRegistry');
@@ -10,6 +11,10 @@ const {
     createGraphNode,
     createGraphEdge
 } = require('../discoveryContract');
+const {
+    METADATA_ORIGINS,
+    resolveMetadataOrigin
+} = require('../../metadataGraphOrigin.model');
 
 const DISCOVERER_ID = 'CustomObjectGraphDiscoverer';
 
@@ -39,12 +44,18 @@ const customObjectGraphDiscoverer = {
             return result;
         }
 
+        const origin = resolveMetadataOrigin(
+            metadata,
+            METADATA_ORIGINS.RELATIONSHIP_TARGET
+        );
+
         const scanTarget = {
             metadataType: 'CustomObject',
             metadataName: objectName,
             name: objectName,
             filePath: metadata.filePath || null,
-            depth
+            depth,
+            origin
         };
 
         const seen = new Set();
@@ -90,6 +101,7 @@ const customObjectGraphDiscoverer = {
                         deployable: true,
                         blocking: relationship.required !== false,
                         sourceMetadata: objectName,
+                        origin: METADATA_ORIGINS.RELATIONSHIP_TARGET,
                         discoveredBy:
                             relationship.discoveredBy || DISCOVERER_ID,
                         discoveryMethod:
@@ -131,7 +143,8 @@ const customObjectGraphDiscoverer = {
                 await deploymentReviewService.reviewDeployableMetadataItems({
                     items: [scanTarget],
                     readRepoFile,
-                    listRepoFiles
+                    listRepoFiles,
+                    defaultOrigin: origin
                 });
 
             result.statistics.reviewsExecuted =
@@ -149,6 +162,9 @@ const customObjectGraphDiscoverer = {
                     deployable: dependency.required !== false,
                     blocking: dependency.required !== false,
                     sourceMetadata: objectName,
+                    origin:
+                        dependency.origin ||
+                        METADATA_ORIGINS.DIRECT_DEPENDENCY,
                     discoveredBy: dependency.discoveredBy || DISCOVERER_ID,
                     discoveryMethod:
                         dependency.discoveryMethod || 'deploymentReview',
