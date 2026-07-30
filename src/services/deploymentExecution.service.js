@@ -201,7 +201,13 @@ async function runDeploymentExecution({
         }
 
         workspacePath = path.resolve(workspaceValidation.workspacePath);
-        const projectBootstrap = await ensureSfdxProject(workspacePath);
+        const projectBootstrap = await ensureSfdxProject(workspacePath, {
+            sourceApiVersion:
+                generatedManifest?.summary?.apiVersion ||
+                generatedManifest?.deploymentApiVersionPolicy
+                    ?.deploymentApiVersion ||
+                undefined
+        });
 
         if (!projectBootstrap.success) {
             const result = buildFailedResult(

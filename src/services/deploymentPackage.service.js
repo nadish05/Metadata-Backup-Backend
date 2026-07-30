@@ -11,13 +11,24 @@ function normalizeMetadataItem(item) {
         return null;
     }
 
-    return {
+    const apiVersion =
+        item.apiVersion || item.apiValidation?.apiVersion || null;
+
+    const normalized = {
         metadataType,
         metadataName,
         filePath,
         sourceExists: item.sourceExists,
         artifactResolved: item.artifactResolved
     };
+
+    // Preserve embedded API version for deployment API version policy.
+    // Does not change package membership / selection.
+    if (apiVersion) {
+        normalized.apiVersion = String(apiVersion);
+    }
+
+    return normalized;
 }
 
 function getMetadataUniquenessKey(item) {
@@ -107,6 +118,13 @@ function normalizeDependencyItem(item) {
         normalized.artifactResolved = item.artifactResolved;
     }
 
+    const apiVersion =
+        item.apiVersion || item.apiValidation?.apiVersion || null;
+
+    if (apiVersion) {
+        normalized.apiVersion = String(apiVersion);
+    }
+
     return normalized;
 }
 
@@ -165,13 +183,24 @@ function shouldAutoIncludeDependency(dependency) {
 }
 
 function dependencyToMetadataItem(dependency) {
-    return {
+    const item = {
         metadataType: dependency.type,
         metadataName: dependency.name,
         filePath: dependency.filePath || null,
         sourceExists: dependency.sourceExists,
         artifactResolved: dependency.artifactResolved
     };
+
+    const apiVersion =
+        dependency.apiVersion ||
+        dependency.apiValidation?.apiVersion ||
+        null;
+
+    if (apiVersion) {
+        item.apiVersion = String(apiVersion);
+    }
+
+    return item;
 }
 
 function composeMetadataWithRequiredDependencies(

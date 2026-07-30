@@ -29,8 +29,13 @@ const {
 } = require('./deploymentPlanner/plannerAuthorization.service');
 const {
     buildDestinationInventory,
-    toDestinationStateMap
+    toDestinationStateMap,
+    getLatestApiVersion
 } = require('./destinationInventory/destinationInventoryBuilder.service');
+const {
+    resolveDeploymentApiVersionPolicyAsync
+} = require('./deploymentApiVersionPolicy.service');
+const { DEFAULT_API_VERSION } = require('../config/salesforce');
 const {
     buildDestinationShapeIndex,
     serializeDestinationShapeIndex
@@ -1272,11 +1277,75 @@ async function validateDeployment({
         };
     }
 
+    // Deployment API Version Policy — before manifest generation only.
+    let deploymentApiVersionPolicy = null;
+
+    try {
+        let destinationMaxApiVersion = null;
+
+        if (accessTokenForDownstream && resolvedInstanceUrl) {
+            try {
+                destinationMaxApiVersion = await getLatestApiVersion(
+                    resolvedInstanceUrl,
+                    accessTokenForDownstream
+                );
+            } catch (versionError) {
+                console.error('DESTINATION MAX API VERSION ERROR');
+                console.error(versionError);
+            }
+        }
+
+        let readFile = null;
+
+        try {
+            readFile =
+                await deploymentWorkspaceService.createRepositoryFileReader(
+                    deploymentPackage.repoUrl,
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+                );
+        } catch (readerError) {
+            console.error('API VERSION POLICY FILE READER ERROR');
+            console.error(readerError);
+        }
+
+        deploymentApiVersionPolicy =
+            await resolveDeploymentApiVersionPolicyAsync({
+                selectedMetadata: [
+                    ...(deploymentPackage.selectedMetadata || []),
+                    ...(generatedDeploymentPackage.metadata || []),
+                    ...(generatedDeploymentPackage.dependencies || [])
+                ],
+                workspaceMetadata: generatedDeploymentPackage.metadata || [],
+                destinationMaxApiVersion,
+                readFile
+            });
+
+        // Expose to planner compatibility report without redesigning trust.
+        if (plannerCompatibilityReport?.plannerCompatibility) {
+            plannerCompatibilityReport.plannerCompatibility.deploymentApiVersionPolicy =
+                deploymentApiVersionPolicy;
+        }
+    } catch (policyError) {
+        console.error('DEPLOYMENT API VERSION POLICY ERROR');
+        console.error(policyError);
+        deploymentApiVersionPolicy = {
+            deploymentApiVersion: DEFAULT_API_VERSION,
+            policy: 'HIGHEST_REQUIRED',
+            compatible: true,
+            reason: null,
+            warnings: [
+                policyError.message ||
+                    'API version policy failed; falling back to DEFAULT_API_VERSION.'
+            ]
+        };
+    }
+
     const deploymentReadiness =
         deploymentReadinessService.evaluateDeploymentReadiness({
             deploymentValidation: connectivityResult.deploymentValidation,
             metadataValidation,
-            dependencyValidation
+            dependencyValidation,
+            deploymentApiVersionPolicy
         });
 
     const historyId = runHistorySafely(() =>
@@ -1298,7 +1367,12 @@ async function validateDeployment({
     );
 
     const generatedManifest = packageXmlService.generateManifest(
-        generatedDeploymentPackage
+        generatedDeploymentPackage,
+        {
+            deploymentApiVersion:
+                deploymentApiVersionPolicy?.deploymentApiVersion,
+            deploymentApiVersionPolicy
+        }
     );
 
     // TEMPORARY VERIFICATION LOG — remove after Deployment Planner verification.
@@ -1495,6 +1569,7 @@ async function validateDeployment({
         compatibilitySummary,
         compatibilityFindings,
         dependencyResolutionSummary,
+        deploymentApiVersionPolicy,
         // Phase 9B — facts only; not consumed by planner / authorization / package.
         destinationShape: destinationShapeIndex
             ? serializeDestinationShapeIndex(destinationShapeIndex)

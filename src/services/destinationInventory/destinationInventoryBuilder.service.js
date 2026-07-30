@@ -409,6 +409,7 @@ function toDestinationStateMap(inventory) {
 module.exports = {
     DESTINATION_STATE,
     buildDestinationInventory,
+    getLatestApiVersion,
     getState,
     toDestinationStateMap
 };

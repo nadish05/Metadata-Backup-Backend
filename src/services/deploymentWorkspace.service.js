@@ -13,6 +13,7 @@ const execAsync = util.promisify(exec);
 const mkdir = util.promisify(fs.mkdir);
 const copyFile = util.promisify(fs.copyFile);
 const writeFile = util.promisify(fs.writeFile);
+const readFileAsync = util.promisify(fs.readFile);
 const stat = util.promisify(fs.stat);
 const rm = util.promisify(fs.rm);
 
@@ -929,6 +930,28 @@ async function buildDeploymentWorkspace({
     return result;
 }
 
+/**
+ * Read helper for deployment API version policy (does not copy workspace files).
+ *
+ * @param {string} repoUrl
+ * @param {string} sourceBranch
+ * @returns {Promise<(relativePath: string) => Promise<string>|null>}
+ */
+async function createRepositoryFileReader(repoUrl, sourceBranch) {
+    if (!repoUrl || !sourceBranch) {
+        return null;
+    }
+
+    const repoPath = await prepareRepository(repoUrl);
+    await checkoutSourceBranch(repoPath, sourceBranch);
+
+    return async function readRepositoryFile(relativePath) {
+        const fullPath = path.join(repoPath, relativePath);
+        return readFileAsync(fullPath, 'utf8');
+    };
+}
+
 module.exports = {
-    buildDeploymentWorkspace
+    buildDeploymentWorkspace,
+    createRepositoryFileReader
 };

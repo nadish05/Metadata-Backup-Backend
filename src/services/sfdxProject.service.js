@@ -17,7 +17,7 @@ function getSfdxProjectPath(workspacePath) {
     return path.join(workspacePath, 'sfdx-project.json');
 }
 
-function buildSfdxProjectDefinition() {
+function buildSfdxProjectDefinition(sourceApiVersion = DEFAULT_API_VERSION) {
     return {
         packageDirectories: [
             {
@@ -26,7 +26,7 @@ function buildSfdxProjectDefinition() {
             }
         ],
         namespace: '',
-        sourceApiVersion: DEFAULT_API_VERSION
+        sourceApiVersion: sourceApiVersion || DEFAULT_API_VERSION
     };
 }
 
@@ -39,7 +39,7 @@ async function projectFileExists(projectPath) {
     }
 }
 
-async function ensureSfdxProject(workspacePath) {
+async function ensureSfdxProject(workspacePath, options = {}) {
     logSection('SFDX Project Bootstrap Started');
     logSection('Checking project structure');
 
@@ -52,6 +52,8 @@ async function ensureSfdxProject(workspacePath) {
         };
     }
 
+    const sourceApiVersion =
+        options.sourceApiVersion || DEFAULT_API_VERSION;
     const projectPath = getSfdxProjectPath(workspacePath);
 
     if (await projectFileExists(projectPath)) {
@@ -62,14 +64,15 @@ async function ensureSfdxProject(workspacePath) {
             success: true,
             created: false,
             projectPath,
-            message: 'Salesforce DX project already exists.'
+            message: 'Salesforce DX project already exists.',
+            sourceApiVersion
         };
     }
 
     try {
         console.log('Creating sfdx-project.json');
 
-        const projectDefinition = buildSfdxProjectDefinition();
+        const projectDefinition = buildSfdxProjectDefinition(sourceApiVersion);
 
         await writeFile(
             projectPath,
@@ -83,7 +86,8 @@ async function ensureSfdxProject(workspacePath) {
             success: true,
             created: true,
             projectPath,
-            message: 'Salesforce DX project created.'
+            message: 'Salesforce DX project created.',
+            sourceApiVersion
         };
     } catch (error) {
         if (error.code === 'EEXIST') {
@@ -94,7 +98,8 @@ async function ensureSfdxProject(workspacePath) {
                 success: true,
                 created: false,
                 projectPath,
-                message: 'Salesforce DX project already exists.'
+                message: 'Salesforce DX project already exists.',
+                sourceApiVersion
             };
         }
 

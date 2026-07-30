@@ -107,14 +107,29 @@ function buildManifestSummary(typeMap, apiVersion) {
     };
 }
 
-function generateManifest(generatedDeploymentPackage) {
-    const apiVersion = DEFAULT_API_VERSION;
+/**
+ * Build package.xml using the centralized deployment API version policy result.
+ * Falls back to DEFAULT_API_VERSION only when no policy version is supplied.
+ *
+ * @param {object} generatedDeploymentPackage
+ * @param {{
+ *   deploymentApiVersion?: string,
+ *   deploymentApiVersionPolicy?: object
+ * }} [options]
+ */
+function generateManifest(generatedDeploymentPackage, options = {}) {
+    const policy = options.deploymentApiVersionPolicy || null;
+    const apiVersion =
+        options.deploymentApiVersion ||
+        policy?.deploymentApiVersion ||
+        DEFAULT_API_VERSION;
     const metadata = generatedDeploymentPackage?.metadata || [];
     const typeMap = groupMetadataByType(metadata);
 
     return {
         packageXml: generatePackageXml(generatedDeploymentPackage, apiVersion),
-        summary: buildManifestSummary(typeMap, apiVersion)
+        summary: buildManifestSummary(typeMap, apiVersion),
+        deploymentApiVersionPolicy: policy
     };
 }
 

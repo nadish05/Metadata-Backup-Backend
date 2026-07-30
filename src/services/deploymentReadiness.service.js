@@ -83,14 +83,21 @@ function buildDependencyWarnings(dependencyValidation) {
 function evaluateDeploymentReadiness({
     deploymentValidation,
     metadataValidation,
-    dependencyValidation
+    dependencyValidation,
+    deploymentApiVersionPolicy = null
 }) {
     logSection('Deployment Readiness Evaluation Started');
 
     const summary = {
         destinationConnectivity: deploymentValidation?.status || 'BLOCKED',
         metadataValidation: metadataValidation?.overallStatus || 'PASS',
-        dependencyValidation: dependencyValidation?.overallStatus || 'PASS'
+        dependencyValidation: dependencyValidation?.overallStatus || 'PASS',
+        apiVersionPolicy:
+            deploymentApiVersionPolicy?.compatible === false
+                ? 'BLOCKED'
+                : deploymentApiVersionPolicy
+                  ? 'PASS'
+                  : 'NOT_EVALUATED'
     };
 
     const blockingIssues = [
@@ -99,12 +106,23 @@ function evaluateDeploymentReadiness({
         ...buildDependencyBlockingIssues(dependencyValidation)
     ];
 
-    const warnings = buildDependencyWarnings(dependencyValidation);
+    if (deploymentApiVersionPolicy?.compatible === false) {
+        blockingIssues.push(
+            deploymentApiVersionPolicy.reason ||
+                'Selected metadata API version is incompatible with the destination org.'
+        );
+    }
+
+    const warnings = [
+        ...buildDependencyWarnings(dependencyValidation),
+        ...((deploymentApiVersionPolicy?.warnings || []).filter(Boolean))
+    ];
 
     const hasBlocked =
         summary.destinationConnectivity === 'BLOCKED' ||
         summary.metadataValidation === 'BLOCKED' ||
-        summary.dependencyValidation === 'BLOCKED';
+        summary.dependencyValidation === 'BLOCKED' ||
+        deploymentApiVersionPolicy?.compatible === false;
 
     let overallStatus;
     let canDeploy;
@@ -128,7 +146,8 @@ function evaluateDeploymentReadiness({
         canDeploy,
         blockingIssues,
         warnings,
-        summary
+        summary,
+        deploymentApiVersionPolicy: deploymentApiVersionPolicy || null
     };
 }
 
