@@ -20,13 +20,15 @@ const {
 const {
     canonicalizeCustomFieldDependencies
 } = require('./deploymentReview/customFieldCanonicalizer.service');
+const flowReview = require('./deploymentReview/flowReview.service');
 
 const APEX_REVIEW_METADATA_TYPE = 'ApexClass';
 const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
     'ApexClass',
     'NamedCredential',
     'ExternalCredential',
-    'CustomObject'
+    'CustomObject',
+    'Flow'
 ]);
 
 const { METADATA_TYPE_RULES } = require('../config/metadataTypes');
@@ -312,6 +314,31 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
             return {
                 metadataType,
                 metadataName,
+                filePath,
+                status: 'FAILED',
+                error:
+                    error.stderr ||
+                    error.stdout ||
+                    error.message
+            };
+        }
+    }
+
+    if (metadataType === 'Flow') {
+        const flowName =
+            flowReview.getFlowApiName(filePath) || metadataName;
+
+        try {
+            const content = await readRepoFile(filePath);
+
+            return flowReview.analyzeFlowReview({
+                content,
+                filePath
+            });
+        } catch (error) {
+            return {
+                metadataType,
+                metadataName: flowName,
                 filePath,
                 status: 'FAILED',
                 error:
