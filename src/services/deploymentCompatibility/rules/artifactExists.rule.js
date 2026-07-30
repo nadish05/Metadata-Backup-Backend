@@ -4,6 +4,9 @@ const {
     SEVERITY,
     STATUS
 } = require('../compatibilityModel');
+const {
+    classifyDependency
+} = require('../../dependencyResolution/dependencyClassification.service');
 
 const RULE_ID = 'artifact.exists';
 
@@ -18,11 +21,19 @@ function getNodeKey(item) {
     return `${metadataType}:${name}`;
 }
 
-function collectDeployableCandidates(context) {
+function resolveArtifactRequired(item) {
+    if (typeof item?.artifactRequired === 'boolean') {
+        return item.artifactRequired;
+    }
+
+    return classifyDependency(item).artifactRequired === true;
+}
+
+function collectArtifactRequiredCandidates(context) {
     const candidates = [];
     const seen = new Set();
 
-    function add(item, { requireDeployable = false } = {}) {
+    function add(item) {
         const metadataType = item?.metadataType || item?.type;
         const name = item?.metadataName || item?.name;
         const key = getNodeKey(item);
@@ -31,7 +42,7 @@ function collectDeployableCandidates(context) {
             return;
         }
 
-        if (requireDeployable && item.deployable === false) {
+        if (!resolveArtifactRequired(item)) {
             return;
         }
 
@@ -45,23 +56,37 @@ function collectDeployableCandidates(context) {
             filePath: item.filePath || null,
             action: item.action || null,
             selected: item.selected,
-            deployable: item.deployable
+            deployable: item.deployable,
+            artifactRequired: true,
+            classification: item.classification || null
         });
     }
 
+    // User-selected metadata is always intended for packaging.
     for (const item of context.selectedMetadata || []) {
         add(item);
     }
 
+    // Resolved dependencies: artifactRequired replaces action==DEPLOY as the gate.
+    // Still require an active deploy decision so REFERENCE-only targets are not
+    // blocked when the object exists only in the destination org.
     for (const item of context.resolvedDependencies || []) {
-        if (item.action === 'DEPLOY' && item.selected !== false) {
+        if (
+            resolveArtifactRequired(item) &&
+            item.action === 'DEPLOY' &&
+            item.selected !== false
+        ) {
             add(item);
         }
     }
 
     for (const item of context.discoveredReferences || []) {
-        if (item.deployable === true && item.blocking === true) {
-            add(item, { requireDeployable: true });
+        if (
+            resolveArtifactRequired(item) &&
+            item.deployable === true &&
+            item.blocking === true
+        ) {
+            add(item);
         }
     }
 
@@ -69,14 +94,15 @@ function collectDeployableCandidates(context) {
 }
 
 /**
- * Verify deployable metadata has a resolvable source artifact in the repo.
+ * Verify artifact-required metadata has a resolvable source artifact in the repo.
+ * Platform / runtime / unknown classifications are excluded via artifactRequired.
  */
 const artifactExistsRule = {
     id: RULE_ID,
     metadataTypes: ['*'],
 
     applies(context) {
-        return collectDeployableCandidates(context).some(
+        return collectArtifactRequiredCandidates(context).some(
             (item) =>
                 item.artifactResolved === false ||
                 item.sourceExists === false ||
@@ -86,7 +112,7 @@ const artifactExistsRule = {
 
     analyze(context) {
         const findings = [];
-        const candidates = collectDeployableCandidates(context);
+        const candidates = collectArtifactRequiredCandidates(context);
 
         for (const item of candidates) {
             // Only evaluate nodes that participated in artifact resolution.

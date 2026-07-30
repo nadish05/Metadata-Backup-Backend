@@ -430,5 +430,6 @@ module.exports = {
     analyzeApexContent,
     getCurrentClassName,
     extractCustomMetadataTypes,
-    extractCustomMetadataRecords
+    extractCustomMetadataRecords,
+    SYSTEM_CLASSES
 };

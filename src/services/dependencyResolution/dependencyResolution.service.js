@@ -4,6 +4,10 @@ const {
     DESTINATION_STATES,
     createDecision
 } = require('./decisionModel');
+const {
+    classifyDependency,
+    classifyDependencies
+} = require('./dependencyClassification.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -57,8 +61,8 @@ function normalizeDependencyList(requiredDependencies) {
 }
 
 /**
- * Fold deployable, blocking discovered references into the dependency list.
- * Same resolution path as every other required dependency — no separate layer.
+ * Fold packageable, blocking discovered references into the dependency list.
+ * Non-packageable classifications are excluded before resolution.
  */
 function mergeDeployableReferences(
     requiredDependencies = [],
@@ -82,6 +86,14 @@ function mergeDeployableReferences(
             continue;
         }
 
+        const classification = classifyDependency(reference);
+
+        // Classification gate: platform/runtime/unknown references stay out
+        // of the deployable dependency list.
+        if (!classification.packageable) {
+            continue;
+        }
+
         merged.push({
             name,
             type,
@@ -95,18 +107,49 @@ function mergeDeployableReferences(
             source: reference.discoveredBy || 'REFERENCE_DISCOVERY',
             filePath: reference.filePath || null,
             sourceExists: reference.sourceExists,
-            artifactResolved: reference.artifactResolved
+            artifactResolved: reference.artifactResolved,
+            classification: classification.classification,
+            artifactRequired: classification.artifactRequired,
+            packageable: classification.packageable,
+            destinationValidationRequired:
+                classification.destinationValidationRequired,
+            defaultResolutionPolicy: classification.defaultResolutionPolicy,
+            classificationReason: classification.reason
         });
     }
 
     return merged;
 }
 
+/**
+ * Default decision from Dependency Classification — not "required ⇒ DEPLOY".
+ */
 function createDefaultDecision(dependency) {
     const required = dependency.required !== false;
     const selected = dependency.selected !== false;
-    const action =
-        required && selected ? ACTIONS.DEPLOY : ACTIONS.SKIP;
+    const classification =
+        dependency.classification != null
+            ? {
+                  classification: dependency.classification,
+                  artifactRequired: dependency.artifactRequired,
+                  packageable: dependency.packageable,
+                  destinationValidationRequired:
+                      dependency.destinationValidationRequired,
+                  defaultResolutionPolicy: dependency.defaultResolutionPolicy,
+                  reason: dependency.classificationReason
+              }
+            : classifyDependency(dependency);
+
+    let action = classification.defaultResolutionPolicy || ACTIONS.SKIP;
+
+    if (!required || !selected) {
+        action = ACTIONS.SKIP;
+    }
+
+    // Unknown / non-packageable must never auto-DEPLOY.
+    if (action === ACTIONS.DEPLOY && classification.packageable !== true) {
+        action = ACTIONS.SKIP;
+    }
 
     return createDecision({
         name: dependency.name,
@@ -117,9 +160,38 @@ function createDefaultDecision(dependency) {
         editable: dependency.editable === true,
         destinationState: DESTINATION_STATES.UNKNOWN,
         relationship: dependency.relationship || null,
-        reason: 'Default deployment behavior preserved.',
-        source: 'DEFAULT'
+        reason:
+            classification.reason ||
+            'Default resolution derived from dependency classification.',
+        source: 'CLASSIFICATION'
     });
+}
+
+function attachClassificationFields(decision, dependency) {
+    const classification =
+        dependency.classification != null
+            ? {
+                  classification: dependency.classification,
+                  artifactRequired: dependency.artifactRequired,
+                  packageable: dependency.packageable,
+                  destinationValidationRequired:
+                      dependency.destinationValidationRequired,
+                  defaultResolutionPolicy: dependency.defaultResolutionPolicy,
+                  classificationReason: dependency.classificationReason
+              }
+            : classifyDependency(dependency);
+
+    return {
+        ...decision,
+        classification: classification.classification,
+        artifactRequired: classification.artifactRequired,
+        packageable: classification.packageable,
+        destinationValidationRequired:
+            classification.destinationValidationRequired,
+        defaultResolutionPolicy: classification.defaultResolutionPolicy,
+        classificationReason:
+            classification.classificationReason || classification.reason
+    };
 }
 
 function buildSummary(decisions, warnings = []) {
@@ -159,6 +231,7 @@ function logResolutionResults(decisions, summary) {
 
     for (const decision of decisions) {
         console.log('Dependency:', `${decision.metadataType}:${decision.name}`);
+        console.log('Classification:', decision.classification || 'N/A');
         console.log('Destination state:', decision.destinationState);
         console.log('Decision:', decision.action);
         console.log('Reason:', decision.reason);
@@ -180,23 +253,7 @@ function logResolutionResults(decisions, summary) {
 
 /**
  * Resolve dependency deployment actions.
- * Produces decisions only. Does not modify GitHub, workspace, or packages.
- *
- * Deployable, blocking discovered references participate in the same
- * dependency list and decision flow as requiredDependencies.
- *
- * Destination existence comes from the Destination Inventory Builder via
- * destinationStates (toDestinationStateMap → context.destinationStates).
- *
- * @param {{
- *   requiredDependencies?: Array,
- *   discoveredReferences?: Array,
- *   selectedMetadata?: Array,
- *   accessToken?: string,
- *   instanceUrl?: string,
- *   destinationStates?: Map<string, string>,
- *   destinationStateWarnings?: string[]
- * }} options
+ * Classification runs before decisions so defaults are policy-driven.
  */
 async function resolveDependencies({
     requiredDependencies,
@@ -209,8 +266,13 @@ async function resolveDependencies({
 } = {}) {
     logSection('Dependency Resolution Engine');
 
-    const dependencies = normalizeDependencyList(
-        mergeDeployableReferences(requiredDependencies, discoveredReferences)
+    const dependencies = classifyDependencies(
+        normalizeDependencyList(
+            mergeDeployableReferences(
+                requiredDependencies,
+                discoveredReferences
+            )
+        )
     );
     const resolvers = getRegisteredResolvers();
     const selectedMetadataKeys = buildSelectedMetadataKeys(selectedMetadata);
@@ -248,19 +310,23 @@ async function resolveDependencies({
             ? resolver.resolve(dependency, context)
             : createDefaultDecision(dependency);
 
-        // Preserve repository artifact enrichment for Workspace / Compatibility.
-        decisions.push({
-            ...decision,
-            filePath: dependency.filePath || decision.filePath || null,
-            sourceExists:
-                dependency.sourceExists != null
-                    ? dependency.sourceExists
-                    : decision.sourceExists,
-            artifactResolved:
-                dependency.artifactResolved != null
-                    ? dependency.artifactResolved
-                    : decision.artifactResolved
-        });
+        decisions.push(
+            attachClassificationFields(
+                {
+                    ...decision,
+                    filePath: dependency.filePath || decision.filePath || null,
+                    sourceExists:
+                        dependency.sourceExists != null
+                            ? dependency.sourceExists
+                            : decision.sourceExists,
+                    artifactResolved:
+                        dependency.artifactResolved != null
+                            ? dependency.artifactResolved
+                            : decision.artifactResolved
+                },
+                dependency
+            )
+        );
     }
 
     const summary = buildSummary(decisions, warnings);
@@ -276,6 +342,7 @@ async function resolveDependencies({
 module.exports = {
     resolveDependencies,
     mergeDeployableReferences,
+    createDefaultDecision,
     ACTIONS,
     DESTINATION_STATES
 };
