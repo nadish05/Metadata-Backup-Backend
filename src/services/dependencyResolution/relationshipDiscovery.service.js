@@ -10,6 +10,13 @@ const execAsync = util.promisify(exec);
 
 const MAX_GRAPH_DEPTH = 10;
 
+/**
+ * Dependency types that expand through relationship discoverers even when they
+ * are not user-selected primary metadata (e.g. Flow/Apex → CustomField).
+ * Keeps expansion generic — not Flow-specific.
+ */
+const EXPANDABLE_DEPENDENCY_TYPES = Object.freeze(['CustomField']);
+
 function logSection(title) {
     console.log('------------------------------------');
     console.log(title);
@@ -247,6 +254,54 @@ function toScanTarget(item) {
     return null;
 }
 
+/**
+ * Build the initial relationship-discovery frontier.
+ * Primary selected metadata plus expandable dependency types (CustomField).
+ * Deduplicates by type:name. Does not invent new parsers.
+ *
+ * @param {Array<object>} selectedMetadata
+ * @param {Array<object>} expandableDependencies
+ * @returns {Array<object>}
+ */
+function buildInitialFrontier(selectedMetadata = [], expandableDependencies = []) {
+    const frontier = [];
+    const seen = new Set();
+    const expandableTypeSet = new Set(EXPANDABLE_DEPENDENCY_TYPES);
+
+    function addItem(item) {
+        const target = toScanTarget(item);
+
+        if (!target) {
+            return;
+        }
+
+        const key = getDependencyKey(target);
+
+        if (!key || seen.has(key)) {
+            return;
+        }
+
+        seen.add(key);
+        frontier.push(target);
+    }
+
+    for (const item of selectedMetadata || []) {
+        addItem(item);
+    }
+
+    for (const item of expandableDependencies || []) {
+        const type = item?.type || item?.metadataType;
+
+        if (!expandableTypeSet.has(type)) {
+            continue;
+        }
+
+        addItem(item);
+    }
+
+    return frontier;
+}
+
 function relationshipToScanTarget(relationship) {
     if (!relationship?.name || !relationship?.metadataType) {
         return null;
@@ -470,6 +525,7 @@ async function runDiscoverersForFrontier({
  */
 async function discoverUntilStable({
     selectedMetadata,
+    expandableDependencies = [],
     discoverers,
     repoFiles,
     readRepoFile,
@@ -488,11 +544,14 @@ async function discoverUntilStable({
     let deploymentReviewsExecuted = 0;
     let deploymentReviewsSkipped = 0;
 
-    let frontier = (selectedMetadata || [])
-        .map(toScanTarget)
-        .filter(Boolean);
+    let frontier = buildInitialFrontier(
+        selectedMetadata,
+        expandableDependencies
+    );
 
     // User-selected metadata is reviewed upstream; do not re-review here.
+    // Expandable dependency seeds (e.g. CustomField) are also marked reviewed
+    // so relationship expansion does not re-run Review on them.
     for (const item of frontier) {
         const key = getDependencyKey(item);
 
@@ -760,6 +819,7 @@ async function discoverRelationships({
 
                 const expansionResult = await discoverUntilStable({
                     selectedMetadata,
+                    expandableDependencies: existingDependencies,
                     discoverers,
                     repoFiles,
                     readRepoFile,
@@ -819,5 +879,7 @@ async function discoverRelationships({
 
 module.exports = {
     discoverRelationships,
-    discoverUntilStable
+    discoverUntilStable,
+    buildInitialFrontier,
+    EXPANDABLE_DEPENDENCY_TYPES
 };
