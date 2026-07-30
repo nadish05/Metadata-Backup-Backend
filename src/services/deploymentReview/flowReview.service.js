@@ -1,13 +1,16 @@
 /**
- * Flow Review — Phase 1.
+ * Flow Review — Phase 1 + Phase 2.
  *
  * Supports Flow as a reviewable metadata type.
  * Reads embedded <apiVersion> from .flow-meta.xml for display only.
- * Does not discover Flow dependencies (deferred to a later phase).
+ * Discovers Flow metadata dependencies from XML (Phase 2).
  */
 
+const {
+    analyzeFlowDependencies
+} = require('./flowDependencyAnalyzer.service');
+
 const FLOW_META_SUFFIX = '.flow-meta.xml';
-const DEPENDENCIES_NOT_YET_ANALYZED = 'Dependencies not yet analyzed';
 
 function normalizePath(filePath) {
     return String(filePath || '').replace(/\\/g, '/');
@@ -54,7 +57,6 @@ function extractFlowApiVersion(content) {
 
 /**
  * Build a Deployment Review result for a Flow file.
- * Dependency discovery is intentionally not performed.
  *
  * @param {{ content: string, filePath: string }} params
  * @returns {object}
@@ -62,6 +64,7 @@ function extractFlowApiVersion(content) {
 function analyzeFlowReview({ content, filePath }) {
     const metadataName = getFlowApiName(filePath);
     const apiVersion = extractFlowApiVersion(content);
+    const dependencyAnalysis = analyzeFlowDependencies(content);
 
     return {
         metadataType: 'Flow',
@@ -72,13 +75,7 @@ function analyzeFlowReview({ content, filePath }) {
             supported: Boolean(apiVersion),
             apiVersion
         },
-        dependencyAnalysis: {
-            requiredDependencies: [],
-            recommendedTestClasses: [],
-            optionalDependencies: [],
-            analysisStatus: 'NOT_YET_ANALYZED',
-            message: DEPENDENCIES_NOT_YET_ANALYZED
-        }
+        dependencyAnalysis
     };
 }
 
@@ -86,6 +83,5 @@ module.exports = {
     getFlowApiName,
     extractFlowApiVersion,
     analyzeFlowReview,
-    DEPENDENCIES_NOT_YET_ANALYZED,
     FLOW_META_SUFFIX
 };

@@ -3,8 +3,7 @@ const assert = require('assert');
 const {
     getFlowApiName,
     extractFlowApiVersion,
-    analyzeFlowReview,
-    DEPENDENCIES_NOT_YET_ANALYZED
+    analyzeFlowReview
 } = require('./flowReview.service');
 
 const {
@@ -56,30 +55,29 @@ async function main() {
         assert.strictEqual(extractFlowApiVersion('<Flow></Flow>'), null);
     });
 
-    await runTest('analyzeFlowReview returns SUCCESS with API version', () => {
-        const result = analyzeFlowReview({
-            content: FLOW_XML,
-            filePath: FLOW_PATH
-        });
+    await runTest(
+        'analyzeFlowReview returns SUCCESS with API version and analyzed deps',
+        () => {
+            const result = analyzeFlowReview({
+                content: FLOW_XML,
+                filePath: FLOW_PATH
+            });
 
-        assert.strictEqual(result.metadataType, 'Flow');
-        assert.strictEqual(result.metadataName, 'My_Sample_Flow');
-        assert.strictEqual(result.status, 'SUCCESS');
-        assert.strictEqual(result.apiValidation.apiVersion, '63.0');
-        assert.strictEqual(result.apiValidation.supported, true);
-        assert.strictEqual(
-            result.dependencyAnalysis.analysisStatus,
-            'NOT_YET_ANALYZED'
-        );
-        assert.strictEqual(
-            result.dependencyAnalysis.message,
-            DEPENDENCIES_NOT_YET_ANALYZED
-        );
-        assert.deepStrictEqual(
-            result.dependencyAnalysis.requiredDependencies,
-            []
-        );
-    });
+            assert.strictEqual(result.metadataType, 'Flow');
+            assert.strictEqual(result.metadataName, 'My_Sample_Flow');
+            assert.strictEqual(result.status, 'SUCCESS');
+            assert.strictEqual(result.apiValidation.apiVersion, '63.0');
+            assert.strictEqual(result.apiValidation.supported, true);
+            assert.strictEqual(
+                result.dependencyAnalysis.analysisStatus,
+                'ANALYZED'
+            );
+            assert.deepStrictEqual(
+                result.dependencyAnalysis.requiredDependencies,
+                []
+            );
+        }
+    );
 
     await runTest(
         'reviewDeployableMetadataItems reviews Flow instead of NOT_SUPPORTED_YET',
@@ -106,8 +104,8 @@ async function main() {
             assert.strictEqual(review.metadataName, 'My_Sample_Flow');
             assert.strictEqual(review.apiValidation.apiVersion, '63.0');
             assert.strictEqual(
-                review.dependencyAnalysis.message,
-                DEPENDENCIES_NOT_YET_ANALYZED
+                review.dependencyAnalysis.analysisStatus,
+                'ANALYZED'
             );
             assert.deepStrictEqual(result.requiredDependencies, []);
         }
