@@ -169,7 +169,8 @@ const TRUST_POLICY = Object.freeze({
     LightningComponentBundle: Object.freeze(['EXISTENCE']),
     ListView: Object.freeze(['EXISTENCE']),
     Layout: Object.freeze([]),
-    Flow: Object.freeze([]),
+    // Phase 4 Flow — EXISTENCE + GRAPH (Review dependency destination states).
+    Flow: Object.freeze(['EXISTENCE', 'GRAPH']),
     NamedCredential: Object.freeze(['EXISTENCE']),
     PermissionSet: Object.freeze(['EXISTENCE']),
     Profile: Object.freeze([])

@@ -404,6 +404,97 @@ function normalizeDependencyGraph({
 }
 
 /**
+ * Build graph edges from Deployment Review Flow dependency inventory.
+ * Consumes existing resolvedDependencies (sourceMetadata) — no rediscovery.
+ *
+ * @param {Array<object>} selectedMetadata
+ * @param {Array<object>} resolvedDependencies
+ * @returns {Array<object>}
+ */
+function buildFlowReviewDependencyEdges(
+    selectedMetadata = [],
+    resolvedDependencies = []
+) {
+    const flowNames = new Set();
+
+    for (const item of selectedMetadata || []) {
+        if (getMetadataType(item) !== 'Flow') {
+            continue;
+        }
+
+        const name = getMetadataName(item);
+
+        if (name) {
+            flowNames.add(name);
+        }
+    }
+
+    if (!flowNames.size) {
+        return [];
+    }
+
+    const edges = [];
+
+    for (const dependency of resolvedDependencies || []) {
+        const sourceName = dependency?.sourceMetadata || null;
+
+        if (!sourceName || !flowNames.has(sourceName)) {
+            continue;
+        }
+
+        const toType = getMetadataType(dependency);
+        const toName = getMetadataName(dependency);
+
+        if (!toType || !toName) {
+            continue;
+        }
+
+        edges.push({
+            fromType: 'Flow',
+            fromName: sourceName,
+            toType,
+            toName,
+            relationship: 'FlowDependency',
+            discoveredBy:
+                dependency.discoveredBy || 'DeploymentReview',
+            blocking: dependency.required !== false
+        });
+    }
+
+    return edges;
+}
+
+/**
+ * Ensure selected Flow nodes exist in the graph index (vacuous SAFE when no deps).
+ *
+ * @param {{ byNode: Map<string, object> }} graphIndex
+ * @param {Array<object>} selectedMetadata
+ */
+function ensureFlowGraphNodes(graphIndex, selectedMetadata = []) {
+    if (!graphIndex?.byNode) {
+        return;
+    }
+
+    for (const item of selectedMetadata || []) {
+        if (getMetadataType(item) !== 'Flow') {
+            continue;
+        }
+
+        const name = getMetadataName(item);
+
+        if (!name) {
+            continue;
+        }
+
+        const key = buildKey('Flow', name);
+
+        if (!graphIndex.byNode.has(key)) {
+            graphIndex.byNode.set(key, { dependsOn: [], requiredBy: [] });
+        }
+    }
+}
+
+/**
  * Keys that would be included in the deployment package (pre-package-gen view).
  * Mirrors package generation auto-include rules without calling package service.
  */
@@ -768,8 +859,13 @@ function buildCompatibilityResult(item, evaluationContext = {}) {
         ? ANALYSIS_LEVEL.EXISTENCE
         : ANALYSIS_LEVEL.NONE;
 
+    // Flow trusts GRAPH from Review dependency states. Evaluate Flow graph even
+    // when the global analyzer pass defers graph (Validation Phase 6F timing).
+    // Other types keep deferred behaviour unchanged.
     const includeGraphEvaluation =
-        evaluationContext.includeGraphEvaluation !== false;
+        metadataType === 'Flow'
+            ? true
+            : evaluationContext.includeGraphEvaluation !== false;
 
     let graphSafe = false;
     let graphReasons = [
@@ -960,7 +1056,18 @@ function analyzePlannerCompatibility({
 
     const inventory = collectInventory(selected, resolved);
 
-    const graphIndex = includeGraphEvaluation
+    const flowReviewEdges = buildFlowReviewDependencyEdges(selected, resolved);
+    const hasFlowSelection = selected.some(
+        (item) => getMetadataType(item) === 'Flow'
+    );
+
+    // Always materialize the graph when Flow is selected so Flow GRAPH trust
+    // can evaluate Review dependency states even if global graph is deferred.
+    // Non-Flow types still honor includeGraphEvaluation in buildCompatibilityResult.
+    const shouldBuildGraphIndex =
+        includeGraphEvaluation !== false || hasFlowSelection;
+
+    const graphIndex = shouldBuildGraphIndex
         ? normalizeDependencyGraph({
               discoveredRelationships: Array.isArray(discoveredRelationships)
                   ? discoveredRelationships
@@ -968,11 +1075,16 @@ function analyzePlannerCompatibility({
               discoveredReferences: Array.isArray(discoveredReferences)
                   ? discoveredReferences
                   : [],
-              discoveredEdges: Array.isArray(discoveredEdges)
-                  ? discoveredEdges
-                  : []
+              discoveredEdges: [
+                  ...(Array.isArray(discoveredEdges) ? discoveredEdges : []),
+                  ...flowReviewEdges
+              ]
           })
         : { byNode: new Map(), edges: [] };
+
+    if (shouldBuildGraphIndex) {
+        ensureFlowGraphNodes(graphIndex, selected);
+    }
 
     const evaluationContext = {
         graphIndex,
@@ -1034,6 +1146,7 @@ function synchronizePlannerCompatibilityGraph(
         : [];
 
     const inventory = collectInventory(selected, resolved);
+    const flowReviewEdges = buildFlowReviewDependencyEdges(selected, resolved);
     const graphIndex = normalizeDependencyGraph({
         discoveredRelationships: Array.isArray(discoveredRelationships)
             ? discoveredRelationships
@@ -1041,8 +1154,12 @@ function synchronizePlannerCompatibilityGraph(
         discoveredReferences: Array.isArray(discoveredReferences)
             ? discoveredReferences
             : [],
-        discoveredEdges: Array.isArray(discoveredEdges) ? discoveredEdges : []
+        discoveredEdges: [
+            ...(Array.isArray(discoveredEdges) ? discoveredEdges : []),
+            ...flowReviewEdges
+        ]
     });
+    ensureFlowGraphNodes(graphIndex, selected);
 
     let packageKeys = packageMembershipKeys;
 
@@ -1108,6 +1225,8 @@ module.exports = {
     computeCanSkip,
     buildCapabilities,
     normalizeDependencyGraph,
+    buildFlowReviewDependencyEdges,
+    ensureFlowGraphNodes,
     evaluateGraphSafety,
     buildPackageMembershipKeysFromGeneratedPackage,
     analyzePlannerCompatibility,

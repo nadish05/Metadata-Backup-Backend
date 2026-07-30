@@ -38,7 +38,11 @@ runTest('TRUST_POLICY: CustomObject and CustomField trust GRAPH', () => {
     ]);
 
     for (const [type, trusted] of Object.entries(TRUST_POLICY)) {
-        if (type === 'CustomObject' || type === 'CustomField') {
+        if (
+            type === 'CustomObject' ||
+            type === 'CustomField' ||
+            type === 'Flow'
+        ) {
             continue;
         }
 
