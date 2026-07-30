@@ -18,7 +18,8 @@ function usesToolingApi(type) {
         type === 'ApexTrigger' ||
         type === 'CustomField' ||
         type === 'FlexiPage' ||
-        type === 'LightningComponentBundle'
+        type === 'LightningComponentBundle' ||
+        type === 'Flow'
     );
 }
 
@@ -233,6 +234,18 @@ function buildExistenceQuery(type, name) {
                 `WHERE Name = '${escapedName}' ` +
                 'AND IsOwnedByProfile = false LIMIT 1'
             );
+
+        case 'Flow':
+            // Tooling FlowDefinition.DeveloperName = Flow API name.
+            return (
+                'SELECT Id FROM FlowDefinition ' +
+                `WHERE DeveloperName = '${escapedName}' LIMIT 1`
+            );
+
+        // EmailAlert / WorkflowAlert: no reliable SOQL existence query in this
+        // catalog — callers receive UNKNOWN via unsupported query path.
+        case 'EmailAlert':
+            return null;
 
         default:
             return null;

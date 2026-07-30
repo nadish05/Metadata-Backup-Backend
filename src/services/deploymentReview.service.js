@@ -21,6 +21,7 @@ const {
     canonicalizeCustomFieldDependencies
 } = require('./deploymentReview/customFieldCanonicalizer.service');
 const flowReview = require('./deploymentReview/flowReview.service');
+const flowDestinationValidation = require('./deploymentReview/flowDestinationValidation.service');
 
 const APEX_REVIEW_METADATA_TYPE = 'ApexClass';
 const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
@@ -279,7 +280,12 @@ function buildNotSupportedResult({ metadataType, filePath }) {
     };
 }
 
-async function processMetadataItem(item, readRepoFile, listRepoFiles) {
+async function processMetadataItem(
+    item,
+    readRepoFile,
+    listRepoFiles,
+    destinationCredentials = null
+) {
     const { metadataType, filePath } = item;
     const metadataName = getMetadataName(filePath);
 
@@ -330,11 +336,29 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
 
         try {
             const content = await readRepoFile(filePath);
-
-            return flowReview.analyzeFlowReview({
+            const reviewResult = flowReview.analyzeFlowReview({
                 content,
                 filePath
             });
+
+            // Phase 3 — destination existence for Phase 2 inventory only.
+            // Does not rediscover or re-parse Flow XML.
+            const enrichment =
+                await flowDestinationValidation.enrichFlowDependenciesWithDestinationState(
+                    reviewResult.dependencyAnalysis?.requiredDependencies ||
+                        [],
+                    destinationCredentials || {}
+                );
+
+            return {
+                ...reviewResult,
+                dependencyAnalysis: {
+                    ...reviewResult.dependencyAnalysis,
+                    requiredDependencies: enrichment.requiredDependencies,
+                    destinationValidationSummary:
+                        enrichment.destinationValidationSummary
+                }
+            };
         } catch (error) {
             return {
                 metadataType,
@@ -479,6 +503,11 @@ async function processMetadataItem(item, readRepoFile, listRepoFiles) {
 async function runDeploymentReview(payload) {
     const deploymentPackage = normalizeDeploymentPackage(payload);
     const { repoUrl, sourceBranch, selectedMetadata } = deploymentPackage;
+    const destinationCredentials = {
+        refreshToken: payload?.refreshToken || null,
+        accessToken: payload?.accessToken || null,
+        instanceUrl: payload?.instanceUrl || null
+    };
 
     if (!repoUrl || !sourceBranch) {
         throw new Error('repoUrl and sourceBranch are required');
@@ -510,7 +539,8 @@ async function runDeploymentReview(payload) {
             const reviewResult = await reviewDeployableMetadataItems({
                 items: selectedMetadata,
                 readRepoFile,
-                listRepoFiles
+                listRepoFiles,
+                destinationCredentials
             });
 
             return {
@@ -528,13 +558,19 @@ async function runDeploymentReview(payload) {
  * @param {{
  *   items: Array<{ metadataType?: string, type?: string, metadataName?: string, name?: string, filePath?: string }>,
  *   readRepoFile: Function,
- *   listRepoFiles: Function
+ *   listRepoFiles: Function,
+ *   destinationCredentials?: {
+ *     refreshToken?: string|null,
+ *     accessToken?: string|null,
+ *     instanceUrl?: string|null
+ *   }|null
  * }} options
  */
 async function reviewDeployableMetadataItems({
     items,
     readRepoFile,
-    listRepoFiles
+    listRepoFiles,
+    destinationCredentials = null
 }) {
     const deploymentReview = [];
     const aggregatedDependencies = [];
@@ -587,7 +623,8 @@ async function reviewDeployableMetadataItems({
         const result = await processMetadataItem(
             { metadataType, filePath },
             readRepoFile,
-            listRepoFiles
+            listRepoFiles,
+            destinationCredentials
         );
 
         reviewsExecuted += 1;

@@ -140,8 +140,9 @@ async function main() {
                 })
                 .map((file) => path.basename(file));
 
-            assert.deepStrictEqual(consumers, [
-                'deploymentValidation.service.js'
+            assert.deepStrictEqual(consumers.sort(), [
+                'deploymentValidation.service.js',
+                'flowDestinationValidation.service.js'
             ]);
 
             const resolution = fs.readFileSync(
