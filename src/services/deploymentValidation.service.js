@@ -1429,6 +1429,38 @@ async function validateDeployment({
         }
     }
 
+    // TEMPORARY DEBUG — Workspace Builder input (remove after trace).
+    {
+        const workspaceItems = [
+            ...(generatedDeploymentPackage?.metadata || []),
+            ...(generatedDeploymentPackage?.dependencies || [])
+        ];
+
+        console.log('==========================================================');
+        console.log('WORKSPACE INPUT');
+        console.log('==========================================================');
+
+        if (!workspaceItems.length) {
+            console.log('(no metadata items for Workspace Builder)');
+        } else {
+            for (const item of workspaceItems) {
+                console.log('Metadata Type');
+                console.log(item?.type || item?.metadataType || 'n/a');
+                console.log('Metadata Name');
+                console.log(item?.name || item?.metadataName || 'n/a');
+                console.log('Origin (if available)');
+                console.log(item?.origin ?? 'n/a');
+                console.log('Selected');
+                console.log(
+                    item?.selected !== undefined ? item.selected : 'n/a'
+                );
+                console.log('----------------------------------------');
+            }
+        }
+
+        console.log('==========================================================');
+    }
+
     let generatedWorkspace;
 
     if (artifactCompatibilityBlocked) {

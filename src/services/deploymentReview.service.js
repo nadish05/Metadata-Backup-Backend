@@ -390,6 +390,38 @@ async function processMetadataItem(
             // PRIMARY_SELECTION → full child enumeration (fields, rules, etc.)
             // RELATIONSHIP_TARGET / other non-primary → preserve already-discovered
             // field deps only; do not invent artificial field dependencies.
+            const reviewStrategy = shouldEnumerateCustomObjectChildren(origin)
+                ? 'FULL_OBJECT'
+                : 'RELATIONSHIP_ONLY';
+
+            // TEMPORARY DEBUG — CustomObject review entry (remove after trace).
+            {
+                console.log('==========================================================');
+                console.log('CUSTOM OBJECT REVIEW');
+                console.log('==========================================================');
+                console.log('Metadata Name:');
+                console.log(customObjectName);
+                console.log('Metadata Type:');
+                console.log(metadataType);
+                console.log('Origin:');
+                console.log(origin);
+                console.log('Selected:');
+                console.log(
+                    item.selected !== undefined ? item.selected : 'n/a'
+                );
+                console.log('Caller (if available):');
+                console.log(
+                    item.caller ||
+                        item.discoveredBy ||
+                        item.debugCaller ||
+                        'n/a'
+                );
+                console.log('Review Strategy:');
+                console.log(reviewStrategy);
+                console.log('(FULL_OBJECT or RELATIONSHIP_ONLY)');
+                console.log('==========================================================');
+            }
+
             if (!shouldEnumerateCustomObjectChildren(origin)) {
                 return {
                     metadataType,
@@ -411,7 +443,16 @@ async function processMetadataItem(
             const fieldAnalysis =
                 customObjectDependencyAnalyzer.analyzeCustomObjectFields(
                     customObjectName,
-                    repoFiles
+                    repoFiles,
+                    {
+                        origin,
+                        reviewStrategy: 'FULL_OBJECT',
+                        caller:
+                            item.caller ||
+                            item.discoveredBy ||
+                            item.debugCaller ||
+                            null
+                    }
                 );
 
             const validationRuleAnalysis =
