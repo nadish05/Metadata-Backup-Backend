@@ -3,6 +3,7 @@ const axios = require('axios');
 const metadataValidationService = require('./metadataValidation.service');
 const dependencyValidationService = require('./dependencyValidation.service');
 const deploymentReadinessService = require('./deploymentReadiness.service');
+const deploymentReadinessAnalysisService = require('./deploymentReadinessAnalysis.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1244,6 +1245,7 @@ async function validateDeployment({
 
     // Deployment API Version Policy — before manifest generation only.
     let deploymentApiVersionPolicy = null;
+    let packageSourceReadFile = null;
 
     try {
         let destinationMaxApiVersion = null;
@@ -1260,10 +1262,8 @@ async function validateDeployment({
             }
         }
 
-        let readFile = null;
-
         try {
-            readFile =
+            packageSourceReadFile =
                 await deploymentWorkspaceService.createRepositoryFileReader(
                     deploymentPackage.repoUrl,
                     deploymentPackage.sourceBranch || deploymentPackage.branch
@@ -1282,7 +1282,7 @@ async function validateDeployment({
                 ],
                 workspaceMetadata: generatedDeploymentPackage.metadata || [],
                 destinationMaxApiVersion,
-                readFile
+                readFile: packageSourceReadFile
             });
 
         // Expose to planner compatibility report without redesigning trust.
@@ -1312,6 +1312,44 @@ async function validateDeployment({
             dependencyValidation,
             deploymentApiVersionPolicy
         });
+
+    // Phase 10.9 — static pre-deploy risk report only.
+    // Never mutates package, never changes canDeploy / execution gates.
+    let deploymentReadinessAnalysis =
+        deploymentReadinessAnalysisService.buildEmptyAnalysis(
+            'Readiness analysis not evaluated.'
+        );
+
+    try {
+        deploymentReadinessAnalysis =
+            await deploymentReadinessAnalysisService.analyzeDeploymentReadiness({
+                generatedDeploymentPackage,
+                discoveredReferences,
+                deploymentApiVersionPolicy,
+                readFile: packageSourceReadFile,
+                repoFiles: [
+                    ...(generatedDeploymentPackage?.metadata || []),
+                    ...(generatedDeploymentPackage?.dependencies || [])
+                ]
+                    .map((item) => item?.filePath)
+                    .filter(Boolean)
+            });
+    } catch (analysisError) {
+        console.error('DEPLOYMENT READINESS ANALYSIS ERROR');
+        console.error(analysisError);
+        deploymentReadinessAnalysis =
+            deploymentReadinessAnalysisService.buildEmptyAnalysis(
+                analysisError.message ||
+                    'Deployment readiness analysis failed.'
+            );
+        deploymentReadinessAnalysis.overallStatus = 'WARNING';
+        deploymentReadinessAnalysis.recommendations = [
+            'Static deployment readiness analysis could not complete; review deploy diagnostics if failures occur.'
+        ];
+    }
+
+    // Additive nest only — gate fields (overallStatus/canDeploy) unchanged.
+    deploymentReadiness.staticAnalysis = deploymentReadinessAnalysis;
 
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
@@ -1502,6 +1540,9 @@ async function validateDeployment({
         metadataValidation,
         dependencyValidation,
         deploymentReadiness,
+        // Phase 10.9 — report-only static analysis (PASS/WARNING/FAIL).
+        // Distinct from deploymentReadiness gate (READY/BLOCKED + canDeploy).
+        deploymentReadinessAnalysis,
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
