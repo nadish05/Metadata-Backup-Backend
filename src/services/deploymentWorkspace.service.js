@@ -8,6 +8,7 @@ const { METADATA_TYPE_RULES, isBundleMetadataType, getMetadataTypeRule } = requi
 const {
     CHILD_METADATA_CONFIG
 } = require('./deploymentReview/customObjectChildMetadataAnalyzer.service');
+const sessionPricePackageDebug = require('./sessionPricePackageDebug.temp');
 
 const execAsync = util.promisify(exec);
 const mkdir = util.promisify(fs.mkdir);
@@ -832,6 +833,25 @@ async function buildDeploymentWorkspace({
     repoUrl,
     sourceBranch
 }) {
+    // TEMPORARY DEBUG — Workspace Builder entry (logging only).
+    sessionPricePackageDebug.logFinalPackageBeforeWorkspace(
+        generatedDeploymentPackage
+    );
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'buildDeploymentWorkspace ENTRY metadata',
+        collectionName: 'generatedDeploymentPackage.metadata',
+        collection: generatedDeploymentPackage?.metadata,
+        method: 'buildDeploymentWorkspace',
+        caller: 'deploymentValidation.validateDeployment'
+    });
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'buildDeploymentWorkspace ENTRY dependencies',
+        collectionName: 'generatedDeploymentPackage.dependencies',
+        collection: generatedDeploymentPackage?.dependencies,
+        method: 'buildDeploymentWorkspace',
+        caller: 'deploymentValidation.validateDeployment'
+    });
+
     logSection('Workspace Builder Started');
 
     const missingFiles = [];

@@ -1,3 +1,5 @@
+const sessionPricePackageDebug = require('./sessionPricePackageDebug.temp');
+
 function normalizeMetadataItem(item) {
     if (!item || typeof item !== 'object') {
         return null;
@@ -66,7 +68,19 @@ function normalizeMetadata(selectedMetadata) {
         metadataMap.set(key, normalized);
     }
 
-    return [...metadataMap.values()];
+    const result = [...metadataMap.values()];
+
+    // TEMPORARY DEBUG — Session__c.Price__c package tracing.
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'normalizeMetadata return',
+        collectionName: 'selectedMetadata (normalized)',
+        collection: result,
+        method: 'normalizeMetadata',
+        caller:
+            'composeMetadataWithRequiredDependencies / generateDeploymentPackage'
+    });
+
+    return result;
 }
 
 function normalizeDependencyItem(item) {
@@ -137,6 +151,13 @@ function normalizeDependencies(requiredDependencies) {
         return [];
     }
 
+    // TEMPORARY DEBUG — detect Price already in input before Map normalize.
+    sessionPricePackageDebug.logFoundBeforePackageBuild({
+        collectionName: 'requiredDependencies (normalizeDependencies input)',
+        method: 'normalizeDependencies',
+        collection: requiredDependencies
+    });
+
     const dependencyMap = new Map();
 
     for (const item of requiredDependencies) {
@@ -152,10 +173,20 @@ function normalizeDependencies(requiredDependencies) {
             continue;
         }
 
+        // TEMPORARY DEBUG — Map insert of Session__c.Price__c.
+        sessionPricePackageDebug.logSessionPriceInserted({
+            method: 'normalizeDependencies',
+            caller:
+                'generateDeploymentPackage / composeMetadataWithRequiredDependencies',
+            collectionReceiving: 'dependencyMap',
+            collectionSource: 'requiredDependencies',
+            metadataObject: normalized
+        });
+
         dependencyMap.set(key, normalized);
     }
 
-    return [...dependencyMap.values()].sort((a, b) => {
+    const result = [...dependencyMap.values()].sort((a, b) => {
         const typeCompare = a.type.localeCompare(b.type);
 
         if (typeCompare !== 0) {
@@ -164,6 +195,18 @@ function normalizeDependencies(requiredDependencies) {
 
         return a.name.localeCompare(b.name);
     });
+
+    // TEMPORARY DEBUG — Map -> Array result.
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'normalizeDependencies return (Map -> Array)',
+        collectionName: 'normalizedDependencies',
+        collection: result,
+        method: 'normalizeDependencies',
+        caller:
+            'generateDeploymentPackage / composeMetadataWithRequiredDependencies'
+    });
+
+    return result;
 }
 
 function shouldAutoIncludeDependency(dependency) {
@@ -200,6 +243,19 @@ function dependencyToMetadataItem(dependency) {
         item.apiVersion = String(apiVersion);
     }
 
+    // TEMPORARY DEBUG — conversion into package metadata shape.
+    sessionPricePackageDebug.logSessionPriceInserted({
+        method: 'dependencyToMetadataItem',
+        caller: 'composeMetadataWithRequiredDependencies',
+        collectionReceiving: 'metadataItem (return)',
+        collectionSource: 'autoIncludeDependencies',
+        metadataObject: {
+            type: dependency.type,
+            name: dependency.name,
+            ...item
+        }
+    });
+
     return item;
 }
 
@@ -234,6 +290,15 @@ function composeMetadataWithRequiredDependencies(
             return a.name.localeCompare(b.name);
         });
 
+    // TEMPORARY DEBUG — after filter(shouldAutoIncludeDependency).
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'composeMetadata autoIncludeDependencies after filter',
+        collectionName: 'autoIncludeDependencies',
+        collection: autoIncludeDependencies,
+        method: 'composeMetadataWithRequiredDependencies',
+        caller: 'generateDeploymentPackage'
+    });
+
     for (const dependency of autoIncludeDependencies) {
         const metadataItem = dependencyToMetadataItem(dependency);
         const key = getMetadataUniquenessKey(metadataItem);
@@ -242,9 +307,30 @@ function composeMetadataWithRequiredDependencies(
             continue;
         }
 
+        // TEMPORARY DEBUG — push into composed package metadata.
+        sessionPricePackageDebug.logSessionPriceInserted({
+            method: 'composeMetadataWithRequiredDependencies',
+            caller: 'generateDeploymentPackage',
+            collectionReceiving: 'composed',
+            collectionSource: 'autoIncludeDependencies',
+            metadataObject: {
+                type: metadataItem.metadataType,
+                name: metadataItem.metadataName,
+                ...metadataItem
+            }
+        });
+
         metadataMap.set(key, metadataItem);
         composed.push(metadataItem);
     }
+
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'composeMetadataWithRequiredDependencies return',
+        collectionName: 'composed metadata',
+        collection: composed,
+        method: 'composeMetadataWithRequiredDependencies',
+        caller: 'generateDeploymentPackage'
+    });
 
     return composed;
 }
@@ -300,6 +386,25 @@ function generateDeploymentPackage(deploymentPackage) {
         };
     }
 
+    // TEMPORARY DEBUG — package assembly input.
+    sessionPricePackageDebug.logFoundBeforePackageBuild({
+        collectionName: 'deploymentPackage.requiredDependencies',
+        method: 'generateDeploymentPackage',
+        collection: deploymentPackage.requiredDependencies
+    });
+    sessionPricePackageDebug.logFoundBeforePackageBuild({
+        collectionName: 'deploymentPackage.selectedMetadata',
+        method: 'generateDeploymentPackage',
+        collection: deploymentPackage.selectedMetadata
+    });
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'generateDeploymentPackage INPUT requiredDependencies',
+        collectionName: 'deploymentPackage.requiredDependencies',
+        collection: deploymentPackage.requiredDependencies,
+        method: 'generateDeploymentPackage',
+        caller: 'deploymentValidation.validateDeployment'
+    });
+
     const metadata = composeMetadataWithRequiredDependencies(
         deploymentPackage.selectedMetadata,
         deploymentPackage.requiredDependencies
@@ -311,12 +416,29 @@ function generateDeploymentPackage(deploymentPackage) {
         deploymentPackage.selectedTestClasses
     );
 
-    return {
+    const result = {
         metadata,
         dependencies,
         testClasses,
         summary: buildSummary(metadata, dependencies, testClasses)
     };
+
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'generateDeploymentPackage OUTPUT metadata',
+        collectionName: 'result.metadata',
+        collection: result.metadata,
+        method: 'generateDeploymentPackage',
+        caller: 'deploymentValidation.validateDeployment'
+    });
+    sessionPricePackageDebug.logPackageStage({
+        stageName: 'generateDeploymentPackage OUTPUT dependencies',
+        collectionName: 'result.dependencies',
+        collection: result.dependencies,
+        method: 'generateDeploymentPackage',
+        caller: 'deploymentValidation.validateDeployment'
+    });
+
+    return result;
 }
 
 module.exports = {
