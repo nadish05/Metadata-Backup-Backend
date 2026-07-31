@@ -1,8 +1,11 @@
 /**
- * Deployment Readiness Analysis (Phase 10.9).
+ * Deployment Readiness Analysis (Phase 10.9 / 10.10).
  *
  * Static, report-only pre-deploy risk analysis.
  * Does NOT modify packages, block deployment, or query the destination org.
+ *
+ * Phase 10.10 — Roll-Up Summary semantic child-object validation
+ * (report-only; never changes canDeploy / package / execution).
  */
 
 const {
@@ -106,47 +109,252 @@ function extractCustomObjectTokens(text) {
     return uniqueStrings(String(text).match(/\b[A-Za-z][\w]*__c\b/g) || []);
 }
 
+function isRollUpSummaryFieldXml(fieldXml) {
+    const fieldType = String(extractXmlTagValue(fieldXml, 'type') || '').toLowerCase();
+
+    if (fieldType === 'summary') {
+        return true;
+    }
+
+    // Semantic markers — treat as Roll-Up even if <type> is missing/odd.
+    return Boolean(
+        extractXmlTagValue(fieldXml, 'summaryForeignKey') ||
+            extractXmlTagValue(fieldXml, 'summarizedObject') ||
+            extractXmlTagValue(fieldXml, 'summaryOperation')
+    );
+}
+
 /**
- * Roll-Up Summary → required parent/related CustomObjects from summaryForeignKey.
+ * Extract Roll-Up Summary semantic attributes and resolve required child object.
+ *
+ * Child object resolution order:
+ * 1. <summarizedObject>
+ * 2. object token from <summaryForeignKey> (child.lookupField)
+ * 3. object token from <summarizedField>
+ */
+function extractRollUpSummarySemantics(fieldXml, parentObject) {
+    const summarizedObject = extractXmlTagValue(fieldXml, 'summarizedObject');
+    const summaryForeignKey = extractXmlTagValue(fieldXml, 'summaryForeignKey');
+    const relationshipName = extractXmlTagValue(fieldXml, 'relationshipName');
+    const summaryOperation = extractXmlTagValue(fieldXml, 'summaryOperation');
+    const summarizedField = extractXmlTagValue(fieldXml, 'summarizedField');
+
+    let requiredChildObject = summarizedObject || null;
+
+    if (!requiredChildObject && summaryForeignKey) {
+        const tokens = extractCustomObjectTokens(summaryForeignKey);
+        requiredChildObject =
+            tokens.find((token) => token !== parentObject) || tokens[0] || null;
+    }
+
+    if (!requiredChildObject && summarizedField) {
+        const tokens = extractCustomObjectTokens(summarizedField);
+        requiredChildObject =
+            tokens.find((token) => token !== parentObject) || tokens[0] || null;
+    }
+
+    return {
+        summarizedObject,
+        summaryForeignKey,
+        relationshipName,
+        summaryOperation,
+        summarizedField,
+        requiredChildObject
+    };
+}
+
+function isRollUpSummaryFinding(finding) {
+    return (
+        finding?.rule === 'ROLLUP_SUMMARY_CHILD' ||
+        finding?.rule === 'ROLLUP_SUMMARY_PARENT'
+    );
+}
+
+/**
+ * Roll-Up Summary → required child CustomObject must be in the package.
  */
 function analyzeRollUpSummaryField(fieldItem, fieldXml, membership) {
     const findings = [];
-    const fieldType = extractXmlTagValue(fieldXml, 'type');
 
-    if (String(fieldType || '').toLowerCase() !== 'summary') {
+    if (!isRollUpSummaryFieldXml(fieldXml)) {
         return findings;
     }
 
     const fieldName = getItemName(fieldItem);
-    const summaryForeignKey = extractXmlTagValue(fieldXml, 'summaryForeignKey');
     const parentObject = parseObjectFromCustomFieldName(fieldName);
-    const referencedObjects = extractCustomObjectTokens(summaryForeignKey).filter(
-        (objectApiName) => objectApiName !== parentObject
-    );
+    const semantics = extractRollUpSummarySemantics(fieldXml, parentObject);
+    const requiredChildObject = semantics.requiredChildObject;
 
-    for (const objectApiName of referencedObjects) {
-        if (hasPackageMember(membership, 'CustomObject', objectApiName)) {
+    if (!requiredChildObject) {
+        return findings;
+    }
+
+    if (hasPackageMember(membership, 'CustomObject', requiredChildObject)) {
+        findings.push({
+            rule: 'ROLLUP_SUMMARY_CHILD',
+            severity: 'PASS',
+            category: 'rollupSummaryValidation',
+            code: 'Roll-Up Dependency Present',
+            type: 'Roll-Up Dependency Present',
+            component: fieldName,
+            requiredObject: requiredChildObject,
+            relationship:
+                semantics.relationshipName || semantics.summaryForeignKey || null,
+            status: 'PASS',
+            reason: `Roll-Up Summary child object ${requiredChildObject} is present in the deployment package.`,
+            metadataType: 'CustomField',
+            metadataName: fieldName,
+            missingType: null,
+            missingName: null,
+            message: `Roll-Up Summary field ${fieldName} child object ${requiredChildObject} is present.`,
+            evidence: {
+                ...semantics,
+                fieldType: 'Summary',
+                parentObject
+            }
+        });
+
+        return findings;
+    }
+
+    findings.push({
+        rule: 'ROLLUP_SUMMARY_CHILD',
+        severity: 'BLOCKING',
+        category: 'missingDependencies',
+        code: 'Missing Roll-Up Dependency',
+        type: 'Missing Roll-Up Dependency',
+        component: fieldName,
+        requiredObject: requiredChildObject,
+        relationship:
+            semantics.relationshipName || semantics.summaryForeignKey || null,
+        status: 'BLOCKING',
+        reason: `Roll-Up Summary requires child object ${requiredChildObject}.`,
+        metadataType: 'CustomField',
+        metadataName: fieldName,
+        missingType: 'CustomObject',
+        missingName: requiredChildObject,
+        message: `Roll-Up Summary field ${fieldName} requires child CustomObject ${requiredChildObject}, which is not in the deployment package.`,
+        evidence: {
+            ...semantics,
+            fieldType: 'Summary',
+            parentObject
+        }
+    });
+
+    return findings;
+}
+
+/**
+ * Annotate formula fields in the package that reference a blocking Roll-Up field.
+ * Does not rediscover graph dependencies — only readiness annotation.
+ */
+function annotateFormulaFieldsBlockedByRollup(
+    membership,
+    fieldXmlByName,
+    blockingRollupFieldNames
+) {
+    const findings = [];
+
+    if (!blockingRollupFieldNames.size) {
+        return findings;
+    }
+
+    const fields = membership.byType.get('CustomField') || [];
+
+    for (const fieldItem of fields) {
+        const fieldName = getItemName(fieldItem);
+        const fieldXml = fieldXmlByName.get(fieldName);
+
+        if (!fieldName || !fieldXml || isRollUpSummaryFieldXml(fieldXml)) {
+            continue;
+        }
+
+        const formula = extractXmlTagValue(fieldXml, 'formula');
+
+        if (!formula) {
+            continue;
+        }
+
+        const parentObject = parseObjectFromCustomFieldName(fieldName);
+        const referenced = new Set();
+
+        for (const match of String(formula).matchAll(
+            /\b([A-Za-z][\w]*__c)\.([A-Za-z][\w]*__c)\b/g
+        )) {
+            referenced.add(`${match[1]}.${match[2]}`);
+        }
+
+        const formulaWithoutQualified = String(formula).replace(
+            /\b[A-Za-z][\w]*__c\.[A-Za-z][\w]*__c\b/g,
+            ' '
+        );
+
+        for (const match of formulaWithoutQualified.matchAll(
+            /\b([A-Za-z][\w]*__c)\b/g
+        )) {
+            const token = match[1];
+
+            if (!parentObject || token === parentObject) {
+                continue;
+            }
+
+            referenced.add(`${parentObject}.${token}`);
+        }
+
+        const blockedBy = [...referenced].filter((ref) =>
+            blockingRollupFieldNames.has(ref)
+        );
+
+        if (!blockedBy.length) {
             continue;
         }
 
         findings.push({
-            rule: 'ROLLUP_SUMMARY_PARENT',
-            severity: 'FAIL',
-            category: 'missingDependencies',
-            code: 'Missing Parent Object',
+            rule: 'FORMULA_BLOCKED_BY_ROLLUP',
+            severity: 'BLOCKING',
+            category: 'blockingComponents',
+            code: 'Blocked Formula Field',
             metadataType: 'CustomField',
             metadataName: fieldName,
-            missingType: 'CustomObject',
-            missingName: objectApiName,
-            message: `Roll-Up Summary field ${fieldName} requires CustomObject ${objectApiName} (summaryForeignKey), which is not in the deployment package.`,
+            blockedBy,
+            message: `Formula field ${fieldName} depends on blocking Roll-Up field(s): ${blockedBy.join(
+                ', '
+            )}.`,
             evidence: {
-                summaryForeignKey,
-                fieldType: 'Summary'
+                referencedFields: [...referenced]
             }
         });
     }
 
     return findings;
+}
+
+function buildRollupSummaryValidation(findings) {
+    const rollupFindings = (findings || []).filter(isRollUpSummaryFinding);
+    const issues = rollupFindings
+        .filter((finding) => finding.status === 'BLOCKING')
+        .map((finding) => ({
+            component: finding.component || finding.metadataName,
+            requiredObject: finding.requiredObject || finding.missingName,
+            relationship: finding.relationship || null,
+            status: finding.status || 'BLOCKING',
+            severity: finding.severity || 'BLOCKING',
+            reason:
+                finding.reason ||
+                finding.message ||
+                'Roll-Up Summary child object is missing from the deployment package.',
+            type: finding.type || finding.code || 'Missing Roll-Up Dependency'
+        }));
+
+    const validatedCount = rollupFindings.length;
+    const blockingCount = issues.length;
+
+    return {
+        overallStatus: blockingCount > 0 ? 'BLOCKING' : 'PASS',
+        validatedCount,
+        blockingCount,
+        issues
+    };
 }
 
 /**
@@ -239,9 +447,15 @@ function collectPredictedFailingFields(findings) {
             finding.metadataType === 'CustomField' &&
             finding.metadataName &&
             (finding.severity === 'FAIL' ||
-                finding.rule === 'ROLLUP_SUMMARY_PARENT' ||
-                finding.rule === 'FORMULA_FIELD_DEPENDENCY')
+                finding.severity === 'BLOCKING' ||
+                isRollUpSummaryFinding(finding) ||
+                finding.rule === 'FORMULA_FIELD_DEPENDENCY' ||
+                finding.rule === 'FORMULA_BLOCKED_BY_ROLLUP')
         ) {
+            if (finding.status === 'PASS' || finding.severity === 'PASS') {
+                continue;
+            }
+
             failing.add(finding.metadataName);
         }
 
@@ -250,7 +464,6 @@ function collectPredictedFailingFields(findings) {
             finding.missingName &&
             finding.rule === 'FORMULA_FIELD_DEPENDENCY'
         ) {
-            // Dependent formula may still deploy, but referenced missing field is a risk.
             failing.add(finding.metadataName);
         }
     }
@@ -280,19 +493,70 @@ async function readItemContent(item, readFile) {
 
 async function analyzeCustomFieldRules(membership, readFile) {
     const findings = [];
+    const fieldXmlByName = new Map();
     const fields = membership.byType.get('CustomField') || [];
 
     for (const fieldItem of fields) {
         const xml = await readItemContent(fieldItem, readFile);
+        const fieldName = getItemName(fieldItem);
 
         if (!xml) {
             continue;
+        }
+
+        if (fieldName) {
+            fieldXmlByName.set(fieldName, xml);
         }
 
         findings.push(
             ...analyzeRollUpSummaryField(fieldItem, xml, membership),
             ...analyzeFormulaField(fieldItem, xml, membership)
         );
+    }
+
+    const blockingRollupFieldNames = new Set(
+        findings
+            .filter(
+                (finding) =>
+                    isRollUpSummaryFinding(finding) &&
+                    finding.status === 'BLOCKING'
+            )
+            .map((finding) => finding.metadataName)
+            .filter(Boolean)
+    );
+
+    // Annotate formulas that reference blocking roll-ups, then cascade to
+    // formulas that reference those blocked formulas (readiness-only).
+    let blockingFieldNames = new Set(blockingRollupFieldNames);
+    let safety = 0;
+
+    while (safety < 5) {
+        safety += 1;
+        const annotated = annotateFormulaFieldsBlockedByRollup(
+            membership,
+            fieldXmlByName,
+            blockingFieldNames
+        );
+        const novel = annotated.filter(
+            (finding) =>
+                !findings.some(
+                    (existing) =>
+                        existing.rule === 'FORMULA_BLOCKED_BY_ROLLUP' &&
+                        existing.metadataName === finding.metadataName
+                )
+        );
+
+        if (!novel.length) {
+            break;
+        }
+
+        findings.push(...novel);
+
+        for (const finding of novel) {
+            if (finding.metadataName) {
+                blockingFieldNames.add(finding.metadataName);
+            }
+        }
     }
 
     return findings;
@@ -594,35 +858,65 @@ function buildSchemaConflictPlaceholders(options = {}) {
 
 function buildDependencyChains(findings) {
     const chains = [];
-    const byName = new Map();
 
     for (const finding of findings) {
-        if (finding.metadataName) {
-            byName.set(`${finding.metadataType}:${finding.metadataName}`, finding);
-        }
-    }
-
-    for (const finding of findings) {
-        if (finding.rule !== 'ROLLUP_SUMMARY_PARENT') {
+        if (!isRollUpSummaryFinding(finding) || finding.status !== 'BLOCKING') {
             continue;
         }
 
         const chain = [
             {
                 step: finding.metadataName,
-                detail: finding.code
-            },
-            {
-                step: finding.missingName,
-                detail: 'Missing from package'
+                detail: finding.code || 'Missing Roll-Up Dependency'
             }
         ];
+
+        // Downstream formula fields that reference this blocking roll-up.
+        for (const formula of findings) {
+            if (
+                formula.rule === 'FORMULA_BLOCKED_BY_ROLLUP' &&
+                Array.isArray(formula.blockedBy) &&
+                formula.blockedBy.includes(finding.metadataName)
+            ) {
+                chain.push({
+                    step: formula.metadataName,
+                    detail: formula.code
+                });
+            }
+        }
+
+        // Cascading formulas blocked by earlier formula fields in the chain.
+        const formulaNamesInChain = new Set(
+            chain
+                .filter((entry) => entry.detail === 'Blocked Formula Field')
+                .map((entry) => entry.step)
+        );
+
+        for (const formula of findings) {
+            if (
+                formula.rule === 'FORMULA_BLOCKED_BY_ROLLUP' &&
+                Array.isArray(formula.blockedBy) &&
+                formula.blockedBy.some((ref) => formulaNamesInChain.has(ref)) &&
+                !formulaNamesInChain.has(formula.metadataName)
+            ) {
+                chain.push({
+                    step: formula.metadataName,
+                    detail: formula.code
+                });
+                formulaNamesInChain.add(formula.metadataName);
+            }
+        }
+
+        const rollupAndFormulaNames = new Set([
+            finding.metadataName,
+            ...[...formulaNamesInChain]
+        ]);
 
         for (const blocked of findings) {
             if (
                 blocked.rule === 'APEX_BLOCKED_BY_FIELD' &&
                 Array.isArray(blocked.blockedBy) &&
-                blocked.blockedBy.includes(finding.metadataName)
+                blocked.blockedBy.some((ref) => rollupAndFormulaNames.has(ref))
             ) {
                 chain.push({
                     step: blocked.metadataName,
@@ -671,15 +965,21 @@ function buildRecommendations(findings) {
     const recommendations = [];
 
     for (const finding of findings) {
-        if (finding.rule === 'ROLLUP_SUMMARY_PARENT') {
+        if (isRollUpSummaryFinding(finding) && finding.status === 'BLOCKING') {
             recommendations.push(
-                `Add CustomObject ${finding.missingName} to the deployment package before deploying ${finding.metadataName}.`
+                `Add CustomObject ${finding.requiredObject || finding.missingName} to the deployment package before deploying ${finding.metadataName}.`
             );
         }
 
         if (finding.rule === 'FORMULA_FIELD_DEPENDENCY') {
             recommendations.push(
                 `Include CustomField ${finding.missingName} required by formula ${finding.metadataName}.`
+            );
+        }
+
+        if (finding.rule === 'FORMULA_BLOCKED_BY_ROLLUP') {
+            recommendations.push(
+                `Resolve Roll-Up Summary dependencies before deploying formula field ${finding.metadataName}.`
             );
         }
 
@@ -712,11 +1012,20 @@ function buildRecommendations(findings) {
 }
 
 function resolveOverallStatus(findings) {
-    if (!findings.length) {
+    const actionable = (findings || []).filter(
+        (finding) => finding.severity !== 'PASS' && finding.status !== 'PASS'
+    );
+
+    if (!actionable.length) {
         return 'PASS';
     }
 
-    if (findings.some((finding) => finding.severity === 'FAIL')) {
+    if (
+        actionable.some(
+            (finding) =>
+                finding.severity === 'FAIL' || finding.severity === 'BLOCKING'
+        )
+    ) {
         return 'FAIL';
     }
 
@@ -739,6 +1048,12 @@ function buildEmptyAnalysis(reason = 'No package members to analyze.') {
         dependencyChains: [],
         apiCompatibilityWarnings: [],
         blockingComponents: [],
+        rollupSummaryValidation: {
+            overallStatus: 'PASS',
+            validatedCount: 0,
+            blockingCount: 0,
+            issues: []
+        },
         recommendations: [],
         findings: []
     };
@@ -815,7 +1130,10 @@ async function analyzeDeploymentReadiness(options = {}) {
     ];
 
     const missingDependencies = findings.filter(
-        (finding) => finding.category === 'missingDependencies'
+        (finding) =>
+            finding.category === 'missingDependencies' &&
+            finding.severity !== 'PASS' &&
+            finding.status !== 'PASS'
     );
     const blockingComponents = findings.filter(
         (finding) => finding.category === 'blockingComponents'
@@ -823,6 +1141,7 @@ async function analyzeDeploymentReadiness(options = {}) {
     const apiCompatibilityWarnings = findings.filter(
         (finding) => finding.category === 'apiCompatibilityWarnings'
     );
+    const rollupSummaryValidation = buildRollupSummaryValidation(findings);
 
     const overallStatus = resolveOverallStatus(findings);
 
@@ -834,13 +1153,15 @@ async function analyzeDeploymentReadiness(options = {}) {
             blockingComponentCount: blockingComponents.length,
             apiWarningCount: apiCompatibilityWarnings.length,
             schemaConflictCount: schemaConflicts.length,
-            predictedFailingFieldCount: predictedFailingFields.size
+            predictedFailingFieldCount: predictedFailingFields.size,
+            rollupBlockingCount: rollupSummaryValidation.blockingCount
         },
         schemaConflicts,
         missingDependencies,
         dependencyChains: buildDependencyChains(findings),
         apiCompatibilityWarnings,
         blockingComponents,
+        rollupSummaryValidation,
         recommendations: buildRecommendations(findings),
         findings
     };
@@ -852,6 +1173,9 @@ module.exports = {
     analyzeRollUpSummaryField,
     analyzeFormulaField,
     analyzeFlexiPageBlockedByComponents,
+    extractRollUpSummarySemantics,
+    isRollUpSummaryFieldXml,
+    buildRollupSummaryValidation,
     buildSchemaConflictPlaceholders,
     buildDependencyChains,
     buildEmptyAnalysis,

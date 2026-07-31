@@ -1350,6 +1350,13 @@ async function validateDeployment({
 
     // Additive nest only — gate fields (overallStatus/canDeploy) unchanged.
     deploymentReadiness.staticAnalysis = deploymentReadinessAnalysis;
+    deploymentReadiness.rollupSummaryValidation =
+        deploymentReadinessAnalysis.rollupSummaryValidation || {
+            overallStatus: 'PASS',
+            validatedCount: 0,
+            blockingCount: 0,
+            issues: []
+        };
 
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({

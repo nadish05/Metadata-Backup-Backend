@@ -88,9 +88,10 @@ async function main() {
         );
 
         assert.strictEqual(findings.length, 1);
-        assert.strictEqual(findings[0].code, 'Missing Parent Object');
-        assert.strictEqual(findings[0].missingName, 'Booking__c');
-        assert.strictEqual(findings[0].severity, 'FAIL');
+        assert.strictEqual(findings[0].code, 'Missing Roll-Up Dependency');
+        assert.strictEqual(findings[0].requiredObject, 'Booking__c');
+        assert.strictEqual(findings[0].severity, 'BLOCKING');
+        assert.strictEqual(findings[0].status, 'BLOCKING');
     });
 
     await runTest('Formula dependency detection', async () => {
@@ -184,9 +185,13 @@ export default class ExperienceSchedule {}
             assert.ok(
                 report.missingDependencies.some(
                     (item) =>
-                        item.code === 'Missing Parent Object' &&
-                        item.missingName === 'Booking__c'
+                        item.code === 'Missing Roll-Up Dependency' &&
+                        item.requiredObject === 'Booking__c'
                 )
+            );
+            assert.strictEqual(
+                report.rollupSummaryValidation.overallStatus,
+                'BLOCKING'
             );
             assert.ok(
                 report.blockingComponents.some(
