@@ -41,7 +41,10 @@ const SYSTEM_CLASSES = new Set([
     'ApexPages',
     'PageReference',
     'SelectOption',
-    'URL'
+    'URL',
+    // Salesforce Sites platform Apex (Site.getBaseUrl(), Site.Id, …).
+    // Not customer-deployable metadata — classified as PLATFORM_REFERENCE.
+    'Site'
 ]);
 
 function stripLiteralsAndComments(content) {

@@ -99,6 +99,40 @@ async function main() {
         }
     );
 
+    await runTest(
+        'Site platform Apex classifies as PLATFORM_REFERENCE (not deployable)',
+        () => {
+            const result = classifyDependency({
+                type: 'ApexClass',
+                name: 'Site'
+            });
+
+            assert.strictEqual(
+                result.classification,
+                CLASSIFICATIONS.PLATFORM_REFERENCE
+            );
+            assert.strictEqual(result.artifactRequired, false);
+            assert.strictEqual(result.packageable, false);
+            assert.strictEqual(result.defaultResolutionPolicy, ACTIONS.SKIP);
+        }
+    );
+
+    await runTest(
+        'AuraHandledException remains PLATFORM_REFERENCE',
+        () => {
+            const result = classifyDependency({
+                type: 'ApexClass',
+                name: 'AuraHandledException'
+            });
+
+            assert.strictEqual(
+                result.classification,
+                CLASSIFICATIONS.PLATFORM_REFERENCE
+            );
+            assert.strictEqual(result.artifactRequired, false);
+        }
+    );
+
     await runTest('User ApexClass remains DEPLOYABLE', () => {
         const result = classifyDependency({
             type: 'ApexClass',
@@ -112,6 +146,47 @@ async function main() {
         assert.strictEqual(result.artifactRequired, true);
     });
 
+    await runTest(
+        'HelperService and ExperienceController remain deployable ApexClass',
+        () => {
+            for (const name of ['HelperService', 'ExperienceController']) {
+                const result = classifyDependency({
+                    type: 'ApexClass',
+                    name
+                });
+
+                assert.strictEqual(
+                    result.classification,
+                    CLASSIFICATIONS.DEPLOYABLE_METADATA,
+                    name
+                );
+                assert.strictEqual(result.artifactRequired, true, name);
+            }
+        }
+    );
+
+    await runTest(
+        'artifact.exists ignores Site platform Apex (no FAIL)',
+        () => {
+            const findings = artifactExistsRule.analyze({
+                selectedMetadata: [],
+                resolvedDependencies: [
+                    {
+                        type: 'ApexClass',
+                        metadataType: 'ApexClass',
+                        name: 'Site',
+                        action: ACTIONS.DEPLOY,
+                        selected: true,
+                        artifactResolved: false,
+                        sourceExists: false
+                    }
+                ],
+                discoveredReferences: []
+            });
+
+            assert.strictEqual(findings.length, 0);
+        }
+    );
     await runTest('Unknown metadata type does not auto-DEPLOY', () => {
         const decision = createDefaultDecision({
             type: 'SomeFutureType',

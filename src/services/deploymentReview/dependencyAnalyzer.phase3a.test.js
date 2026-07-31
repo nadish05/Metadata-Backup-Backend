@@ -45,6 +45,24 @@ runTest('URL platform type is not emitted as ApexClass dependency', () => {
     assert.ok(!result.apexClasses.includes('URL'));
 });
 
+runTest('Site platform type is not emitted as ApexClass dependency', () => {
+    const result = analyzeApexContent(
+        `
+        public class ExperienceController {
+            public String base() {
+                return Site.getBaseUrl();
+            }
+        }
+        `,
+        'ExperienceController'
+    );
+
+    assert.ok(
+        !result.apexClasses.includes('Site'),
+        'Site must not be emitted as deployable ApexClass'
+    );
+});
+
 runTest('User Apex classes are still discovered', () => {
     const result = analyzeApexContent(
         `

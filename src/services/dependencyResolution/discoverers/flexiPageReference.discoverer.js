@@ -14,6 +14,8 @@ const STANDARD_COMPONENT_PREFIXES = [
     'force:',
     'forceCommunity:',
     'lightning:',
+    // Managed related-list / list-view surface (e.g. lst:dynamicRelatedList).
+    'lst:',
     'runtime_sales_',
     'runtime_service_',
     'runtime_appointmentbooking_',
