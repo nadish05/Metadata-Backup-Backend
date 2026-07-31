@@ -100,6 +100,122 @@ function uniqueSorted(values) {
     return [...new Set(values)].sort();
 }
 
+// --- TEMPORARY DEBUG: Apex CustomField discovery (remove after Phase 10.4) ---
+
+function getTopStackFrames(frameCount = 6) {
+    const stack = new Error().stack || '';
+
+    return (
+        stack
+            .split('\n')
+            .slice(2, 2 + frameCount)
+            .map((line) => line.trim())
+            .join('\n') || 'n/a'
+    );
+}
+
+function extractSnippetAround(content, index, radius = 100) {
+    if (typeof index !== 'number' || index < 0 || !content) {
+        return 'n/a';
+    }
+
+    const start = Math.max(0, index - radius);
+    const end = Math.min(content.length, index + radius);
+
+    return content
+        .slice(start, end)
+        .replace(/\r\n/g, '\n')
+        .trim();
+}
+
+function extractExactSourceLine(content, index) {
+    if (typeof index !== 'number' || index < 0 || !content) {
+        return 'n/a';
+    }
+
+    const lineStart = content.lastIndexOf('\n', index - 1) + 1;
+    let lineEnd = content.indexOf('\n', index);
+
+    if (lineEnd === -1) {
+        lineEnd = content.length;
+    }
+
+    return content.slice(lineStart, lineEnd).trim();
+}
+
+function logApexFieldDiscovered({
+    apexClass,
+    fieldQualifiedName,
+    objectApiName,
+    fieldApiName,
+    parser,
+    method,
+    reason,
+    sourceSnippet,
+    matchIndex = null,
+    cleanedContent = null,
+    dependencyObject = null
+}) {
+    console.log('==========================================================');
+    console.log('APEX FIELD DISCOVERED');
+    console.log('==========================================================');
+    console.log('Apex Class:');
+    console.log(apexClass || 'n/a');
+    console.log('Field:');
+    console.log(fieldQualifiedName || `${objectApiName}.${fieldApiName}`);
+    console.log('Object:');
+    console.log(objectApiName || 'n/a');
+    console.log('Parser:');
+    console.log(parser || 'n/a');
+    console.log('Method:');
+    console.log(method || 'n/a');
+    console.log('Reason:');
+    console.log(reason || 'n/a');
+    console.log('Source code snippet (around the matched line)');
+    console.log(sourceSnippet || 'n/a');
+    console.log('==========================================================');
+
+    const isSessionPrice =
+        fieldQualifiedName === 'Session__c.Price__c' ||
+        (objectApiName === 'Session__c' && fieldApiName === 'Price__c');
+
+    if (isSessionPrice) {
+        console.log('==========================================================');
+        console.log('SESSION PRICE DISCOVERED');
+        console.log('==========================================================');
+        console.log('Full dependency object');
+        console.log(
+            JSON.stringify(
+                dependencyObject || {
+                    name: 'Session__c.Price__c',
+                    type: 'CustomField',
+                    required: true,
+                    selected: true,
+                    editable: false,
+                    discoveredBy: 'ApexDependencyAnalyzer',
+                    discoveryMethod: method,
+                    parser,
+                    reason,
+                    apexClass
+                },
+                null,
+                2
+            )
+        );
+        console.log('Exact source line');
+        console.log(
+            extractExactSourceLine(cleanedContent, matchIndex)
+        );
+        console.log('Exact parser method');
+        console.log(method || 'n/a');
+        console.log('Call stack (top few frames)');
+        console.log(getTopStackFrames());
+        console.log('==========================================================');
+    }
+}
+
+// --- end TEMPORARY DEBUG helpers ---
+
 function isSalesforceMetadataToken(name) {
     return name.endsWith('__c') || name.endsWith('__mdt');
 }
@@ -183,12 +299,16 @@ function extractVariableObjectTypes(cleanedContent) {
  * Example: [SELECT Metadata_Comparison__c FROM Comparison_Result__c]
  *       → Comparison_Result__c.Metadata_Comparison__c
  */
-function extractSoqlQualifiedFields(cleanedContent) {
+function extractSoqlQualifiedFields(cleanedContent, debugContext = null) {
     const qualifiedFields = new Set();
     const soqlBlocks = cleanedContent.matchAll(/\[([\s\S]*?)\]/g);
 
     for (const block of soqlBlocks) {
         const query = block[1];
+        const blockIndex =
+            typeof block.index === 'number'
+                ? block.index
+                : cleanedContent.indexOf(block[0]);
 
         if (!/\bSELECT\b/i.test(query) || !/\bFROM\b/i.test(query)) {
             continue;
@@ -211,7 +331,32 @@ function extractSoqlQualifiedFields(cleanedContent) {
 
         for (const fieldName of fieldTokens) {
             if (fieldName !== objectName) {
-                qualifiedFields.add(`${objectName}.${fieldName}`);
+                const qualified = `${objectName}.${fieldName}`;
+                qualifiedFields.add(qualified);
+
+                // TEMPORARY DEBUG — SOQL-qualified CustomField.
+                const fieldOffsetInQuery = query.indexOf(fieldName);
+                const matchIndex =
+                    typeof blockIndex === 'number' && fieldOffsetInQuery >= 0
+                        ? blockIndex + 1 + fieldOffsetInQuery
+                        : blockIndex;
+
+                logApexFieldDiscovered({
+                    apexClass: debugContext?.apexClass,
+                    fieldQualifiedName: qualified,
+                    objectApiName: objectName,
+                    fieldApiName: fieldName,
+                    parser: 'regex-SOQL',
+                    method: 'extractSoqlQualifiedFields',
+                    reason:
+                        'SOQL SELECT field qualified with FROM CustomObject',
+                    sourceSnippet: extractSnippetAround(
+                        cleanedContent,
+                        matchIndex
+                    ),
+                    matchIndex,
+                    cleanedContent
+                });
             }
         }
     }
@@ -219,18 +364,36 @@ function extractSoqlQualifiedFields(cleanedContent) {
     return qualifiedFields;
 }
 
-function classifyCustomObjectsAndFields(cleanedContent) {
+function classifyCustomObjectsAndFields(cleanedContent, debugContext = null) {
     const objectNames = extractObjectContextNames(cleanedContent);
     const customObjects = [];
     // Salesforce CustomField identity is always ObjectApiName.FieldApiName.
     // Never emit bare __c field tokens — that loses parent context.
     const customFields = new Set();
+    const apexClass = debugContext?.apexClass || 'n/a';
 
     // 1) Preserve Object__c.Field__c references as fully qualified identities.
     for (const match of cleanedContent.matchAll(
         /\b([A-Za-z0-9_]+__c)\.([A-Za-z0-9_]+__c)\b/g
     )) {
-        customFields.add(`${match[1]}.${match[2]}`);
+        const objectApiName = match[1];
+        const fieldApiName = match[2];
+        const qualified = `${objectApiName}.${fieldApiName}`;
+        customFields.add(qualified);
+
+        // TEMPORARY DEBUG — dotted Object__c.Field__c reference.
+        logApexFieldDiscovered({
+            apexClass,
+            fieldQualifiedName: qualified,
+            objectApiName,
+            fieldApiName,
+            parser: 'regex-Object.Field',
+            method: 'classifyCustomObjectsAndFields (path 1)',
+            reason: 'Direct ObjectApiName.FieldApiName token in Apex source',
+            sourceSnippet: extractSnippetAround(cleanedContent, match.index),
+            matchIndex: match.index,
+            cleanedContent
+        });
     }
 
     // 2) Qualify variable.Field__c using declared variable object types.
@@ -250,12 +413,34 @@ function classifyCustomObjectsAndFields(cleanedContent) {
         const objectType = variableTypes.get(receiver);
 
         if (objectType) {
-            customFields.add(`${objectType}.${fieldName}`);
+            const qualified = `${objectType}.${fieldName}`;
+            customFields.add(qualified);
+
+            // TEMPORARY DEBUG — variable.Field__c qualified via type map.
+            logApexFieldDiscovered({
+                apexClass,
+                fieldQualifiedName: qualified,
+                objectApiName: objectType,
+                fieldApiName: fieldName,
+                parser: 'regex-variable.Field + variableTypes map',
+                method: 'classifyCustomObjectsAndFields (path 2)',
+                reason: `Variable "${receiver}" typed as ${objectType}; field access qualified`,
+                sourceSnippet: extractSnippetAround(
+                    cleanedContent,
+                    match.index
+                ),
+                matchIndex: match.index,
+                cleanedContent
+            });
         }
     }
 
     // 3) Qualify SOQL SELECT fields with the FROM object.
-    for (const qualifiedField of extractSoqlQualifiedFields(cleanedContent)) {
+    // Logging for each field occurs inside extractSoqlQualifiedFields.
+    for (const qualifiedField of extractSoqlQualifiedFields(
+        cleanedContent,
+        debugContext
+    )) {
         customFields.add(qualifiedField);
     }
 
@@ -334,7 +519,9 @@ function analyzeApexContent(content, currentClassName) {
     );
 
     const { customObjects: objectTokens, customFields } =
-        classifyCustomObjectsAndFields(cleanedContent);
+        classifyCustomObjectsAndFields(cleanedContent, {
+            apexClass: outerClassName || currentClassName || 'n/a'
+        });
 
     const relationshipReferences =
         classifyRelationshipReferences(cleanedContent);
