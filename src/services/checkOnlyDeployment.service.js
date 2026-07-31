@@ -276,12 +276,176 @@ function mapComponentFailure(failure) {
     };
 }
 
+/**
+ * Full Salesforce component-failure diagnostic (additive diagnostics layer).
+ * Preserves every useful Metadata API / CLI field without discarding unknowns.
+ */
+function mapComponentFailureDiagnostic(failure) {
+    if (!failure || typeof failure !== 'object') {
+        return {
+            metadataType: null,
+            metadataName: null,
+            fullName: null,
+            fileName: null,
+            problem: null,
+            problemType: null,
+            lineNumber: null,
+            columnNumber: null,
+            success: false,
+            changed: null,
+            created: null,
+            deleted: null,
+            warning: null,
+            errorStatus: null,
+            rawFailure: failure ?? null
+        };
+    }
+
+    const fullName =
+        failure.fullName ||
+        failure.componentName ||
+        failure.fileName ||
+        null;
+    const metadataType = failure.componentType || failure.type || null;
+    const fileName = failure.fileName || failure.filePath || null;
+
+    return {
+        metadataType,
+        metadataName: fullName,
+        fullName,
+        fileName,
+        problem:
+            failure.problem ||
+            failure.message ||
+            failure.problemType ||
+            null,
+        problemType: failure.problemType || null,
+        lineNumber: failure.lineNumber ?? failure.line ?? null,
+        columnNumber: failure.columnNumber ?? failure.column ?? null,
+        success: failure.success === true,
+        changed: failure.changed ?? null,
+        created: failure.created ?? null,
+        deleted: failure.deleted ?? null,
+        warning: failure.warning || null,
+        errorStatus:
+            failure.errorStatusCode ||
+            failure.errorStatus ||
+            failure.statusCode ||
+            null,
+        // Preserve original Salesforce/CLI payload for clients that need extra fields.
+        rawFailure: { ...failure }
+    };
+}
+
+function mapComponentSuccessDiagnostic(success) {
+    if (!success || typeof success !== 'object') {
+        return {
+            metadataType: null,
+            metadataName: null,
+            fullName: null,
+            fileName: null,
+            problem: null,
+            problemType: null,
+            lineNumber: null,
+            columnNumber: null,
+            success: true,
+            changed: null,
+            created: null,
+            deleted: null,
+            warning: null,
+            errorStatus: null,
+            rawSuccess: success ?? null
+        };
+    }
+
+    const fullName =
+        success.fullName ||
+        success.componentName ||
+        success.fileName ||
+        null;
+
+    return {
+        metadataType: success.componentType || success.type || null,
+        metadataName: fullName,
+        fullName,
+        fileName: success.fileName || success.filePath || null,
+        problem: success.problem || null,
+        problemType: success.problemType || null,
+        lineNumber: success.lineNumber ?? success.line ?? null,
+        columnNumber: success.columnNumber ?? success.column ?? null,
+        success: success.success !== false,
+        changed: success.changed ?? null,
+        created: success.created ?? null,
+        deleted: success.deleted ?? null,
+        warning: success.warning || null,
+        errorStatus: null,
+        rawSuccess: { ...success }
+    };
+}
+
 function mapFailureDetails(componentFailures) {
     if (!Array.isArray(componentFailures)) {
         return [];
     }
 
     return componentFailures.map(mapComponentFailure);
+}
+
+function buildDeploymentDiagnostics({
+    deployResult = null,
+    details = null,
+    status = null,
+    componentSuccessCount = 0,
+    componentFailureCount = 0,
+    warnings = []
+} = {}) {
+    const failureList = Array.isArray(details?.componentFailures)
+        ? details.componentFailures
+        : [];
+    const successList = Array.isArray(details?.componentSuccesses)
+        ? details.componentSuccesses
+        : [];
+
+    const componentFailures = failureList.map(mapComponentFailureDiagnostic);
+    const componentSuccesses = successList.map(mapComponentSuccessDiagnostic);
+
+    return {
+        deploymentId: deployResult?.id || null,
+        overallStatus:
+            status ||
+            deployResult?.status ||
+            (componentFailures.length ? 'FAILED' : 'Unknown'),
+        componentFailures,
+        componentSuccesses,
+        summary: {
+            totalSuccesses:
+                componentSuccesses.length || toNumber(componentSuccessCount),
+            totalFailures:
+                componentFailures.length || toNumber(componentFailureCount),
+            warningCount: Array.isArray(warnings) ? warnings.length : 0,
+            deploymentStatus: deployResult?.status || status || 'Unknown',
+            success: deployResult?.success === true
+        }
+    };
+}
+
+function buildEmptyDeploymentDiagnostics({
+    status = 'BLOCKED',
+    deploymentId = null
+} = {}) {
+    return {
+        deploymentId,
+        overallStatus: status,
+        componentFailures: [],
+        componentSuccesses: [],
+        summary: {
+            totalSuccesses: 0,
+            totalFailures: 0,
+            warningCount: 0,
+            deploymentStatus: status,
+            success: false
+        }
+    };
 }
 
 function mapFailingTests(failures) {
@@ -451,6 +615,14 @@ function mapDeployOutcome({
         codeCoverage,
         mode
     });
+    const deploymentDiagnostics = buildDeploymentDiagnostics({
+        deployResult,
+        details,
+        status,
+        componentSuccessCount: componentSuccesses,
+        componentFailureCount: componentFailures,
+        warnings
+    });
 
     let message = success
         ? successMessage ||
@@ -487,6 +659,7 @@ function mapDeployOutcome({
             componentSuccesses,
             componentFailures,
             failureDetails,
+            deploymentDiagnostics,
             testResults,
             codeCoverage,
             warnings,
@@ -541,6 +714,10 @@ function buildBlockedResult(
             componentSuccesses: 0,
             componentFailures: 0,
             failureDetails: [],
+            deploymentDiagnostics: buildEmptyDeploymentDiagnostics({
+                status: 'BLOCKED',
+                deploymentId: null
+            }),
             testResults: { ...EMPTY_TEST_RESULTS },
             codeCoverage: { ...EMPTY_CODE_COVERAGE },
             warnings: [],
@@ -595,6 +772,10 @@ function buildFailedResult(
             componentSuccesses: 0,
             componentFailures: 0,
             failureDetails: [],
+            deploymentDiagnostics: buildEmptyDeploymentDiagnostics({
+                status: 'FAILED',
+                deploymentId: null
+            }),
             testResults: { ...EMPTY_TEST_RESULTS },
             codeCoverage: { ...EMPTY_CODE_COVERAGE },
             warnings: [],
@@ -608,20 +789,49 @@ function buildFailedResult(
     );
 }
 
+function logComponentFailureTable(componentFailures) {
+    if (!Array.isArray(componentFailures) || !componentFailures.length) {
+        return;
+    }
+
+    console.log('Component Failure Details:');
+
+    for (const failure of componentFailures) {
+        const metadataType = failure.metadataType || 'Unknown';
+        const metadataName =
+            failure.metadataName || failure.fullName || failure.fileName || 'n/a';
+        const problem = failure.problem || 'Unknown problem';
+
+        console.log(metadataType);
+        console.log(metadataName);
+        console.log(problem);
+
+        if (isDebugEnabled() && failure.rawFailure) {
+            console.log(JSON.stringify(failure.rawFailure, null, 2));
+        }
+
+        console.log('------------------------------------');
+    }
+}
+
 function logDeploymentSummary(result) {
     logSection('Deployment Summary');
     console.log('Deployment ID:', result.deploymentId);
-    console.log('Status:', result.status);
+    console.log('Overall Status:', result.status);
     console.log('Success:', result.success);
     console.log('Duration:', result.duration);
-    console.log('Component Successes:', result.componentSuccesses);
-    console.log('Component Failures:', result.componentFailures);
+    console.log('Total Successes:', result.componentSuccesses);
+    console.log('Total Failures:', result.componentFailures);
     console.log('Tests Run:', result.testResults.testsRun);
     console.log('Tests Failed:', result.testResults.testsFailed);
     console.log('Overall Coverage:', result.codeCoverage.overallCoverage);
     console.log('Execution Mode:', result.executionMode);
     console.log('Warnings:', result.warnings);
     console.log('Message:', result.message);
+
+    logComponentFailureTable(
+        result.deploymentDiagnostics?.componentFailures || []
+    );
 }
 
 async function runCheckOnlyDeployment({
@@ -814,5 +1024,11 @@ module.exports = {
     validateWorkspace,
     mapDeployOutcome,
     buildBlockedResult,
-    buildFailedResult
+    buildFailedResult,
+    mapComponentFailure,
+    mapComponentFailureDiagnostic,
+    mapComponentSuccessDiagnostic,
+    buildDeploymentDiagnostics,
+    buildEmptyDeploymentDiagnostics,
+    mapFailureDetails
 };

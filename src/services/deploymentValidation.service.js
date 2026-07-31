@@ -1538,6 +1538,11 @@ async function validateDeployment({
             ? deploymentExecution
             : checkOnlyDeployment;
 
+    // Additive diagnostics only — existing nested deploy payloads unchanged.
+    if (deploymentResult?.deploymentDiagnostics) {
+        response.deploymentDiagnostics = deploymentResult.deploymentDiagnostics;
+    }
+
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
             stage:

@@ -25,12 +25,27 @@ const access = util.promisify(fs.access);
 function logExecutionSummary(result) {
     logSection('Deployment Summary');
     console.log('Deployment ID:', result.deploymentId);
-    console.log('Status:', result.status);
+    console.log('Overall Status:', result.status);
     console.log('Success:', result.success);
     console.log('Duration:', result.duration);
-    console.log('Component Successes:', result.componentSuccesses);
-    console.log('Component Failures:', result.componentFailures);
+    console.log('Total Successes:', result.componentSuccesses);
+    console.log('Total Failures:', result.componentFailures);
     console.log('Message:', result.message);
+
+    const failures = result.deploymentDiagnostics?.componentFailures || [];
+
+    if (failures.length) {
+        console.log('Component Failure Details:');
+
+        for (const failure of failures) {
+            console.log(failure.metadataType || 'Unknown');
+            console.log(
+                failure.metadataName || failure.fullName || failure.fileName || 'n/a'
+            );
+            console.log(failure.problem || 'Unknown problem');
+            console.log('------------------------------------');
+        }
+    }
 }
 
 function withCliCompatibility(result, cliCompatibility) {
