@@ -54,32 +54,7 @@ function isFieldFileForObject(repoFilePath, objectApiName) {
     );
 }
 
-function analyzeCustomObjectFields(
-    objectApiName,
-    repoFiles,
-    debugContext = null
-) {
-    // TEMPORARY DEBUG — confirm method entry (remove after trace).
-    {
-        const stack = new Error().stack || '';
-        const topFrames = stack
-            .split('\n')
-            .slice(1, 6)
-            .map((line) => line.trim())
-            .join('\n');
-
-        console.log('==========================================================');
-        console.log('ENTER analyzeCustomObjectFields()');
-        console.log('==========================================================');
-        console.log('Object:');
-        console.log(objectApiName);
-        console.log('Origin:');
-        console.log(debugContext?.origin ?? 'n/a');
-        console.log('Call Stack (top few frames only)');
-        console.log(topFrames || 'n/a');
-        console.log('==========================================================');
-    }
-
+function analyzeCustomObjectFields(objectApiName, repoFiles) {
     if (!objectApiName || !Array.isArray(repoFiles)) {
         return {
             dependencyAnalysis: {
@@ -101,28 +76,6 @@ function analyzeCustomObjectFields(
 
         if (!fieldApiName) {
             continue;
-        }
-
-        // TEMPORARY DEBUG — Price__c specifically (remove after trace).
-        if (fieldApiName === 'Price__c') {
-            console.log('==========================================================');
-            console.log('PRICE FIELD ADDED');
-            console.log('==========================================================');
-            console.log('Object:');
-            console.log(objectApiName);
-            console.log('Field:');
-            console.log(`${objectApiName}.${fieldApiName}`);
-            console.log('Origin:');
-            console.log(debugContext?.origin ?? 'n/a');
-            console.log('Caller:');
-            console.log(debugContext?.caller ?? 'n/a');
-            console.log('Reason:');
-            console.log(
-                'Enumerated from object fields folder during CustomObject full review'
-            );
-            console.log('(Current review strategy)');
-            console.log(debugContext?.reviewStrategy ?? 'FULL_OBJECT');
-            console.log('==========================================================');
         }
 
         requiredDependencies.push({

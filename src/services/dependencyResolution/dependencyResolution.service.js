@@ -8,7 +8,6 @@ const {
     classifyDependency,
     classifyDependencies
 } = require('./dependencyClassification.service');
-const sessionPricePackageDebug = require('../sessionPricePackageDebug.temp');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -95,7 +94,7 @@ function mergeDeployableReferences(
             continue;
         }
 
-        const inserted = {
+        merged.push({
             name,
             type,
             required: true,
@@ -116,27 +115,8 @@ function mergeDeployableReferences(
                 classification.destinationValidationRequired,
             defaultResolutionPolicy: classification.defaultResolutionPolicy,
             classificationReason: classification.reason
-        };
-
-        // TEMPORARY DEBUG — Session__c.Price__c insert via reference merge.
-        sessionPricePackageDebug.logSessionPriceInserted({
-            method: 'mergeDeployableReferences',
-            caller: 'resolveDependencies',
-            collectionReceiving: 'merged',
-            collectionSource: 'discoveredReferences',
-            metadataObject: inserted
         });
-
-        merged.push(inserted);
     }
-
-    sessionPricePackageDebug.logPackageStage({
-        stageName: 'mergeDeployableReferences return',
-        collectionName: 'merged',
-        collection: merged,
-        method: 'mergeDeployableReferences',
-        caller: 'resolveDependencies'
-    });
 
     return merged;
 }

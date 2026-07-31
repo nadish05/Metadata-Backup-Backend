@@ -307,7 +307,6 @@ const deploymentValidationService = require('../services/deploymentValidation.se
 const {
     attachReservedDeploymentSelections
 } = require('../services/deploymentPlanner/deploymentSelections.foundation');
-const sessionPricePackageDebug = require('../services/sessionPricePackageDebug.temp');
 
 exports.validateDeployment = async (req, res) => {
 
@@ -321,27 +320,6 @@ exports.validateDeployment = async (req, res) => {
             // Optional Deployment Planner preferences (Deploy/Skip).
             deploymentSelections
         } = req.body;
-
-        // TEMPORARY DEBUG — Session__c.Price__c on Validate API entry.
-        sessionPricePackageDebug.logFoundBeforePackageBuild({
-            collectionName: 'req.body.deploymentPackage.requiredDependencies',
-            method: 'deployment.controller.validateDeployment',
-            collection: deploymentPackage?.requiredDependencies
-        });
-        sessionPricePackageDebug.logPackageStage({
-            stageName: 'VALIDATE API REQUEST BODY',
-            collectionName: 'deploymentPackage.requiredDependencies',
-            collection: deploymentPackage?.requiredDependencies,
-            method: 'validateDeployment',
-            caller: 'POST /api/deployment/validate'
-        });
-        sessionPricePackageDebug.logPackageStage({
-            stageName: 'VALIDATE API REQUEST BODY',
-            collectionName: 'deploymentPackage.selectedMetadata',
-            collection: deploymentPackage?.selectedMetadata,
-            method: 'validateDeployment',
-            caller: 'POST /api/deployment/validate'
-        });
 
         // TEMPORARY DIAGNOSTIC — first backend sight of client selections.
         console.log('------------------------------------------');

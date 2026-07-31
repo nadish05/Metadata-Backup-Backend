@@ -46,7 +46,6 @@ const {
 const {
     normalizeDeployableMetadata
 } = require('./deployableMetadataNormalizer.service');
-const sessionPricePackageDebug = require('./sessionPricePackageDebug.temp');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -394,27 +393,6 @@ async function validateDeployment({
     deploymentPackage =
         prepareDeploymentPackageForValidation(deploymentPackage);
 
-    // TEMPORARY DEBUG — Session__c.Price__c: detect presence on Validate entry.
-    sessionPricePackageDebug.logFoundBeforePackageBuild({
-        collectionName: 'deploymentPackage.requiredDependencies (after prepare)',
-        method: 'validateDeployment',
-        collection: deploymentPackage.requiredDependencies
-    });
-    sessionPricePackageDebug.logPackageStage({
-        stageName: 'validateDeployment AFTER prepareDeploymentPackageForValidation',
-        collectionName: 'deploymentPackage.requiredDependencies',
-        collection: deploymentPackage.requiredDependencies,
-        method: 'validateDeployment',
-        caller: 'deployment.controller.validateDeployment'
-    });
-    sessionPricePackageDebug.logPackageStage({
-        stageName: 'validateDeployment AFTER prepareDeploymentPackageForValidation',
-        collectionName: 'deploymentPackage.selectedMetadata',
-        collection: deploymentPackage.selectedMetadata,
-        method: 'validateDeployment',
-        caller: 'deployment.controller.validateDeployment'
-    });
-
     // Deployment Planner selections (preferences). Applied after Dependency
     // Resolution and before Compatibility; Package Generation is unchanged.
     const reservedDeploymentSelections =
@@ -544,15 +522,6 @@ async function validateDeployment({
             discoveryResult.graphExpansionSummary || graphExpansionSummary;
         discoveredRelationships =
             discoveryResult.discoveredRelationships || [];
-
-        // TEMPORARY DEBUG — after relationship discovery merge.
-        sessionPricePackageDebug.logPackageStage({
-            stageName: 'AFTER relationshipDiscovery.discoverRelationships',
-            collectionName: 'enrichedRequiredDependencies',
-            collection: enrichedRequiredDependencies,
-            method: 'validateDeployment',
-            caller: 'relationshipDiscoveryService.discoverRelationships'
-        });
     } catch (error) {
         console.error('RELATIONSHIP DISCOVERY ERROR');
         console.error(error);
@@ -691,25 +660,8 @@ async function validateDeployment({
 
                 dependencyKeys.add(key);
 
-                // TEMPORARY DEBUG — graph expansion merge into enriched deps.
-                sessionPricePackageDebug.logSessionPriceInserted({
-                    method: 'validateDeployment (graphExpansion merge)',
-                    caller: 'graphExpansionService.expandMetadataGraph',
-                    collectionReceiving: 'enrichedRequiredDependencies',
-                    collectionSource: 'expansionResult.discoveredDependencies',
-                    metadataObject: dependency
-                });
-
                 enrichedRequiredDependencies.push(dependency);
             }
-
-            sessionPricePackageDebug.logPackageStage({
-                stageName: 'AFTER graphExpansion merge into enrichedRequiredDependencies',
-                collectionName: 'enrichedRequiredDependencies',
-                collection: enrichedRequiredDependencies,
-                method: 'validateDeployment',
-                caller: 'graphExpansionService.expandMetadataGraph'
-            });
         }
 
         if (expansionResult.summary) {
@@ -770,15 +722,6 @@ async function validateDeployment({
             enrichedRequiredDependencies;
         artifactResolutionSummary =
             artifactResult.summary || artifactResolutionSummary;
-
-        // TEMPORARY DEBUG — after artifact resolution.
-        sessionPricePackageDebug.logPackageStage({
-            stageName: 'AFTER artifactResolution.resolveRepositoryArtifacts',
-            collectionName: 'enrichedRequiredDependencies',
-            collection: enrichedRequiredDependencies,
-            method: 'validateDeployment',
-            caller: 'artifactResolutionService.resolveRepositoryArtifacts'
-        });
     } catch (error) {
         console.error('REPOSITORY ARTIFACT RESOLUTION ERROR');
         console.error(error);
@@ -894,15 +837,6 @@ async function validateDeployment({
             resolvedRequiredDependencies;
         dependencyResolutionSummary =
             resolutionResult.summary || dependencyResolutionSummary;
-
-        // TEMPORARY DEBUG — after dependency resolution.
-        sessionPricePackageDebug.logPackageStage({
-            stageName: 'AFTER dependencyResolution.resolveDependencies',
-            collectionName: 'resolvedRequiredDependencies',
-            collection: resolvedRequiredDependencies,
-            method: 'validateDeployment',
-            caller: 'dependencyResolutionService.resolveDependencies'
-        });
     } catch (error) {
         console.error('DEPENDENCY RESOLUTION ERROR');
         console.error(error);
@@ -1063,15 +997,6 @@ async function validateDeployment({
         resolvedRequiredDependencies =
             plannerResult.resolvedDependencies ||
             resolvedRequiredDependencies;
-
-        // TEMPORARY DEBUG — after planner overrides.
-        sessionPricePackageDebug.logPackageStage({
-            stageName: 'AFTER deploymentPlanner.applyPlannerOverrides',
-            collectionName: 'resolvedRequiredDependencies',
-            collection: resolvedRequiredDependencies,
-            method: 'validateDeployment',
-            caller: 'deploymentPlannerService'
-        });
     } catch (error) {
         console.error('DEPLOYMENT PLANNER ERROR');
         console.error(error);
@@ -1196,71 +1121,10 @@ async function validateDeployment({
         requiredDependencies: resolvedRequiredDependencies
     };
 
-    // TEMPORARY DEBUG — input to package generation.
-    sessionPricePackageDebug.logPackageStage({
-        stageName: 'BEFORE generateDeploymentPackage',
-        collectionName: 'resolvedRequiredDependencies',
-        collection: resolvedRequiredDependencies,
-        method: 'validateDeployment',
-        caller: 'deploymentPackageService.generateDeploymentPackage'
-    });
-
     const generatedDeploymentPackage =
         deploymentPackageService.generateDeploymentPackage(
             deploymentPackageWithResolvedDependencies
         );
-
-    // TEMPORARY DEBUG — package generation output.
-    sessionPricePackageDebug.logPackageStage({
-        stageName: 'AFTER generateDeploymentPackage',
-        collectionName: 'generatedDeploymentPackage.metadata',
-        collection: generatedDeploymentPackage?.metadata,
-        method: 'validateDeployment',
-        caller: 'deploymentPackageService.generateDeploymentPackage'
-    });
-    sessionPricePackageDebug.logPackageStage({
-        stageName: 'AFTER generateDeploymentPackage',
-        collectionName: 'generatedDeploymentPackage.dependencies',
-        collection: generatedDeploymentPackage?.dependencies,
-        method: 'validateDeployment',
-        caller: 'deploymentPackageService.generateDeploymentPackage'
-    });
-
-    // TEMPORARY DIAGNOSTIC — workspace-missing artifact investigation.
-    {
-        const diagnosticNames = new Set([
-            'Connected_Org__c.Instance_Url__c',
-            'Connected_Org__c.Org_Id__c',
-            'AuraHandledException',
-            'URL'
-        ]);
-        const inventory = [
-            ...(generatedDeploymentPackage?.metadata || []).map((item) => ({
-                collection: 'metadata',
-                metadataType: item.metadataType || item.type || null,
-                metadataName: item.metadataName || item.name || null,
-                filePath: item.filePath || null,
-                sourceExists: item.sourceExists,
-                artifactResolved: item.artifactResolved
-            })),
-            ...(generatedDeploymentPackage?.dependencies || []).map((item) => ({
-                collection: 'dependencies',
-                metadataType: item.type || item.metadataType || null,
-                metadataName: item.name || item.metadataName || null,
-                filePath: item.filePath || null,
-                sourceExists: item.sourceExists,
-                artifactResolved: item.artifactResolved,
-                action: item.action || null,
-                selected: item.selected
-            }))
-        ].filter((item) => diagnosticNames.has(item.metadataName));
-
-        console.log('========================================');
-        console.log('PACKAGE MEMBERSHIP DIAGNOSTIC');
-        console.log('========================================');
-        console.log(JSON.stringify(inventory, null, 2));
-        console.log('========================================');
-    }
 
     // Report-only: explain WHY members exist in the generated package.
     // Must not influence package, validation, planner, manifest, workspace, or deploy.
@@ -1530,43 +1394,6 @@ async function validateDeployment({
         }
     }
 
-    // TEMPORARY DEBUG — Workspace Builder input (remove after trace).
-    {
-        const workspaceItems = [
-            ...(generatedDeploymentPackage?.metadata || []),
-            ...(generatedDeploymentPackage?.dependencies || [])
-        ];
-
-        console.log('==========================================================');
-        console.log('WORKSPACE INPUT');
-        console.log('==========================================================');
-
-        if (!workspaceItems.length) {
-            console.log('(no metadata items for Workspace Builder)');
-        } else {
-            for (const item of workspaceItems) {
-                console.log('Metadata Type');
-                console.log(item?.type || item?.metadataType || 'n/a');
-                console.log('Metadata Name');
-                console.log(item?.name || item?.metadataName || 'n/a');
-                console.log('Origin (if available)');
-                console.log(item?.origin ?? 'n/a');
-                console.log('Selected');
-                console.log(
-                    item?.selected !== undefined ? item.selected : 'n/a'
-                );
-                console.log('----------------------------------------');
-            }
-        }
-
-        console.log('==========================================================');
-    }
-
-    // TEMPORARY DEBUG — final package immediately before Workspace Builder path.
-    sessionPricePackageDebug.logFinalPackageBeforeWorkspace(
-        generatedDeploymentPackage
-    );
-
     let generatedWorkspace;
 
     if (artifactCompatibilityBlocked) {
@@ -1599,22 +1426,6 @@ async function validateDeployment({
             'Workspace Builder skipped due to missing source artifacts:',
             missingArtifacts
         );
-
-        // TEMPORARY DIAGNOSTIC — expand artifact.exists FAIL findings.
-        {
-            const diagnosticFindings = (compatibilityFindings || []).filter(
-                (finding) =>
-                    finding.ruleId === 'artifact.exists' &&
-                    (finding.status === 'FAIL' ||
-                        finding.status === 'BLOCK' ||
-                        finding.blocking === true)
-            );
-            console.log('========================================');
-            console.log('WORKSPACE SKIP ARTIFACT.EXISTS FINDINGS');
-            console.log('========================================');
-            console.log(JSON.stringify(diagnosticFindings, null, 2));
-            console.log('========================================');
-        }
     } else {
         generatedWorkspace =
             await deploymentWorkspaceService.buildDeploymentWorkspace({
