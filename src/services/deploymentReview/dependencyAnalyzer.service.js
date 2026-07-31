@@ -295,9 +295,12 @@ function extractVariableObjectTypes(cleanedContent) {
 }
 
 /**
- * Qualify SOQL SELECT __c fields with the query's FROM object.
- * Example: [SELECT Metadata_Comparison__c FROM Comparison_Result__c]
- *       → Comparison_Result__c.Metadata_Comparison__c
+ * Qualify SOQL SELECT __c fields with the correct object parent.
+ *
+ * - Bare fields → FROM object: Booked_Slots__c → Session__c.Booked_Slots__c
+ * - Relationship fields → related object:
+ *   Experience__r.Price__c → Experience__c.Price__c
+ *   (never FROMObject.Price__c)
  */
 function extractSoqlQualifiedFields(cleanedContent, debugContext = null) {
     const qualifiedFields = new Set();
@@ -327,7 +330,57 @@ function extractSoqlQualifiedFields(cleanedContent, debugContext = null) {
             continue;
         }
 
-        const fieldTokens = selectMatch[1].match(/\b[A-Za-z0-9_]+__c\b/g) || [];
+        const selectClause = selectMatch[1];
+
+        // 1) Relationship-qualified fields: Relationship__r.Field__c
+        //    → Relationship__c.Field__c (not FROMObject.Field__c).
+        for (const match of selectClause.matchAll(
+            /\b([A-Za-z0-9_]+__r)\.([A-Za-z0-9_]+__c)\b/g
+        )) {
+            const relationshipName = match[1];
+            const fieldApiName = match[2];
+            const relatedObjectApiName = relationshipName.replace(
+                /__r$/i,
+                '__c'
+            );
+            const qualified = `${relatedObjectApiName}.${fieldApiName}`;
+            qualifiedFields.add(qualified);
+
+            // TEMPORARY DEBUG — relationship-qualified SOQL CustomField.
+            const fieldOffsetInQuery =
+                typeof match.index === 'number'
+                    ? selectMatch.index + match.index
+                    : query.indexOf(match[0]);
+            const matchIndex =
+                typeof blockIndex === 'number' && fieldOffsetInQuery >= 0
+                    ? blockIndex + 1 + fieldOffsetInQuery
+                    : blockIndex;
+
+            logApexFieldDiscovered({
+                apexClass: debugContext?.apexClass,
+                fieldQualifiedName: qualified,
+                objectApiName: relatedObjectApiName,
+                fieldApiName,
+                parser: 'regex-SOQL-relationship',
+                method: 'extractSoqlQualifiedFields',
+                reason: `SOQL relationship field ${relationshipName}.${fieldApiName} → ${qualified}`,
+                sourceSnippet: extractSnippetAround(
+                    cleanedContent,
+                    matchIndex
+                ),
+                matchIndex,
+                cleanedContent
+            });
+        }
+
+        // 2) Bare SELECT fields (exclude relationship-qualified segments so
+        //    Price__c from Experience__r.Price__c is not attached to FROM).
+        const selectWithoutRelationships = selectClause.replace(
+            /\b[A-Za-z0-9_]+__r\.[A-Za-z0-9_]+__c\b/g,
+            ' '
+        );
+        const fieldTokens =
+            selectWithoutRelationships.match(/\b[A-Za-z0-9_]+__c\b/g) || [];
 
         for (const fieldName of fieldTokens) {
             if (fieldName !== objectName) {
