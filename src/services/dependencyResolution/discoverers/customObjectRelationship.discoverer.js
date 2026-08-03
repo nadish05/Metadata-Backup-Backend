@@ -283,6 +283,34 @@ function resolveSummarizedFieldToken(summarizedField) {
     return trimmed;
 }
 
+/**
+ * Resolve qualified <summaryForeignKey> Object.Field to a CustomField name.
+ * e.g. Booking__c.Session__c → Booking__c.Session__c
+ * Unqualified / malformed values return null (existing object discovery unchanged).
+ */
+function resolveSummaryForeignKeyFieldName(summaryForeignKey) {
+    const trimmed = String(summaryForeignKey || '').trim();
+
+    if (!trimmed || !trimmed.includes('.')) {
+        return null;
+    }
+
+    const parts = trimmed.split('.');
+
+    if (parts.length !== 2) {
+        return null;
+    }
+
+    const objectName = parts[0].trim();
+    const fieldName = parts[1].trim();
+
+    if (!isCustomObjectApiName(objectName) || !isCustomFieldApiToken(fieldName)) {
+        return null;
+    }
+
+    return `${objectName}.${fieldName}`;
+}
+
 function parseRelationshipFromFieldXml(fieldXml) {
     const fieldType = extractXmlTagValue(fieldXml, 'type');
 
@@ -292,7 +320,8 @@ function parseRelationshipFromFieldXml(fieldXml) {
 
     // Roll-Up Summary → child CustomObject via summarizedObject
     // or qualified summaryForeignKey (ChildObject.Field).
-    // Optionally also captures summarizedField for CustomField dependency.
+    // Optionally also captures summarizedField and qualified
+    // summaryForeignKey CustomField dependencies.
     // Does NOT emit the parent object (left side of CustomField name).
     if (fieldType === RELATIONSHIP_TYPES.Summary) {
         const summarizedObject = extractXmlTagValue(
@@ -315,11 +344,14 @@ function parseRelationshipFromFieldXml(fieldXml) {
         const summarizedField = resolveSummarizedFieldToken(
             extractXmlTagValue(fieldXml, 'summarizedField')
         );
+        const summaryForeignKeyField =
+            resolveSummaryForeignKeyFieldName(summaryForeignKey);
 
         return {
             relationship: RELATIONSHIP_TYPES.Summary,
             referencedObject,
-            summarizedField
+            summarizedField,
+            summaryForeignKeyField
         };
     }
 
@@ -349,7 +381,8 @@ function parseRelationshipFromFieldXml(fieldXml) {
 
 /**
  * Push relationship records for a parsed field relationship.
- * Summary with summarizedField also emits CustomField dependency.
+ * Summary may also emit CustomField deps for summarizedField and
+ * qualified summaryForeignKey.
  */
 function pushParsedRelationshipRecords(
     relationships,
@@ -366,34 +399,61 @@ function pushParsedRelationshipRecords(
         })
     );
 
-    if (
-        parsed.relationship !== RELATIONSHIP_TYPES.Summary ||
-        !parsed.summarizedField
-    ) {
+    if (parsed.relationship !== RELATIONSHIP_TYPES.Summary) {
         return;
     }
 
-    const summarizedFieldName = qualifyCustomFieldName(
-        parsed.referencedObject,
-        parsed.summarizedField
-    );
+    const emittedCustomFields = new Set();
 
-    if (!summarizedFieldName || !isCustomFieldApiToken(summarizedFieldName)) {
-        return;
+    if (parsed.summarizedField) {
+        const summarizedFieldName = qualifyCustomFieldName(
+            parsed.referencedObject,
+            parsed.summarizedField
+        );
+
+        if (
+            summarizedFieldName &&
+            isCustomFieldApiToken(summarizedFieldName) &&
+            !emittedCustomFields.has(summarizedFieldName)
+        ) {
+            emittedCustomFields.add(summarizedFieldName);
+            relationships.push(
+                createRelationshipRecord({
+                    referencedObject: summarizedFieldName,
+                    relationship: RELATIONSHIP_TYPES.Summary,
+                    sourceMetadata,
+                    sourceField,
+                    depth,
+                    metadataType: 'CustomField',
+                    reason:
+                        'Summary summarizedField target discovered from field metadata.'
+                })
+            );
+        }
     }
 
-    relationships.push(
-        createRelationshipRecord({
-            referencedObject: summarizedFieldName,
-            relationship: RELATIONSHIP_TYPES.Summary,
-            sourceMetadata,
-            sourceField,
-            depth,
-            metadataType: 'CustomField',
-            reason:
-                'Summary summarizedField target discovered from field metadata.'
-        })
-    );
+    if (parsed.summaryForeignKeyField) {
+        const foreignKeyFieldName = parsed.summaryForeignKeyField;
+
+        if (
+            isCustomFieldApiToken(foreignKeyFieldName) &&
+            !emittedCustomFields.has(foreignKeyFieldName)
+        ) {
+            emittedCustomFields.add(foreignKeyFieldName);
+            relationships.push(
+                createRelationshipRecord({
+                    referencedObject: foreignKeyFieldName,
+                    relationship: RELATIONSHIP_TYPES.Summary,
+                    sourceMetadata,
+                    sourceField,
+                    depth,
+                    metadataType: 'CustomField',
+                    reason:
+                        'Summary summaryForeignKey target discovered from field metadata.'
+                })
+            );
+        }
+    }
 }
 
 function createRelationshipRecord({

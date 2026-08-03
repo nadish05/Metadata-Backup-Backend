@@ -162,8 +162,19 @@ async function main() {
                 readRepoFile
             });
 
-            assert.strictEqual(result.relationships.length, 1);
-            assert.strictEqual(result.relationships[0].name, 'Booking__c');
+            assert.strictEqual(result.relationships.length, 2);
+            assert.strictEqual(
+                result.relationships.some((item) => item.name === 'Booking__c'),
+                true
+            );
+            assert.strictEqual(
+                result.relationships.some(
+                    (item) =>
+                        item.name === 'Booking__c.Session__c' &&
+                        item.metadataType === 'CustomField'
+                ),
+                true
+            );
             assert.strictEqual(result.relationships[0].relationship, 'Summary');
             assert.ok(
                 !result.relationships.some((item) => item.name === 'Session__c')
