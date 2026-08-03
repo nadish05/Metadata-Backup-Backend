@@ -621,8 +621,40 @@ async function discoverUntilStable({
 
         for (const relationship of iterationResult.relationships) {
             const key = getDependencyKey(relationship);
+            const isBooking =
+                String(relationship?.name || '') === 'Booking__c' ||
+                String(relationship?.metadataName || '') === 'Booking__c' ||
+                String(relationship?.sourceField || '') === 'Booked_Slots__c';
+
+            // TEMPORARY DEBUG — Phase 10.14 PART F
+            if (isBooking) {
+                console.log('====================================================');
+                console.log('ROLLUP FIELD PARSER TRACE — PART F — before filter');
+                console.log('====================================================');
+                console.log('before filter:');
+                console.log(JSON.stringify(relationship, null, 2));
+                console.log('key:');
+                console.log(key);
+                console.log('already in relationshipKeys?:');
+                console.log(Boolean(key && relationshipKeys.has(key)));
+                console.log('====================================================');
+            }
 
             if (!key || relationshipKeys.has(key)) {
+                if (isBooking) {
+                    console.log('====================================================');
+                    console.log('ROLLUP FIELD PARSER TRACE — PART F — after filter');
+                    console.log('====================================================');
+                    console.log('after filter:');
+                    console.log('(filtered out — NOT added)');
+                    console.log('reason:');
+                    console.log(
+                        !key
+                            ? 'Missing dependency key'
+                            : 'Duplicate key already present in relationshipKeys'
+                    );
+                    console.log('====================================================');
+                }
                 continue;
             }
 
@@ -637,6 +669,17 @@ async function discoverUntilStable({
             allRelationships.push(withOrigin);
             newlyDiscovered.push(withOrigin);
             newDependencies += 1;
+
+            if (isBooking) {
+                console.log('====================================================');
+                console.log('ROLLUP FIELD PARSER TRACE — PART F — after filter');
+                console.log('====================================================');
+                console.log('after filter:');
+                console.log(JSON.stringify(withOrigin, null, 2));
+                console.log('reason:');
+                console.log('Accepted — added to allRelationships');
+                console.log('====================================================');
+            }
         }
 
         logGraphExpansionIteration({
