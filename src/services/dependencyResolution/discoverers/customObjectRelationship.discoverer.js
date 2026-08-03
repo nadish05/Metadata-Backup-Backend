@@ -269,6 +269,20 @@ function resolveSummaryReferencedObject(summarizedObject, summaryForeignKey) {
     return null;
 }
 
+/**
+ * Resolve <summarizedField> to a CustomField API token.
+ * Accepts Number_of_Guests__c or Booking__c.Number_of_Guests__c.
+ */
+function resolveSummarizedFieldToken(summarizedField) {
+    const trimmed = String(summarizedField || '').trim();
+
+    if (!trimmed || !isCustomFieldApiToken(trimmed)) {
+        return null;
+    }
+
+    return trimmed;
+}
+
 function parseRelationshipFromFieldXml(fieldXml) {
     const fieldType = extractXmlTagValue(fieldXml, 'type');
 
@@ -278,6 +292,7 @@ function parseRelationshipFromFieldXml(fieldXml) {
 
     // Roll-Up Summary → child CustomObject via summarizedObject
     // or qualified summaryForeignKey (ChildObject.Field).
+    // Optionally also captures summarizedField for CustomField dependency.
     // Does NOT emit the parent object (left side of CustomField name).
     if (fieldType === RELATIONSHIP_TYPES.Summary) {
         const summarizedObject = extractXmlTagValue(
@@ -297,9 +312,14 @@ function parseRelationshipFromFieldXml(fieldXml) {
             return null;
         }
 
+        const summarizedField = resolveSummarizedFieldToken(
+            extractXmlTagValue(fieldXml, 'summarizedField')
+        );
+
         return {
             relationship: RELATIONSHIP_TYPES.Summary,
-            referencedObject
+            referencedObject,
+            summarizedField
         };
     }
 
@@ -325,6 +345,55 @@ function parseRelationshipFromFieldXml(fieldXml) {
         relationship: fieldType,
         referencedObject: referenceTo
     };
+}
+
+/**
+ * Push relationship records for a parsed field relationship.
+ * Summary with summarizedField also emits CustomField dependency.
+ */
+function pushParsedRelationshipRecords(
+    relationships,
+    parsed,
+    { sourceMetadata, sourceField, depth }
+) {
+    relationships.push(
+        createRelationshipRecord({
+            referencedObject: parsed.referencedObject,
+            relationship: parsed.relationship,
+            sourceMetadata,
+            sourceField,
+            depth
+        })
+    );
+
+    if (
+        parsed.relationship !== RELATIONSHIP_TYPES.Summary ||
+        !parsed.summarizedField
+    ) {
+        return;
+    }
+
+    const summarizedFieldName = qualifyCustomFieldName(
+        parsed.referencedObject,
+        parsed.summarizedField
+    );
+
+    if (!summarizedFieldName || !isCustomFieldApiToken(summarizedFieldName)) {
+        return;
+    }
+
+    relationships.push(
+        createRelationshipRecord({
+            referencedObject: summarizedFieldName,
+            relationship: RELATIONSHIP_TYPES.Summary,
+            sourceMetadata,
+            sourceField,
+            depth,
+            metadataType: 'CustomField',
+            reason:
+                'Summary summarizedField target discovered from field metadata.'
+        })
+    );
 }
 
 function createRelationshipRecord({
@@ -566,15 +635,11 @@ const customObjectRelationshipDiscoverer = {
 
                         const sourceField = extractFieldApiName(fieldFilePath);
 
-                        relationships.push(
-                            createRelationshipRecord({
-                                referencedObject: parsed.referencedObject,
-                                relationship: parsed.relationship,
-                                sourceMetadata: objectApiName,
-                                sourceField,
-                                depth
-                            })
-                        );
+                        pushParsedRelationshipRecords(relationships, parsed, {
+                            sourceMetadata: objectApiName,
+                            sourceField,
+                            depth
+                        });
                     } catch (error) {
                         warnings.push(
                             `Unable to read field metadata ${fieldFilePath}: ${
@@ -620,15 +685,11 @@ const customObjectRelationshipDiscoverer = {
                             ? item.metadataName.split('.')[0]
                             : null);
 
-                    relationships.push(
-                        createRelationshipRecord({
-                            referencedObject: parsed.referencedObject,
-                            relationship: parsed.relationship,
-                            sourceMetadata,
-                            sourceField,
-                            depth
-                        })
-                    );
+                    pushParsedRelationshipRecords(relationships, parsed, {
+                        sourceMetadata,
+                        sourceField,
+                        depth
+                    });
                 } catch (error) {
                     warnings.push(
                         `Unable to read field metadata ${fieldFilePath}: ${
