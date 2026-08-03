@@ -50,6 +50,10 @@ const {
     logFinalCustomFieldLifecycleSummary
 } = require('./customFieldLifecycleTrace.temp');
 const {
+    logPipelineCollection,
+    logFinalReconciliationReport
+} = require('./dependencyPipelineReconciliation.temp');
+const {
     normalizeDeployableMetadata
 } = require('./deployableMetadataNormalizer.service');
 
@@ -510,6 +514,24 @@ async function validateDeployment({
     }
 
     try {
+        // TEMPORARY DEBUG — Phase 10.18 STAGE 2 (caller-side exact inputs)
+        logPipelineCollection({
+            stage: 'STAGE 2 — before discoverRelationships() (validation caller)',
+            collectionName: 'deploymentPackage.selectedMetadata',
+            variableName: 'deploymentPackage.selectedMetadata',
+            collection: deploymentPackage.selectedMetadata,
+            caller: 'validateDeployment',
+            method: 'relationshipDiscoveryService.discoverRelationships'
+        });
+        logPipelineCollection({
+            stage: 'STAGE 2 — before discoverRelationships() (validation caller)',
+            collectionName: 'deploymentPackage.requiredDependencies',
+            variableName: 'deploymentPackage.requiredDependencies',
+            collection: deploymentPackage.requiredDependencies,
+            caller: 'validateDeployment',
+            method: 'relationshipDiscoveryService.discoverRelationships'
+        });
+
         const discoveryResult =
             await relationshipDiscoveryService.discoverRelationships({
                 selectedMetadata: deploymentPackage.selectedMetadata,
@@ -648,6 +670,40 @@ async function validateDeployment({
         method: 'graphExpansionService.expandMetadataGraph'
     });
 
+    // TEMPORARY DEBUG — Phase 10.18 STAGE 4 (exact variables passed — no copies)
+    logPipelineCollection({
+        stage: 'STAGE 4 — before expandMetadataGraph() (validation caller)',
+        collectionName: 'selectedMetadata passed',
+        variableName: 'deploymentPackage.selectedMetadata',
+        collection: deploymentPackage.selectedMetadata,
+        caller: 'validateDeployment',
+        method: 'graphExpansionService.expandMetadataGraph'
+    });
+    logPipelineCollection({
+        stage: 'STAGE 4 — before expandMetadataGraph() (validation caller)',
+        collectionName: 'discoveredRelationships passed',
+        variableName: 'discoveredRelationships',
+        collection: discoveredRelationships,
+        caller: 'validateDeployment',
+        method: 'graphExpansionService.expandMetadataGraph'
+    });
+    logPipelineCollection({
+        stage: 'STAGE 4 — before expandMetadataGraph() (validation caller)',
+        collectionName: 'discoveredReferences passed',
+        variableName: 'discoveredReferences',
+        collection: discoveredReferences,
+        caller: 'validateDeployment',
+        method: 'graphExpansionService.expandMetadataGraph'
+    });
+    logPipelineCollection({
+        stage: 'STAGE 4 — before expandMetadataGraph() (validation caller)',
+        collectionName: 'enrichedDependencies passed',
+        variableName: 'enrichedRequiredDependencies',
+        collection: enrichedRequiredDependencies,
+        caller: 'validateDeployment',
+        method: 'graphExpansionService.expandMetadataGraph'
+    });
+
     try {
         const expansionResult = await graphExpansionService.expandMetadataGraph(
             {
@@ -710,6 +766,49 @@ async function validateDeployment({
             caller: 'validateDeployment',
             method: 'graphExpansionService.expandMetadataGraph',
             lifecycleStage: 'Graph'
+        });
+
+        // TEMPORARY DEBUG — Phase 10.18 STAGE 6 (caller-side every return collection)
+        logPipelineCollection({
+            stage: 'STAGE 6 — after expandMetadataGraph() (validation caller)',
+            collectionName: 'expansionResult.discoveredNodes',
+            variableName: 'expansionResult.discoveredNodes',
+            collection: expansionResult.discoveredNodes,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
+        logPipelineCollection({
+            stage: 'STAGE 6 — after expandMetadataGraph() (validation caller)',
+            collectionName: 'expansionResult.discoveredDependencies',
+            variableName: 'expansionResult.discoveredDependencies',
+            collection: expansionResult.discoveredDependencies,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
+        logPipelineCollection({
+            stage: 'STAGE 6 — after expandMetadataGraph() (validation caller)',
+            collectionName: 'expansionResult.discoveredReferences',
+            variableName: 'expansionResult.discoveredReferences',
+            collection: expansionResult.discoveredReferences,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
+        logPipelineCollection({
+            stage: 'STAGE 6 — after expandMetadataGraph() (validation caller)',
+            collectionName: 'expansionResult.discoveredEdges',
+            variableName: 'expansionResult.discoveredEdges',
+            collection: expansionResult.discoveredEdges,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
+        logPipelineCollection({
+            stage: 'STAGE 6 — after expandMetadataGraph() (validation caller)',
+            collectionName: 'enrichedRequiredDependencies (pre-merge state)',
+            variableName: 'enrichedRequiredDependencies',
+            collection: enrichedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph',
+            note: 'State of enriched deps BEFORE expansion merge into them'
         });
 
         const expansionReferences =
@@ -778,6 +877,17 @@ async function validateDeployment({
                 enrichedRequiredDependencies.push(dependency);
             }
         }
+
+        // TEMPORARY DEBUG — Phase 10.18 post-merge after STAGE 6
+        logPipelineCollection({
+            stage: 'STAGE 6 — after expandMetadataGraph() merge into enriched',
+            collectionName: 'enrichedRequiredDependencies (post-merge)',
+            variableName: 'enrichedRequiredDependencies',
+            collection: enrichedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph',
+            note: 'After pushing expansionDependencies into enrichedRequiredDependencies'
+        });
 
         if (expansionResult.summary) {
             graphExpansionSummary = {
@@ -954,6 +1064,24 @@ async function validateDeployment({
             method: 'dependencyResolutionService.resolveDependencies'
         });
 
+        // TEMPORARY DEBUG — Phase 10.18 STAGE 7
+        logPipelineCollection({
+            stage: 'STAGE 7 — before resolveDependencies() (validation caller)',
+            collectionName: 'requiredDependencies passed',
+            variableName: 'enrichedRequiredDependencies',
+            collection: enrichedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'dependencyResolutionService.resolveDependencies'
+        });
+        logPipelineCollection({
+            stage: 'STAGE 7 — before resolveDependencies() (validation caller)',
+            collectionName: 'discoveredReferences passed',
+            variableName: 'discoveredReferences',
+            collection: discoveredReferences,
+            caller: 'validateDeployment',
+            method: 'dependencyResolutionService.resolveDependencies'
+        });
+
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
                 requiredDependencies: enrichedRequiredDependencies,
@@ -989,6 +1117,16 @@ async function validateDeployment({
             method: 'dependencyResolutionService.resolveDependencies',
             lifecycleStage: 'Resolution',
             includeResolutionDetails: true
+        });
+
+        // TEMPORARY DEBUG — Phase 10.18 STAGE 8
+        logPipelineCollection({
+            stage: 'STAGE 8 — after resolveDependencies() (validation caller)',
+            collectionName: 'resolvedRequiredDependencies',
+            variableName: 'resolvedRequiredDependencies',
+            collection: resolvedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'dependencyResolutionService.resolveDependencies'
         });
     } catch (error) {
         console.error('DEPENDENCY RESOLUTION ERROR');
@@ -1131,6 +1269,24 @@ async function validateDeployment({
             method: 'deploymentPlannerService.applyPlannerOverrides'
         });
 
+        // TEMPORARY DEBUG — Phase 10.18 STAGE 9
+        logPipelineCollection({
+            stage: 'STAGE 9 — before Planner',
+            collectionName: 'planner input selectedMetadata',
+            variableName: 'artifactEnrichedSelectedMetadata',
+            collection: artifactEnrichedSelectedMetadata,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
+        });
+        logPipelineCollection({
+            stage: 'STAGE 9 — before Planner',
+            collectionName: 'planner input resolvedDependencies',
+            variableName: 'resolvedRequiredDependencies',
+            collection: resolvedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
+        });
+
         const plannerResult = deploymentPlannerService.applyPlannerOverrides({
             selectedMetadata: artifactEnrichedSelectedMetadata,
             resolvedDependencies: resolvedRequiredDependencies,
@@ -1163,6 +1319,24 @@ async function validateDeployment({
             caller: 'validateDeployment',
             method: 'deploymentPlannerService.applyPlannerOverrides',
             lifecycleStage: 'Planner'
+        });
+
+        // TEMPORARY DEBUG — Phase 10.18 STAGE 10
+        logPipelineCollection({
+            stage: 'STAGE 10 — after Planner',
+            collectionName: 'planner output selectedMetadata',
+            variableName: 'plannerResult.selectedMetadata',
+            collection: plannerResult?.selectedMetadata,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
+        });
+        logPipelineCollection({
+            stage: 'STAGE 10 — after Planner',
+            collectionName: 'planner output resolvedDependencies',
+            variableName: 'plannerResult.resolvedDependencies',
+            collection: plannerResult?.resolvedDependencies,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
         });
 
         // TEMPORARY PLANNER DEBUG LOG — remove after Skip verification.
@@ -1339,6 +1513,25 @@ async function validateDeployment({
         stage: 'PART 9 — before generateDeploymentPackage()',
         collection: 'deploymentPackage.requiredDependencies',
         items: deploymentPackageWithResolvedDependencies.requiredDependencies,
+        caller: 'validateDeployment',
+        method: 'deploymentPackageService.generateDeploymentPackage'
+    });
+
+    // TEMPORARY DEBUG — Phase 10.18 STAGE 11
+    logPipelineCollection({
+        stage: 'STAGE 11 — before generateDeploymentPackage()',
+        collectionName: 'package input selectedMetadata',
+        variableName: 'deploymentPackageWithResolvedDependencies.selectedMetadata',
+        collection: deploymentPackageWithResolvedDependencies.selectedMetadata,
+        caller: 'validateDeployment',
+        method: 'deploymentPackageService.generateDeploymentPackage'
+    });
+    logPipelineCollection({
+        stage: 'STAGE 11 — before generateDeploymentPackage()',
+        collectionName: 'package input requiredDependencies',
+        variableName: 'deploymentPackageWithResolvedDependencies.requiredDependencies',
+        collection:
+            deploymentPackageWithResolvedDependencies.requiredDependencies,
         caller: 'validateDeployment',
         method: 'deploymentPackageService.generateDeploymentPackage'
     });
@@ -1649,6 +1842,24 @@ async function validateDeployment({
         lifecycleStage: 'Manifest'
     });
 
+    // TEMPORARY DEBUG — Phase 10.18 STAGE 13
+    logPipelineCollection({
+        stage: 'STAGE 13 — before generatePackageXml() / generateManifest()',
+        collectionName: 'final metadata for package.xml',
+        variableName: 'generatedDeploymentPackage.metadata',
+        collection: generatedDeploymentPackage?.metadata,
+        caller: 'validateDeployment',
+        method: 'packageXmlService.generateManifest'
+    });
+    logPipelineCollection({
+        stage: 'STAGE 13 — before generatePackageXml() / generateManifest()',
+        collectionName: 'final dependencies for package.xml context',
+        variableName: 'generatedDeploymentPackage.dependencies',
+        collection: generatedDeploymentPackage?.dependencies,
+        caller: 'validateDeployment',
+        method: 'packageXmlService.generateManifest'
+    });
+
     const generatedManifest = packageXmlService.generateManifest(
         generatedDeploymentPackage,
         {
@@ -1660,6 +1871,9 @@ async function validateDeployment({
 
     // TEMPORARY DEBUG — Phase 10.17 final lifecycle summary
     logFinalCustomFieldLifecycleSummary();
+
+    // TEMPORARY DEBUG — Phase 10.18 final reconciliation report
+    logFinalReconciliationReport();
 
     // TEMPORARY VERIFICATION LOG — remove after Deployment Planner verification.
     // Logs generated package.xml only; does not modify manifest or deployment behaviour.

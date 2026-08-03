@@ -21,6 +21,10 @@ const { buildGraphNodeId } = require('../graphId');
 const {
     METADATA_ORIGINS
 } = require('../metadataGraphOrigin.model');
+const {
+    logPipelineCollection,
+    logTracedEnterOrLeave
+} = require('../../dependencyPipelineReconciliation.temp');
 
 const execAsync = util.promisify(exec);
 
@@ -246,6 +250,40 @@ async function expandMetadataGraph({
 } = {}) {
     logSection('Metadata Graph Expansion Engine');
 
+    // TEMPORARY DEBUG — Phase 10.18 STAGE 4 (exact args received — same refs as caller)
+    logPipelineCollection({
+        stage: 'STAGE 4 — inside expandMetadataGraph() received args',
+        collectionName: 'selectedMetadata arg',
+        variableName: 'selectedMetadata',
+        collection: selectedMetadata,
+        caller: 'expandMetadataGraph',
+        method: 'expandMetadataGraph'
+    });
+    logPipelineCollection({
+        stage: 'STAGE 4 — inside expandMetadataGraph() received args',
+        collectionName: 'discoveredRelationships arg',
+        variableName: 'discoveredRelationships',
+        collection: discoveredRelationships,
+        caller: 'expandMetadataGraph',
+        method: 'expandMetadataGraph'
+    });
+    logPipelineCollection({
+        stage: 'STAGE 4 — inside expandMetadataGraph() received args',
+        collectionName: 'discoveredReferences arg',
+        variableName: 'discoveredReferences',
+        collection: discoveredReferences,
+        caller: 'expandMetadataGraph',
+        method: 'expandMetadataGraph'
+    });
+    logPipelineCollection({
+        stage: 'STAGE 4 — inside expandMetadataGraph() received args',
+        collectionName: 'enrichedDependencies arg',
+        variableName: 'enrichedDependencies',
+        collection: enrichedDependencies,
+        caller: 'expandMetadataGraph',
+        method: 'expandMetadataGraph'
+    });
+
     const empty = {
         discoveredNodes: [],
         discoveredEdges: [],
@@ -277,6 +315,16 @@ async function expandMetadataGraph({
         enrichedDependencies
     });
 
+    // TEMPORARY DEBUG — Phase 10.18 STAGE 5
+    logPipelineCollection({
+        stage: 'STAGE 5 — inside expandMetadataGraph() initial frontier',
+        collectionName: 'seedNodes / initial frontier',
+        variableName: 'seedNodes',
+        collection: seedNodes,
+        caller: 'expandMetadataGraph',
+        method: 'collectSeedNodes'
+    });
+
     if (!seedNodes.length) {
         console.log('Graph expansion seeds: 0');
         logSection('Metadata Graph Expansion Summary');
@@ -304,8 +352,40 @@ async function expandMetadataGraph({
 
                     if (key && !nodeMap.has(key)) {
                         nodeMap.set(key, seed);
+                        logTracedEnterOrLeave({
+                            stage: 'STAGE 5 — expandMetadataGraph',
+                            collectionName: 'nodes (nodeMap)',
+                            event: 'ENTER',
+                            item: seed,
+                            caller: 'expandMetadataGraph'
+                        });
                     }
+
+                    logTracedEnterOrLeave({
+                        stage: 'STAGE 5 — expandMetadataGraph',
+                        collectionName: 'queue',
+                        event: 'ENTER (seed)',
+                        item: seed,
+                        caller: 'expandMetadataGraph'
+                    });
                 }
+
+                logPipelineCollection({
+                    stage: 'STAGE 5 — inside expandMetadataGraph() after seed load',
+                    collectionName: 'queue',
+                    variableName: 'queue',
+                    collection: queue,
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
+                logPipelineCollection({
+                    stage: 'STAGE 5 — inside expandMetadataGraph() after seed load',
+                    collectionName: 'nodes (nodeMap values)',
+                    variableName: 'nodeMap',
+                    collection: [...nodeMap.values()],
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
 
                 while (queue.length > 0) {
                     if (nodeMap.size >= MAX_NODE_COUNT) {
@@ -325,11 +405,26 @@ async function expandMetadataGraph({
                     const current = queue.shift();
                     const currentKey = getNodeKey(current);
 
+                    logTracedEnterOrLeave({
+                        stage: 'STAGE 5 — expandMetadataGraph',
+                        collectionName: 'queue',
+                        event: 'LEAVE (shift)',
+                        item: current,
+                        caller: 'expandMetadataGraph'
+                    });
+
                     if (!currentKey || visited.has(currentKey)) {
                         continue;
                     }
 
                     visited.add(currentKey);
+                    logTracedEnterOrLeave({
+                        stage: 'STAGE 5 — expandMetadataGraph',
+                        collectionName: 'visited',
+                        event: 'ENTER',
+                        item: current,
+                        caller: 'expandMetadataGraph'
+                    });
                     iterations += 1;
                     graphDepth = Math.max(graphDepth, (current.depth || 0) + 1);
 
@@ -379,6 +474,13 @@ async function expandMetadataGraph({
 
                         if (!nodeMap.has(nodeKey)) {
                             nodeMap.set(nodeKey, node);
+                            logTracedEnterOrLeave({
+                                stage: 'STAGE 5 — expandMetadataGraph',
+                                collectionName: 'nodes (nodeMap)',
+                                event: 'ENTER',
+                                item: node,
+                                caller: 'expandMetadataGraph'
+                            });
                         }
 
                         const shouldEnqueue =
@@ -391,10 +493,18 @@ async function expandMetadataGraph({
 
                         if (shouldEnqueue) {
                             queued.add(nodeKey);
-                            queue.push({
+                            const queuedNode = {
                                 ...node,
                                 metadataName: node.name,
                                 depth: node.depth || (current.depth || 0) + 1
+                            };
+                            queue.push(queuedNode);
+                            logTracedEnterOrLeave({
+                                stage: 'STAGE 5 — expandMetadataGraph',
+                                collectionName: 'queue',
+                                event: 'ENTER (enqueue)',
+                                item: queuedNode,
+                                caller: 'expandMetadataGraph'
                             });
                         }
                     }
@@ -431,6 +541,76 @@ async function expandMetadataGraph({
                     .filter((node) => node.deployable === true)
                     .map(nodeToDependency);
 
+                for (const ref of references) {
+                    logTracedEnterOrLeave({
+                        stage: 'STAGE 5 — expandMetadataGraph',
+                        collectionName: 'references',
+                        event: 'ENTER (mapped)',
+                        item: ref,
+                        caller: 'expandMetadataGraph'
+                    });
+                }
+
+                for (const dep of dependencies) {
+                    logTracedEnterOrLeave({
+                        stage: 'STAGE 5 — expandMetadataGraph',
+                        collectionName: 'dependencies',
+                        event: 'ENTER (mapped)',
+                        item: dep,
+                        caller: 'expandMetadataGraph'
+                    });
+                }
+
+                // TEMPORARY DEBUG — Phase 10.18 STAGE 5 final internal collections
+                logPipelineCollection({
+                    stage: 'STAGE 5 — inside expandMetadataGraph() final internals',
+                    collectionName: 'nodes (all nodeMap)',
+                    variableName: 'nodeMap',
+                    collection: [...nodeMap.values()],
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
+                logPipelineCollection({
+                    stage: 'STAGE 5 — inside expandMetadataGraph() final internals',
+                    collectionName: 'expansionBornNodes',
+                    variableName: 'expansionBornNodes',
+                    collection: expansionBornNodes,
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
+                logPipelineCollection({
+                    stage: 'STAGE 5 — inside expandMetadataGraph() final internals',
+                    collectionName: 'references',
+                    variableName: 'references',
+                    collection: references,
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
+                logPipelineCollection({
+                    stage: 'STAGE 5 — inside expandMetadataGraph() final internals',
+                    collectionName: 'dependencies',
+                    variableName: 'dependencies',
+                    collection: dependencies,
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
+                logPipelineCollection({
+                    stage: 'STAGE 5 — inside expandMetadataGraph() final internals',
+                    collectionName: 'visited keys (as name proxies)',
+                    variableName: 'visited',
+                    collection: [...visited].map((key) => ({
+                        name: String(key).includes(':')
+                            ? String(key).split(':').slice(1).join(':')
+                            : key,
+                        metadataType: String(key).includes(':')
+                            ? String(key).split(':')[0]
+                            : null
+                    })),
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph',
+                    note: 'visited is a Set of keys; projected to objects for trace matching'
+                });
+
                 const summary = {
                     iterations,
                     graphDepth,
@@ -450,6 +630,40 @@ async function expandMetadataGraph({
                     warnings.length ? warnings : '(none)'
                 );
                 logSection('Metadata Graph Expansion Summary');
+
+                // TEMPORARY DEBUG — Phase 10.18 STAGE 6
+                logPipelineCollection({
+                    stage: 'STAGE 6 — after expandMetadataGraph() return build',
+                    collectionName: 'discoveredNodes',
+                    variableName: 'expansionBornNodes',
+                    collection: expansionBornNodes,
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
+                logPipelineCollection({
+                    stage: 'STAGE 6 — after expandMetadataGraph() return build',
+                    collectionName: 'discoveredReferences',
+                    variableName: 'references',
+                    collection: references,
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
+                logPipelineCollection({
+                    stage: 'STAGE 6 — after expandMetadataGraph() return build',
+                    collectionName: 'discoveredDependencies',
+                    variableName: 'dependencies',
+                    collection: dependencies,
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
+                logPipelineCollection({
+                    stage: 'STAGE 6 — after expandMetadataGraph() return build',
+                    collectionName: 'discoveredEdges',
+                    variableName: 'discoveredEdges',
+                    collection: discoveredEdges,
+                    caller: 'expandMetadataGraph',
+                    method: 'expandMetadataGraph'
+                });
 
                 return {
                     discoveredNodes: expansionBornNodes,

@@ -2,6 +2,9 @@ const path = require('path');
 const {
     logCustomFieldLifecycleTrace
 } = require('../../customFieldLifecycleTrace.temp');
+const {
+    logPipelineCollection
+} = require('../../dependencyPipelineReconciliation.temp');
 
 const FIELD_META_SUFFIX = '.field-meta.xml';
 const OBJECT_META_SUFFIX = '.object-meta.xml';
@@ -519,6 +522,16 @@ const customObjectRelationshipDiscoverer = {
                             method: 'discoverInternalObjectDependencies',
                             lifecycleStage: 'Discovery',
                             accumulate: true
+                        });
+
+                        // TEMPORARY DEBUG — Phase 10.18 STAGE 1
+                        logPipelineCollection({
+                            stage: 'STAGE 1 — after discoverInternalObjectDependencies()',
+                            collectionName: `internalDependencies for ${objectApiName}`,
+                            variableName: 'internalDependencies',
+                            collection: internalDependencies,
+                            caller: 'customObjectRelationshipDiscoverer.discover',
+                            method: 'discoverInternalObjectDependencies'
                         });
 
                         relationships.push(...internalDependencies);
