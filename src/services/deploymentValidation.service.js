@@ -46,6 +46,10 @@ const {
 } = require('./deploymentPlannerCompatibility/contract/sourceCustomFieldShapeBuilder.service');
 const { logBookingTrace } = require('./bookingTrace.temp');
 const {
+    logCustomFieldLifecycleTrace,
+    logFinalCustomFieldLifecycleSummary
+} = require('./customFieldLifecycleTrace.temp');
+const {
     normalizeDeployableMetadata
 } = require('./deployableMetadataNormalizer.service');
 
@@ -540,6 +544,23 @@ async function validateDeployment({
             caller: 'validateDeployment',
             method: 'relationshipDiscoveryService.discoverRelationships'
         });
+
+        // TEMPORARY DEBUG — Phase 10.17 PART 2
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 2 — after discoverRelationships() in validateDeployment',
+            collection: 'discoveredRelationships',
+            items: discoveredRelationships,
+            caller: 'validateDeployment',
+            method: 'relationshipDiscoveryService.discoverRelationships'
+        });
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 2 — after discoverRelationships() in validateDeployment',
+            collection: 'enrichedRequiredDependencies',
+            items: enrichedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'relationshipDiscoveryService.discoverRelationships',
+            lifecycleStage: 'Relationship'
+        });
     } catch (error) {
         console.error('RELATIONSHIP DISCOVERY ERROR');
         console.error(error);
@@ -618,6 +639,15 @@ async function validateDeployment({
         method: 'graphExpansionService.expandMetadataGraph'
     });
 
+    // TEMPORARY DEBUG — Phase 10.17 PART 3
+    logCustomFieldLifecycleTrace({
+        stage: 'PART 3 — before graphExpansion.expandMetadataGraph()',
+        collection: 'requiredDependencies (enrichedRequiredDependencies)',
+        items: enrichedRequiredDependencies,
+        caller: 'validateDeployment',
+        method: 'graphExpansionService.expandMetadataGraph'
+    });
+
     try {
         const expansionResult = await graphExpansionService.expandMetadataGraph(
             {
@@ -654,6 +684,32 @@ async function validateDeployment({
                 expansionResult.discoveredReferences,
             caller: 'validateDeployment',
             method: 'graphExpansionService.expandMetadataGraph'
+        });
+
+        // TEMPORARY DEBUG — Phase 10.17 PART 4
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 4 — after graphExpansion.expandMetadataGraph()',
+            collection: 'expansionResult.discoveredDependencies',
+            items: expansionResult.discoveredDependencies,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 4 — after graphExpansion.expandMetadataGraph()',
+            collection: 'expansionResult.nodes',
+            items: expansionResult.nodes,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 4 — after graphExpansion.expandMetadataGraph()',
+            collection: 'expansionResult.references / discoveredReferences',
+            items:
+                expansionResult.references ||
+                expansionResult.discoveredReferences,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph',
+            lifecycleStage: 'Graph'
         });
 
         const expansionReferences =
@@ -889,6 +945,15 @@ async function validateDeployment({
             method: 'dependencyResolutionService.resolveDependencies'
         });
 
+        // TEMPORARY DEBUG — Phase 10.17 PART 5
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 5 — before dependencyResolution.resolveDependencies()',
+            collection: 'requiredDependencies (enrichedRequiredDependencies)',
+            items: enrichedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'dependencyResolutionService.resolveDependencies'
+        });
+
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
                 requiredDependencies: enrichedRequiredDependencies,
@@ -913,6 +978,17 @@ async function validateDeployment({
             items: resolvedRequiredDependencies,
             caller: 'validateDeployment',
             method: 'dependencyResolutionService.resolveDependencies'
+        });
+
+        // TEMPORARY DEBUG — Phase 10.17 PART 6
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 6 — after dependencyResolution.resolveDependencies()',
+            collection: 'resolvedDependencies',
+            items: resolvedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'dependencyResolutionService.resolveDependencies',
+            lifecycleStage: 'Resolution',
+            includeResolutionDetails: true
         });
     } catch (error) {
         console.error('DEPENDENCY RESOLUTION ERROR');
@@ -1046,6 +1122,15 @@ async function validateDeployment({
             method: 'deploymentPlannerService.applyPlannerOverrides'
         });
 
+        // TEMPORARY DEBUG — Phase 10.17 PART 7
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 7 — before planner applyPlannerOverrides()',
+            collection: 'planner input resolvedDependencies',
+            items: resolvedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
+        });
+
         const plannerResult = deploymentPlannerService.applyPlannerOverrides({
             selectedMetadata: artifactEnrichedSelectedMetadata,
             resolvedDependencies: resolvedRequiredDependencies,
@@ -1068,6 +1153,16 @@ async function validateDeployment({
             items: plannerResult?.resolvedDependencies,
             caller: 'validateDeployment',
             method: 'deploymentPlannerService.applyPlannerOverrides'
+        });
+
+        // TEMPORARY DEBUG — Phase 10.17 PART 8
+        logCustomFieldLifecycleTrace({
+            stage: 'PART 8 — after planner applyPlannerOverrides()',
+            collection: 'planner output resolvedDependencies',
+            items: plannerResult?.resolvedDependencies,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides',
+            lifecycleStage: 'Planner'
         });
 
         // TEMPORARY PLANNER DEBUG LOG — remove after Skip verification.
@@ -1239,6 +1334,15 @@ async function validateDeployment({
         method: 'deploymentPackageService.generateDeploymentPackage'
     });
 
+    // TEMPORARY DEBUG — Phase 10.17 PART 9
+    logCustomFieldLifecycleTrace({
+        stage: 'PART 9 — before generateDeploymentPackage()',
+        collection: 'deploymentPackage.requiredDependencies',
+        items: deploymentPackageWithResolvedDependencies.requiredDependencies,
+        caller: 'validateDeployment',
+        method: 'deploymentPackageService.generateDeploymentPackage'
+    });
+
     const generatedDeploymentPackage =
         deploymentPackageService.generateDeploymentPackage(
             deploymentPackageWithResolvedDependencies
@@ -1258,6 +1362,23 @@ async function validateDeployment({
         items: generatedDeploymentPackage?.metadata,
         caller: 'validateDeployment',
         method: 'deploymentPackageService.generateDeploymentPackage'
+    });
+
+    // TEMPORARY DEBUG — Phase 10.17 PART 10
+    logCustomFieldLifecycleTrace({
+        stage: 'PART 10 — after generateDeploymentPackage() (orchestration)',
+        collection: 'generatedDeploymentPackage.dependencies',
+        items: generatedDeploymentPackage?.dependencies,
+        caller: 'validateDeployment',
+        method: 'deploymentPackageService.generateDeploymentPackage'
+    });
+    logCustomFieldLifecycleTrace({
+        stage: 'PART 10 — after generateDeploymentPackage() (orchestration)',
+        collection: 'generatedDeploymentPackage.metadata',
+        items: generatedDeploymentPackage?.metadata,
+        caller: 'validateDeployment',
+        method: 'deploymentPackageService.generateDeploymentPackage',
+        lifecycleStage: 'Package'
     });
 
     // Report-only: explain WHY members exist in the generated package.
@@ -1518,6 +1639,16 @@ async function validateDeployment({
         method: 'packageXmlService.generateManifest'
     });
 
+    // TEMPORARY DEBUG — Phase 10.17 PART 11
+    logCustomFieldLifecycleTrace({
+        stage: 'PART 11 — before generatePackageXml() / generateManifest()',
+        collection: 'metadata passed into package.xml',
+        items: generatedDeploymentPackage?.metadata,
+        caller: 'validateDeployment',
+        method: 'packageXmlService.generateManifest',
+        lifecycleStage: 'Manifest'
+    });
+
     const generatedManifest = packageXmlService.generateManifest(
         generatedDeploymentPackage,
         {
@@ -1526,6 +1657,9 @@ async function validateDeployment({
             deploymentApiVersionPolicy
         }
     );
+
+    // TEMPORARY DEBUG — Phase 10.17 final lifecycle summary
+    logFinalCustomFieldLifecycleSummary();
 
     // TEMPORARY VERIFICATION LOG — remove after Deployment Planner verification.
     // Logs generated package.xml only; does not modify manifest or deployment behaviour.

@@ -9,6 +9,9 @@ const {
     METADATA_ORIGINS
 } = require('./metadataGraphOrigin.model');
 const { logBookingTrace } = require('../bookingTrace.temp');
+const {
+    logCustomFieldLifecycleTrace
+} = require('../customFieldLifecycleTrace.temp');
 
 const execAsync = util.promisify(exec);
 
@@ -893,6 +896,23 @@ async function discoverRelationships({
                     items: selectedMetadata,
                     caller: 'discoverRelationships',
                     method: 'discoverRelationships'
+                });
+
+                // TEMPORARY DEBUG — Phase 10.17 PART 2
+                logCustomFieldLifecycleTrace({
+                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
+                    collection: 'discoveredRelationships',
+                    items: relationships,
+                    caller: 'discoverRelationships',
+                    method: 'discoverRelationships'
+                });
+                logCustomFieldLifecycleTrace({
+                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
+                    collection: 'enrichedDependencies',
+                    items: enrichedDependencies,
+                    caller: 'discoverRelationships',
+                    method: 'discoverRelationships',
+                    lifecycleStage: 'Relationship'
                 });
 
                 return {

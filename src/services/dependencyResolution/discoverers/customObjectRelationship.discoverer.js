@@ -1,4 +1,7 @@
 const path = require('path');
+const {
+    logCustomFieldLifecycleTrace
+} = require('../../customFieldLifecycleTrace.temp');
 
 const FIELD_META_SUFFIX = '.field-meta.xml';
 const OBJECT_META_SUFFIX = '.object-meta.xml';
@@ -500,13 +503,25 @@ const customObjectRelationshipDiscoverer = {
 
                     try {
                         const objectXml = await readRepoFile(objectMetaPath);
-                        relationships.push(
-                            ...discoverInternalObjectDependencies(
+                        const internalDependencies =
+                            discoverInternalObjectDependencies(
                                 objectXml,
                                 objectApiName,
                                 depth
-                            )
-                        );
+                            );
+
+                        // TEMPORARY DEBUG — Phase 10.17 PART 1
+                        logCustomFieldLifecycleTrace({
+                            stage: 'PART 1 — after discoverInternalObjectDependencies()',
+                            collection: `internalDependencies (${objectApiName})`,
+                            items: internalDependencies,
+                            caller: 'customObjectRelationshipDiscoverer.discover',
+                            method: 'discoverInternalObjectDependencies',
+                            lifecycleStage: 'Discovery',
+                            accumulate: true
+                        });
+
+                        relationships.push(...internalDependencies);
                     } catch (error) {
                         warnings.push(
                             `Unable to read CustomObject metadata ${objectMetaPath}: ${
