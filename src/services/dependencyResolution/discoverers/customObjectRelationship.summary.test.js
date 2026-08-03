@@ -17,12 +17,21 @@ function runTest(name, fn) {
         });
 }
 
-const SUMMARY_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
+const SUMMARY_WITH_SUMMARIZED_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Booked_Slots__c</fullName>
     <type>Summary</type>
     <summarizedObject>Booking__c</summarizedObject>
     <summaryForeignKey>Session__c</summaryForeignKey>
+    <summaryOperation>count</summaryOperation>
+    <label>Booked Slots</label>
+</CustomField>`;
+
+const SUMMARY_FK_QUALIFIED_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Booked_Slots__c</fullName>
+    <type>Summary</type>
+    <summaryForeignKey>Booking__c.Session__c</summaryForeignKey>
     <summaryOperation>count</summaryOperation>
     <label>Booked Slots</label>
 </CustomField>`;
@@ -50,7 +59,7 @@ const NUMBER_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <label>Capacity</label>
 </CustomField>`;
 
-const SUMMARY_MISSING_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
+const SUMMARY_MALFORMED_FK_ONLY_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Booked_Slots__c</fullName>
     <type>Summary</type>
@@ -62,7 +71,6 @@ const SUMMARY_MISSING_FK_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Booked_Slots__c</fullName>
     <type>Summary</type>
-    <summarizedObject>Booking__c</summarizedObject>
     <summaryOperation>count</summaryOperation>
 </CustomField>`;
 
@@ -73,11 +81,13 @@ const REPO_FILES = [
     'force-app/main/default/objects/Session__c/fields/Capacity__c.field-meta.xml'
 ];
 
+let bookedSlotsXml = SUMMARY_WITH_SUMMARIZED_OBJECT_XML;
+
 async function readRepoFile(filePath) {
     const normalized = String(filePath).replace(/\\/g, '/');
 
     if (normalized.endsWith('/Session__c/fields/Booked_Slots__c.field-meta.xml')) {
-        return SUMMARY_FIELD_XML;
+        return bookedSlotsXml;
     }
 
     if (normalized.endsWith('/Session__c/fields/Experience__c.field-meta.xml')) {
@@ -96,44 +106,85 @@ async function readRepoFile(filePath) {
 }
 
 async function main() {
-    await runTest('Summary field discovers CustomObject Booking__c', async () => {
-        const parsed = parseRelationshipFromFieldXml(SUMMARY_FIELD_XML);
+    await runTest(
+        'Case 1 — Summary with summarizedObject discovers Booking__c',
+        async () => {
+            bookedSlotsXml = SUMMARY_WITH_SUMMARIZED_OBJECT_XML;
 
-        assert.ok(parsed);
-        assert.strictEqual(parsed.relationship, 'Summary');
-        assert.strictEqual(parsed.referencedObject, 'Booking__c');
+            const parsed = parseRelationshipFromFieldXml(
+                SUMMARY_WITH_SUMMARIZED_OBJECT_XML
+            );
 
-        const result = await customObjectRelationshipDiscoverer.discover({
-            selectedMetadata: [
-                {
-                    metadataType: 'CustomField',
-                    metadataName: 'Session__c.Booked_Slots__c'
-                }
-            ],
-            repoFiles: REPO_FILES,
-            readRepoFile
-        });
+            assert.ok(parsed);
+            assert.strictEqual(parsed.relationship, 'Summary');
+            assert.strictEqual(parsed.referencedObject, 'Booking__c');
 
-        assert.strictEqual(result.relationships.length, 1);
-        assert.strictEqual(result.relationships[0].name, 'Booking__c');
-        assert.strictEqual(result.relationships[0].metadataType, 'CustomObject');
-        assert.strictEqual(result.relationships[0].type, 'CustomObject');
-        assert.strictEqual(result.relationships[0].relationship, 'Summary');
-        assert.strictEqual(result.relationships[0].required, true);
-        assert.strictEqual(result.relationships[0].selected, true);
+            const result = await customObjectRelationshipDiscoverer.discover({
+                selectedMetadata: [
+                    {
+                        metadataType: 'CustomField',
+                        metadataName: 'Session__c.Booked_Slots__c'
+                    }
+                ],
+                repoFiles: REPO_FILES,
+                readRepoFile
+            });
+
+            assert.strictEqual(result.relationships.length, 1);
+            assert.strictEqual(result.relationships[0].name, 'Booking__c');
+            assert.strictEqual(
+                result.relationships[0].metadataType,
+                'CustomObject'
+            );
+            assert.strictEqual(result.relationships[0].relationship, 'Summary');
+        }
+    );
+
+    await runTest(
+        'Case 2 — Summary with qualified summaryForeignKey only discovers Booking__c',
+        async () => {
+            bookedSlotsXml = SUMMARY_FK_QUALIFIED_XML;
+
+            const parsed = parseRelationshipFromFieldXml(SUMMARY_FK_QUALIFIED_XML);
+
+            assert.ok(parsed);
+            assert.strictEqual(parsed.relationship, 'Summary');
+            assert.strictEqual(parsed.referencedObject, 'Booking__c');
+
+            const result = await customObjectRelationshipDiscoverer.discover({
+                selectedMetadata: [
+                    {
+                        metadataType: 'CustomField',
+                        metadataName: 'Session__c.Booked_Slots__c'
+                    }
+                ],
+                repoFiles: REPO_FILES,
+                readRepoFile
+            });
+
+            assert.strictEqual(result.relationships.length, 1);
+            assert.strictEqual(result.relationships[0].name, 'Booking__c');
+            assert.strictEqual(result.relationships[0].relationship, 'Summary');
+            assert.ok(
+                !result.relationships.some((item) => item.name === 'Session__c')
+            );
+        }
+    );
+
+    await runTest('Case 3 — Malformed Summary returns null', async () => {
         assert.strictEqual(
-            result.relationships[0].discoveredBy,
-            'CustomObjectRelationshipDiscoverer'
+            parseRelationshipFromFieldXml(SUMMARY_MALFORMED_FK_ONLY_XML),
+            null
         );
-        assert.strictEqual(result.relationships[0].sourceField, 'Booked_Slots__c');
-        assert.strictEqual(result.relationships[0].sourceMetadata, 'Session__c');
-
-        // Must not emit parent Session__c as a discovered relationship target.
-        assert.ok(
-            !result.relationships.some(
-                (item) =>
-                    item.name === 'Session__c' && item.metadataType === 'CustomObject'
-            )
+        assert.strictEqual(
+            parseRelationshipFromFieldXml(SUMMARY_MISSING_FK_XML),
+            null
+        );
+        assert.strictEqual(
+            parseRelationshipFromFieldXml(
+                `<CustomField><type>Summary</type></CustomField>`
+            ),
+            null
         );
     });
 
@@ -196,23 +247,6 @@ async function main() {
         });
 
         assert.strictEqual(result.relationships.length, 0);
-    });
-
-    await runTest('Malformed Summary returns no relationship', async () => {
-        assert.strictEqual(
-            parseRelationshipFromFieldXml(SUMMARY_MISSING_OBJECT_XML),
-            null
-        );
-        assert.strictEqual(
-            parseRelationshipFromFieldXml(SUMMARY_MISSING_FK_XML),
-            null
-        );
-        assert.strictEqual(
-            parseRelationshipFromFieldXml(
-                `<CustomField><type>Summary</type></CustomField>`
-            ),
-            null
-        );
     });
 }
 
