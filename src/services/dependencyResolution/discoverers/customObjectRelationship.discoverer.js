@@ -11,11 +11,13 @@ const OBJECT_META_SUFFIX = '.object-meta.xml';
 const DISCOVERER_ID = 'CustomObjectRelationshipDiscoverer';
 const DISCOVERY_METHOD = 'referenceTo';
 const INTERNAL_DISCOVERY_METHOD = 'objectInternalReference';
+const EXPRESSION_DISCOVERY_METHOD = 'expressionFieldReference';
 
 const RELATIONSHIP_TYPES = Object.freeze({
     Lookup: 'Lookup',
     MasterDetail: 'MasterDetail',
-    Summary: 'Summary'
+    Summary: 'Summary',
+    Formula: 'Formula'
 });
 
 const STANDARD_FIELDS = Object.freeze(
@@ -166,6 +168,19 @@ function extractXmlTagValue(content, tagName) {
     return match ? match[1].trim() : null;
 }
 
+/**
+ * Like extractXmlTagValue but allows multi-line formula bodies.
+ */
+function extractXmlTagValueMultiline(content, tagName) {
+    const pattern = new RegExp(
+        `<${tagName}>\\s*([\\s\\S]*?)\\s*</${tagName}>`,
+        'i'
+    );
+    const match = String(content || '').match(pattern);
+
+    return match ? match[1].trim() : null;
+}
+
 function extractAllXmlTagValues(content, tagName) {
     const pattern = new RegExp(
         `<${tagName}>\\s*([^<]+?)\\s*</${tagName}>`,
@@ -309,6 +324,269 @@ function resolveSummaryForeignKeyFieldName(summaryForeignKey) {
     }
 
     return `${objectName}.${fieldName}`;
+}
+
+/**
+ * Map formula relationship token Session__r → Session__c field API name.
+ */
+function relationshipRefToFieldApiName(relationshipRef) {
+    const trimmed = String(relationshipRef || '').trim();
+
+    if (!trimmed.toLowerCase().endsWith('__r')) {
+        return null;
+    }
+
+    return `${trimmed.slice(0, -3)}__c`;
+}
+
+/**
+ * Build Session__r → referencedObject map from Lookup/MasterDetail field XML.
+ */
+function buildRelationshipTargetMapFromFieldXmls(fieldXmlByApiName) {
+    const map = new Map();
+
+    if (!(fieldXmlByApiName instanceof Map)) {
+        return map;
+    }
+
+    for (const [fieldApiName, fieldXml] of fieldXmlByApiName.entries()) {
+        const fieldType = extractXmlTagValue(fieldXml, 'type');
+
+        if (
+            fieldType !== RELATIONSHIP_TYPES.Lookup &&
+            fieldType !== RELATIONSHIP_TYPES.MasterDetail
+        ) {
+            continue;
+        }
+
+        const referenceTo = extractXmlTagValue(fieldXml, 'referenceTo');
+
+        if (!isCustomObjectApiName(referenceTo)) {
+            continue;
+        }
+
+        if (!String(fieldApiName || '').toLowerCase().endsWith('__c')) {
+            continue;
+        }
+
+        const relationshipRef = `${String(fieldApiName).slice(0, -3)}__r`;
+        map.set(relationshipRef, referenceTo);
+    }
+
+    return map;
+}
+
+function collectFieldExpressionTexts(fieldXml) {
+    const texts = [];
+    const formula = extractXmlTagValueMultiline(fieldXml, 'formula');
+
+    if (formula) {
+        texts.push(formula);
+    }
+
+    for (const block of extractXmlBlocks(fieldXml, 'summaryFilterItems')) {
+        const filterField = extractXmlTagValue(block, 'field');
+
+        if (filterField) {
+            texts.push(filterField);
+        }
+    }
+
+    return texts;
+}
+
+function shouldDiscoverExpressionFieldDependencies(fieldXml) {
+    const fieldType = extractXmlTagValue(fieldXml, 'type');
+
+    if (
+        fieldType === RELATIONSHIP_TYPES.Formula ||
+        fieldType === RELATIONSHIP_TYPES.Summary
+    ) {
+        return true;
+    }
+
+    return Boolean(extractXmlTagValueMultiline(fieldXml, 'formula'));
+}
+
+/**
+ * Resolve custom field references inside Formula / Summary filter expressions.
+ * Returns qualified CustomField API names (Object.Field__c). Does not emit
+ * Lookup / MasterDetail / Summary object-relationship records.
+ */
+function extractExpressionCustomFieldNames(
+    fieldXml,
+    ownerObjectApiName,
+    relationshipTargetMap = new Map()
+) {
+    if (!shouldDiscoverExpressionFieldDependencies(fieldXml)) {
+        return [];
+    }
+
+    const fieldType = extractXmlTagValue(fieldXml, 'type');
+    let bareFieldOwner = ownerObjectApiName;
+
+    if (fieldType === RELATIONSHIP_TYPES.Summary) {
+        const summarizedObject = extractXmlTagValue(
+            fieldXml,
+            'summarizedObject'
+        );
+        const summaryForeignKey = extractXmlTagValue(
+            fieldXml,
+            'summaryForeignKey'
+        );
+        const childObject = resolveSummaryReferencedObject(
+            summarizedObject,
+            summaryForeignKey
+        );
+
+        if (childObject) {
+            bareFieldOwner = childObject;
+        }
+    }
+
+    if (!bareFieldOwner) {
+        return [];
+    }
+
+    const qualified = new Set();
+
+    for (const expressionText of collectFieldExpressionTexts(fieldXml)) {
+        const text = String(expressionText || '');
+
+        for (const match of text.matchAll(
+            /\b([A-Za-z][\w]*__r)\.([A-Za-z][\w]*__c)\b/gi
+        )) {
+            const relationshipRef = match[1];
+            const fieldApiName = match[2];
+
+            if (!isCustomFieldApiToken(fieldApiName)) {
+                continue;
+            }
+
+            let relatedObject =
+                relationshipTargetMap.get(relationshipRef) || null;
+
+            if (!relatedObject) {
+                const relFieldApi = relationshipRefToFieldApiName(
+                    relationshipRef
+                );
+
+                if (isCustomObjectApiName(relFieldApi)) {
+                    // Heuristic fallback when sibling relationship metadata
+                    // is unavailable: Session__r → Session__c object.
+                    relatedObject = relFieldApi;
+                }
+            }
+
+            if (!isCustomObjectApiName(relatedObject)) {
+                continue;
+            }
+
+            qualified.add(`${relatedObject}.${fieldApiName}`);
+        }
+
+        for (const match of text.matchAll(
+            /\b([A-Za-z][\w]*__c)\.([A-Za-z][\w]*__c)\b/g
+        )) {
+            const objectName = match[1];
+            const fieldApiName = match[2];
+
+            if (
+                !isCustomObjectApiName(objectName) ||
+                !isCustomFieldApiToken(fieldApiName)
+            ) {
+                continue;
+            }
+
+            qualified.add(`${objectName}.${fieldApiName}`);
+        }
+
+        const withoutQualifiedAndRelationships = text
+            .replace(/\b[A-Za-z][\w]*__r\.[A-Za-z][\w]*__c\b/gi, ' ')
+            .replace(/\b[A-Za-z][\w]*__c\.[A-Za-z][\w]*__c\b/g, ' ');
+
+        for (const match of withoutQualifiedAndRelationships.matchAll(
+            /\b([A-Za-z][\w]*__c)\b/g
+        )) {
+            const token = match[1];
+
+            if (!isCustomFieldApiToken(token)) {
+                continue;
+            }
+
+            if (token === bareFieldOwner) {
+                continue;
+            }
+
+            qualified.add(`${bareFieldOwner}.${token}`);
+        }
+    }
+
+    return [...qualified];
+}
+
+/**
+ * Emit CustomField dependency records for Formula / Summary expression refs.
+ */
+function discoverExpressionFieldDependencies({
+    fieldXml,
+    ownerObjectApiName,
+    sourceField = null,
+    sourceMetadata = null,
+    depth = 1,
+    relationshipTargetMap = new Map()
+} = {}) {
+    if (!fieldXml || !ownerObjectApiName) {
+        return [];
+    }
+
+    const selfName =
+        sourceField && ownerObjectApiName
+            ? `${ownerObjectApiName}.${sourceField}`
+            : null;
+    const fieldType = extractXmlTagValue(fieldXml, 'type');
+    const relationship =
+        fieldType === RELATIONSHIP_TYPES.Summary
+            ? RELATIONSHIP_TYPES.Summary
+            : RELATIONSHIP_TYPES.Formula;
+
+    const names = extractExpressionCustomFieldNames(
+        fieldXml,
+        ownerObjectApiName,
+        relationshipTargetMap
+    );
+    const seen = new Set();
+    const discovered = [];
+
+    for (const qualifiedName of names) {
+        if (!qualifiedName || seen.has(qualifiedName)) {
+            continue;
+        }
+
+        if (selfName && qualifiedName === selfName) {
+            continue;
+        }
+
+        seen.add(qualifiedName);
+
+        discovered.push(
+            createRelationshipRecord({
+                referencedObject: qualifiedName,
+                relationship,
+                sourceMetadata: sourceMetadata || ownerObjectApiName,
+                sourceField,
+                depth,
+                metadataType: 'CustomField',
+                discoveryMethod: EXPRESSION_DISCOVERY_METHOD,
+                reason:
+                    relationship === RELATIONSHIP_TYPES.Summary
+                        ? 'CustomField referenced by Roll-Up Summary expression.'
+                        : 'CustomField referenced by Formula expression.'
+            })
+        );
+    }
+
+    return discovered;
 }
 
 function parseRelationshipFromFieldXml(fieldXml) {
@@ -676,6 +954,8 @@ const customObjectRelationshipDiscoverer = {
                 const fieldFiles = normalizedRepoFiles.filter((repoFile) =>
                     isFieldFileForObject(repoFile, objectApiName)
                 );
+                const fieldXmlByApiName = new Map();
+                const fieldEntries = [];
 
                 for (const fieldFilePath of fieldFiles) {
                     if (scannedFieldPaths.has(fieldFilePath)) {
@@ -687,18 +967,16 @@ const customObjectRelationshipDiscoverer = {
 
                     try {
                         const fieldXml = await readRepoFile(fieldFilePath);
-                        const parsed = parseRelationshipFromFieldXml(fieldXml);
-
-                        if (!parsed) {
-                            continue;
-                        }
-
                         const sourceField = extractFieldApiName(fieldFilePath);
 
-                        pushParsedRelationshipRecords(relationships, parsed, {
-                            sourceMetadata: objectApiName,
-                            sourceField,
-                            depth
+                        if (sourceField) {
+                            fieldXmlByApiName.set(sourceField, fieldXml);
+                        }
+
+                        fieldEntries.push({
+                            fieldFilePath,
+                            fieldXml,
+                            sourceField
                         });
                     } catch (error) {
                         warnings.push(
@@ -707,6 +985,33 @@ const customObjectRelationshipDiscoverer = {
                             }`
                         );
                     }
+                }
+
+                const relationshipTargetMap =
+                    buildRelationshipTargetMapFromFieldXmls(fieldXmlByApiName);
+
+                for (const entry of fieldEntries) {
+                    const parsed = parseRelationshipFromFieldXml(entry.fieldXml);
+
+                    if (parsed) {
+                        pushParsedRelationshipRecords(relationships, parsed, {
+                            sourceMetadata: objectApiName,
+                            sourceField: entry.sourceField,
+                            depth
+                        });
+                    }
+
+                    // Additive: Formula / Summary expression CustomField deps.
+                    relationships.push(
+                        ...discoverExpressionFieldDependencies({
+                            fieldXml: entry.fieldXml,
+                            ownerObjectApiName: objectApiName,
+                            sourceField: entry.sourceField,
+                            sourceMetadata: objectApiName,
+                            depth,
+                            relationshipTargetMap
+                        })
+                    );
                 }
 
                 continue;
@@ -732,12 +1037,6 @@ const customObjectRelationshipDiscoverer = {
 
                 try {
                     const fieldXml = await readRepoFile(fieldFilePath);
-                    const parsed = parseRelationshipFromFieldXml(fieldXml);
-
-                    if (!parsed) {
-                        continue;
-                    }
-
                     const sourceField = extractFieldApiName(fieldFilePath);
                     const sourceMetadata =
                         getCustomObjectApiName(fieldFilePath, null) ||
@@ -745,11 +1044,67 @@ const customObjectRelationshipDiscoverer = {
                             ? item.metadataName.split('.')[0]
                             : null);
 
-                    pushParsedRelationshipRecords(relationships, parsed, {
-                        sourceMetadata,
-                        sourceField,
-                        depth
-                    });
+                    const parsed = parseRelationshipFromFieldXml(fieldXml);
+
+                    if (parsed) {
+                        pushParsedRelationshipRecords(relationships, parsed, {
+                            sourceMetadata,
+                            sourceField,
+                            depth
+                        });
+                    }
+
+                    let relationshipTargetMap = new Map();
+
+                    if (sourceMetadata) {
+                        const siblingXmlByApiName = new Map();
+                        const siblingFiles = normalizedRepoFiles.filter(
+                            (repoFile) =>
+                                isFieldFileForObject(repoFile, sourceMetadata)
+                        );
+
+                        for (const siblingPath of siblingFiles) {
+                            const siblingField =
+                                extractFieldApiName(siblingPath);
+
+                            if (!siblingField) {
+                                continue;
+                            }
+
+                            if (siblingPath === fieldFilePath) {
+                                siblingXmlByApiName.set(
+                                    siblingField,
+                                    fieldXml
+                                );
+                                continue;
+                            }
+
+                            try {
+                                siblingXmlByApiName.set(
+                                    siblingField,
+                                    await readRepoFile(siblingPath)
+                                );
+                            } catch (siblingError) {
+                                // Best-effort relationship map for __r resolution.
+                            }
+                        }
+
+                        relationshipTargetMap =
+                            buildRelationshipTargetMapFromFieldXmls(
+                                siblingXmlByApiName
+                            );
+                    }
+
+                    relationships.push(
+                        ...discoverExpressionFieldDependencies({
+                            fieldXml,
+                            ownerObjectApiName: sourceMetadata,
+                            sourceField,
+                            sourceMetadata,
+                            depth,
+                            relationshipTargetMap
+                        })
+                    );
                 } catch (error) {
                     warnings.push(
                         `Unable to read field metadata ${fieldFilePath}: ${
@@ -768,5 +1123,10 @@ const customObjectRelationshipDiscoverer = {
         };
     }
 };
+
+customObjectRelationshipDiscoverer.extractExpressionCustomFieldNames =
+    extractExpressionCustomFieldNames;
+customObjectRelationshipDiscoverer.discoverExpressionFieldDependencies =
+    discoverExpressionFieldDependencies;
 
 module.exports = customObjectRelationshipDiscoverer;
