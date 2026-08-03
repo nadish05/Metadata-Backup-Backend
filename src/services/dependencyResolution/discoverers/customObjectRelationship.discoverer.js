@@ -7,7 +7,8 @@ const DISCOVERY_METHOD = 'referenceTo';
 
 const RELATIONSHIP_TYPES = Object.freeze({
     Lookup: 'Lookup',
-    MasterDetail: 'MasterDetail'
+    MasterDetail: 'MasterDetail',
+    Summary: 'Summary'
 });
 
 function normalizePath(filePath) {
@@ -110,9 +111,42 @@ function isCustomObjectApiName(name) {
 
 function parseRelationshipFromFieldXml(fieldXml) {
     const fieldType = extractXmlTagValue(fieldXml, 'type');
+
+    if (!fieldType) {
+        return null;
+    }
+
+    // Roll-Up Summary → child CustomObject via summarizedObject.
+    // Requires both summarizedObject and summaryForeignKey.
+    // Does NOT emit the parent object (left side of CustomField name).
+    if (fieldType === RELATIONSHIP_TYPES.Summary) {
+        const summarizedObject = extractXmlTagValue(
+            fieldXml,
+            'summarizedObject'
+        );
+        const summaryForeignKey = extractXmlTagValue(
+            fieldXml,
+            'summaryForeignKey'
+        );
+
+        if (!summarizedObject || !summaryForeignKey) {
+            return null;
+        }
+
+        if (!isCustomObjectApiName(summarizedObject)) {
+            return null;
+        }
+
+        return {
+            relationship: RELATIONSHIP_TYPES.Summary,
+            referencedObject: summarizedObject
+        };
+    }
+
+    // Lookup / MasterDetail → referenceTo (unchanged).
     const referenceTo = extractXmlTagValue(fieldXml, 'referenceTo');
 
-    if (!fieldType || !referenceTo) {
+    if (!referenceTo) {
         return null;
     }
 
@@ -157,10 +191,11 @@ function createRelationshipRecord({
 }
 
 /**
- * Discover Lookup / MasterDetail referenced CustomObjects from field metadata.
+ * Discover Lookup / MasterDetail / Summary referenced CustomObjects from field metadata.
  */
 const customObjectRelationshipDiscoverer = {
     id: DISCOVERER_ID,
+    parseRelationshipFromFieldXml,
 
     async discover({ selectedMetadata, repoFiles, readRepoFile, depth = 1 }) {
         const relationships = [];
