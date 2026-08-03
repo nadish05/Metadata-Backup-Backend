@@ -5,6 +5,7 @@ const dependencyValidationService = require('./dependencyValidation.service');
 const deploymentReadinessService = require('./deploymentReadiness.service');
 const deploymentReadinessAnalysisService = require('./deploymentReadinessAnalysis.service');
 const formulaCompatibilityService = require('./formulaCompatibility.service');
+const deploymentCompatibilityPlanService = require('./deploymentCompatibility.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1257,6 +1258,73 @@ async function validateDeployment({
         };
     }
 
+    // Phase 10.24 — Deployment Compatibility Planner (warnings only).
+    // Distinct from dependency validation. Does not change deploy behavior.
+    let deploymentCompatibilityPlan = {
+        overallStatus: 'PASS',
+        compatibilityWarnings: [],
+        summary: {
+            warningCount: 0,
+            reason: null
+        }
+    };
+
+    try {
+        const compatibilityPlanFindings = [
+            ...(Array.isArray(compatibilityFindings)
+                ? compatibilityFindings
+                : []),
+            ...(Array.isArray(metadataValidation?.findings)
+                ? metadataValidation.findings
+                : []),
+            ...(Array.isArray(metadataValidation?.warnings)
+                ? metadataValidation.warnings
+                : []),
+            ...(Array.isArray(deploymentReadinessAnalysis?.findings)
+                ? deploymentReadinessAnalysis.findings
+                : []),
+            ...(Array.isArray(formulaCompatibility?.warnings)
+                ? formulaCompatibility.warnings
+                : [])
+        ];
+
+        deploymentCompatibilityPlan =
+            await deploymentCompatibilityPlanService.analyzeDeploymentCompatibilityPlan(
+                {
+                    generatedDeploymentPackage,
+                    formulaCompatibility,
+                    existingFindings: compatibilityPlanFindings,
+                    deploymentApiVersionPolicy,
+                    readFile: packageSourceReadFile
+                }
+            );
+    } catch (compatibilityPlanError) {
+        console.error('DEPLOYMENT COMPATIBILITY PLAN ERROR');
+        console.error(compatibilityPlanError);
+        deploymentCompatibilityPlan = {
+            overallStatus: 'WARNING',
+            compatibilityWarnings: [
+                {
+                    metadataName: null,
+                    metadataType: null,
+                    category: 'FORMULA_COMPILATION',
+                    severity: 'WARNING',
+                    message:
+                        compatibilityPlanError.message ||
+                        'Deployment compatibility planning failed.',
+                    recommendation:
+                        'Review destination compatibility manually before deploy.'
+                }
+            ],
+            summary: {
+                warningCount: 1,
+                reason:
+                    compatibilityPlanError.message ||
+                    'Deployment compatibility planning failed.'
+            }
+        };
+    }
+
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage,
@@ -1411,6 +1479,9 @@ async function validateDeployment({
         // Distinct from deploymentReadiness gate (READY/BLOCKED + canDeploy).
         deploymentReadinessAnalysis,
         formulaCompatibility,
+        deploymentCompatibilityPlan,
+        compatibilityWarnings:
+            deploymentCompatibilityPlan?.compatibilityWarnings || [],
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
