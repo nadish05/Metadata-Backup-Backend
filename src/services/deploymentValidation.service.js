@@ -44,6 +44,7 @@ const {
 const {
     buildSourceCustomFieldShapeIndexFromRepo
 } = require('./deploymentPlannerCompatibility/contract/sourceCustomFieldShapeBuilder.service');
+const { logBookingTrace } = require('./bookingTrace.temp');
 const {
     normalizeDeployableMetadata
 } = require('./deployableMetadataNormalizer.service');
@@ -523,6 +524,22 @@ async function validateDeployment({
             discoveryResult.graphExpansionSummary || graphExpansionSummary;
         discoveredRelationships =
             discoveryResult.discoveredRelationships || [];
+
+        // TEMPORARY DEBUG — Phase 10.13 Part 2 (validation orchestration)
+        logBookingTrace({
+            stage: 'PART 2 — after discoverRelationships() in validateDeployment',
+            collection: 'discoveredRelationships',
+            items: discoveredRelationships,
+            caller: 'validateDeployment',
+            method: 'relationshipDiscoveryService.discoverRelationships'
+        });
+        logBookingTrace({
+            stage: 'PART 2 — after discoverRelationships() in validateDeployment',
+            collection: 'enrichedRequiredDependencies',
+            items: enrichedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'relationshipDiscoveryService.discoverRelationships'
+        });
     } catch (error) {
         console.error('RELATIONSHIP DISCOVERY ERROR');
         console.error(error);
@@ -585,6 +602,22 @@ async function validateDeployment({
         };
     }
 
+    // TEMPORARY DEBUG — Phase 10.13 Part 3
+    logBookingTrace({
+        stage: 'PART 3 — before graphExpansion.expandMetadataGraph()',
+        collection: 'seed metadata (selectedMetadata)',
+        items: deploymentPackage.selectedMetadata,
+        caller: 'validateDeployment',
+        method: 'graphExpansionService.expandMetadataGraph'
+    });
+    logBookingTrace({
+        stage: 'PART 3 — before graphExpansion.expandMetadataGraph()',
+        collection: 'requiredDependencies (enrichedRequiredDependencies)',
+        items: enrichedRequiredDependencies,
+        caller: 'validateDeployment',
+        method: 'graphExpansionService.expandMetadataGraph'
+    });
+
     try {
         const expansionResult = await graphExpansionService.expandMetadataGraph(
             {
@@ -597,6 +630,31 @@ async function validateDeployment({
                     deploymentPackage.sourceBranch || deploymentPackage.branch
             }
         );
+
+        // TEMPORARY DEBUG — Phase 10.13 Part 4
+        logBookingTrace({
+            stage: 'PART 4 — after graphExpansion.expandMetadataGraph()',
+            collection: 'expansionResult.discoveredDependencies',
+            items: expansionResult.discoveredDependencies,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
+        logBookingTrace({
+            stage: 'PART 4 — after graphExpansion.expandMetadataGraph()',
+            collection: 'expansionResult.nodes',
+            items: expansionResult.nodes,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
+        logBookingTrace({
+            stage: 'PART 4 — after graphExpansion.expandMetadataGraph()',
+            collection: 'expansionResult.references / discoveredReferences',
+            items:
+                expansionResult.references ||
+                expansionResult.discoveredReferences,
+            caller: 'validateDeployment',
+            method: 'graphExpansionService.expandMetadataGraph'
+        });
 
         const expansionReferences =
             expansionResult.discoveredReferences || [];
@@ -822,6 +880,15 @@ async function validateDeployment({
         // Does not mutate planner inputs; analyzer receives enriched copies only.
         destinationStatesForAnalyzer = destinationStates;
 
+        // TEMPORARY DEBUG — Phase 10.13 Part 5
+        logBookingTrace({
+            stage: 'PART 5 — before dependencyResolution.resolveDependencies()',
+            collection: 'requiredDependencies (enrichedRequiredDependencies)',
+            items: enrichedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'dependencyResolutionService.resolveDependencies'
+        });
+
         const resolutionResult =
             await dependencyResolutionService.resolveDependencies({
                 requiredDependencies: enrichedRequiredDependencies,
@@ -838,6 +905,15 @@ async function validateDeployment({
             resolvedRequiredDependencies;
         dependencyResolutionSummary =
             resolutionResult.summary || dependencyResolutionSummary;
+
+        // TEMPORARY DEBUG — Phase 10.13 Part 6
+        logBookingTrace({
+            stage: 'PART 6 — after dependencyResolution.resolveDependencies()',
+            collection: 'resolvedDependencies',
+            items: resolvedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'dependencyResolutionService.resolveDependencies'
+        });
     } catch (error) {
         console.error('DEPENDENCY RESOLUTION ERROR');
         console.error(error);
@@ -954,12 +1030,44 @@ async function validateDeployment({
             )
         );
 
+        // TEMPORARY DEBUG — Phase 10.13 Part 7
+        logBookingTrace({
+            stage: 'PART 7 — before planner applyPlannerOverrides()',
+            collection: 'planner input selectedMetadata',
+            items: artifactEnrichedSelectedMetadata,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
+        });
+        logBookingTrace({
+            stage: 'PART 7 — before planner applyPlannerOverrides()',
+            collection: 'planner input resolvedDependencies',
+            items: resolvedRequiredDependencies,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
+        });
+
         const plannerResult = deploymentPlannerService.applyPlannerOverrides({
             selectedMetadata: artifactEnrichedSelectedMetadata,
             resolvedDependencies: resolvedRequiredDependencies,
             deploymentSelections: reservedDeploymentSelections,
             // Phase 2A: wired into planner; intentionally unused for decisions.
             plannerCompatibilityReport
+        });
+
+        // TEMPORARY DEBUG — Phase 10.13 Part 8
+        logBookingTrace({
+            stage: 'PART 8 — after planner applyPlannerOverrides()',
+            collection: 'planner output selectedMetadata',
+            items: plannerResult?.selectedMetadata,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
+        });
+        logBookingTrace({
+            stage: 'PART 8 — after planner applyPlannerOverrides()',
+            collection: 'planner output resolvedDependencies',
+            items: plannerResult?.resolvedDependencies,
+            caller: 'validateDeployment',
+            method: 'deploymentPlannerService.applyPlannerOverrides'
         });
 
         // TEMPORARY PLANNER DEBUG LOG — remove after Skip verification.
@@ -1122,10 +1230,35 @@ async function validateDeployment({
         requiredDependencies: resolvedRequiredDependencies
     };
 
+    // TEMPORARY DEBUG — Phase 10.13 Part 9
+    logBookingTrace({
+        stage: 'PART 9 — before generateDeploymentPackage()',
+        collection: 'deploymentPackage.requiredDependencies',
+        items: deploymentPackageWithResolvedDependencies.requiredDependencies,
+        caller: 'validateDeployment',
+        method: 'deploymentPackageService.generateDeploymentPackage'
+    });
+
     const generatedDeploymentPackage =
         deploymentPackageService.generateDeploymentPackage(
             deploymentPackageWithResolvedDependencies
         );
+
+    // TEMPORARY DEBUG — Phase 10.13 Part 10 (orchestration view after generate)
+    logBookingTrace({
+        stage: 'PART 10 — after generateDeploymentPackage() (orchestration)',
+        collection: 'generatedDeploymentPackage.dependencies',
+        items: generatedDeploymentPackage?.dependencies,
+        caller: 'validateDeployment',
+        method: 'deploymentPackageService.generateDeploymentPackage'
+    });
+    logBookingTrace({
+        stage: 'PART 10 — after generateDeploymentPackage() (orchestration)',
+        collection: 'generatedDeploymentPackage.metadata',
+        items: generatedDeploymentPackage?.metadata,
+        caller: 'validateDeployment',
+        method: 'deploymentPackageService.generateDeploymentPackage'
+    });
 
     // Report-only: explain WHY members exist in the generated package.
     // Must not influence package, validation, planner, manifest, workspace, or deploy.
@@ -1375,6 +1508,15 @@ async function validateDeployment({
             metadataSummary: generatedDeploymentPackage.summary
         })
     );
+
+    // TEMPORARY DEBUG — Phase 10.13 Part 11
+    logBookingTrace({
+        stage: 'PART 11 — before generatePackageXml() / generateManifest()',
+        collection: 'metadata passed into package.xml',
+        items: generatedDeploymentPackage?.metadata,
+        caller: 'validateDeployment',
+        method: 'packageXmlService.generateManifest'
+    });
 
     const generatedManifest = packageXmlService.generateManifest(
         generatedDeploymentPackage,

@@ -1,4 +1,8 @@
 const path = require('path');
+const {
+    logBookingTrace,
+    isBookingName
+} = require('../../bookingTrace.temp');
 
 const FIELD_META_SUFFIX = '.field-meta.xml';
 const OBJECT_META_SUFFIX = '.object-meta.xml';
@@ -251,6 +255,34 @@ const customObjectRelationshipDiscoverer = {
                         const fieldXml = await readRepoFile(fieldFilePath);
                         const parsed = parseRelationshipFromFieldXml(fieldXml);
 
+                        // TEMPORARY DEBUG — Phase 10.13 Part 1
+                        if (parsed && parsed.relationship === 'Summary') {
+                            const relationshipRecord = createRelationshipRecord({
+                                referencedObject: parsed.referencedObject,
+                                relationship: parsed.relationship,
+                                sourceMetadata: objectApiName,
+                                sourceField: extractFieldApiName(fieldFilePath),
+                                depth
+                            });
+
+                            logBookingTrace({
+                                stage: 'PART 1 — parseRelationshipFromFieldXml (Summary)',
+                                collection: 'parsed Summary relationship',
+                                contains: isBookingName(parsed.referencedObject),
+                                matches: isBookingName(parsed.referencedObject)
+                                    ? [relationshipRecord]
+                                    : [],
+                                caller: 'customObjectRelationshipDiscoverer.discover',
+                                method: 'parseRelationshipFromFieldXml',
+                                index: fieldFilePath,
+                                extra: {
+                                    summarizedObject: parsed.referencedObject,
+                                    relationship: parsed.relationship,
+                                    relationshipRecord
+                                }
+                            });
+                        }
+
                         if (!parsed) {
                             continue;
                         }
@@ -299,6 +331,40 @@ const customObjectRelationshipDiscoverer = {
                 try {
                     const fieldXml = await readRepoFile(fieldFilePath);
                     const parsed = parseRelationshipFromFieldXml(fieldXml);
+
+                    // TEMPORARY DEBUG — Phase 10.13 Part 1
+                    if (parsed && parsed.relationship === 'Summary') {
+                        const sourceField = extractFieldApiName(fieldFilePath);
+                        const sourceMetadata =
+                            getCustomObjectApiName(fieldFilePath, null) ||
+                            (item.metadataName && item.metadataName.includes('.')
+                                ? item.metadataName.split('.')[0]
+                                : null);
+                        const relationshipRecord = createRelationshipRecord({
+                            referencedObject: parsed.referencedObject,
+                            relationship: parsed.relationship,
+                            sourceMetadata,
+                            sourceField,
+                            depth
+                        });
+
+                        logBookingTrace({
+                            stage: 'PART 1 — parseRelationshipFromFieldXml (Summary)',
+                            collection: 'parsed Summary relationship',
+                            contains: isBookingName(parsed.referencedObject),
+                            matches: isBookingName(parsed.referencedObject)
+                                ? [relationshipRecord]
+                                : [],
+                            caller: 'customObjectRelationshipDiscoverer.discover',
+                            method: 'parseRelationshipFromFieldXml',
+                            index: fieldFilePath,
+                            extra: {
+                                summarizedObject: parsed.referencedObject,
+                                relationship: parsed.relationship,
+                                relationshipRecord
+                            }
+                        });
+                    }
 
                     if (!parsed) {
                         continue;

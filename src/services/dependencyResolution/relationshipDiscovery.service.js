@@ -8,6 +8,7 @@ const deploymentReviewService = require('../deploymentReview.service');
 const {
     METADATA_ORIGINS
 } = require('./metadataGraphOrigin.model');
+const { logBookingTrace } = require('../bookingTrace.temp');
 
 const execAsync = util.promisify(exec);
 
@@ -866,12 +867,37 @@ async function discoverRelationships({
 
                 logDiscoveryResults(relationships, summary);
 
+                const enrichedDependencies = mergeDependencies(
+                    existingDependencies,
+                    relationships
+                );
+
+                // TEMPORARY DEBUG — Phase 10.13 Part 2
+                logBookingTrace({
+                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
+                    collection: 'newRelationships (discoveredRelationships)',
+                    items: relationships,
+                    caller: 'discoverRelationships',
+                    method: 'discoverRelationships'
+                });
+                logBookingTrace({
+                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
+                    collection: 'newDependencies (enrichedDependencies)',
+                    items: enrichedDependencies,
+                    caller: 'discoverRelationships',
+                    method: 'discoverRelationships'
+                });
+                logBookingTrace({
+                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
+                    collection: 'newMetadata (selectedMetadata input; not mutated)',
+                    items: selectedMetadata,
+                    caller: 'discoverRelationships',
+                    method: 'discoverRelationships'
+                });
+
                 return {
                     discoveredRelationships: relationships,
-                    enrichedDependencies: mergeDependencies(
-                        existingDependencies,
-                        relationships
-                    ),
+                    enrichedDependencies,
                     summary,
                     graphExpansionSummary: expansionResult.graphExpansionSummary
                 };

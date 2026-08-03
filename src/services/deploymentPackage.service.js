@@ -311,12 +311,35 @@ function generateDeploymentPackage(deploymentPackage) {
         deploymentPackage.selectedTestClasses
     );
 
-    return {
+    const generatedDeploymentPackage = {
         metadata,
         dependencies,
         testClasses,
         summary: buildSummary(metadata, dependencies, testClasses)
     };
+
+    // TEMPORARY DEBUG — Phase 10.13 Part 10 (inside generateDeploymentPackage)
+    try {
+        const { logBookingTrace } = require('./bookingTrace.temp');
+        logBookingTrace({
+            stage: 'PART 10 — inside generateDeploymentPackage()',
+            collection: 'generatedDeploymentPackage.dependencies',
+            items: generatedDeploymentPackage.dependencies,
+            caller: 'generateDeploymentPackage',
+            method: 'generateDeploymentPackage'
+        });
+        logBookingTrace({
+            stage: 'PART 10 — inside generateDeploymentPackage()',
+            collection: 'generatedDeploymentPackage.metadata',
+            items: generatedDeploymentPackage.metadata,
+            caller: 'generateDeploymentPackage',
+            method: 'generateDeploymentPackage'
+        });
+    } catch (error) {
+        // Debug-only; never affect package generation.
+    }
+
+    return generatedDeploymentPackage;
 }
 
 module.exports = {
