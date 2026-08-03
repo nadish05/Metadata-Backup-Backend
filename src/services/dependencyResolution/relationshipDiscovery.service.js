@@ -8,13 +8,6 @@ const deploymentReviewService = require('../deploymentReview.service');
 const {
     METADATA_ORIGINS
 } = require('./metadataGraphOrigin.model');
-const { logBookingTrace } = require('../bookingTrace.temp');
-const {
-    logCustomFieldLifecycleTrace
-} = require('../customFieldLifecycleTrace.temp');
-const {
-    logPipelineCollection
-} = require('../dependencyPipelineReconciliation.temp');
 
 const execAsync = util.promisify(exec);
 
@@ -786,24 +779,6 @@ async function discoverRelationships({
 } = {}) {
     logSection('Relationship Discovery Engine');
 
-    // TEMPORARY DEBUG — Phase 10.18 STAGE 2 (inputs)
-    logPipelineCollection({
-        stage: 'STAGE 2 — before discoverRelationships() work',
-        collectionName: 'selectedMetadata input',
-        variableName: 'selectedMetadata',
-        collection: selectedMetadata,
-        caller: 'discoverRelationships',
-        method: 'discoverRelationships'
-    });
-    logPipelineCollection({
-        stage: 'STAGE 2 — before discoverRelationships() work',
-        collectionName: 'requiredDependencies input',
-        variableName: 'requiredDependencies',
-        collection: requiredDependencies,
-        caller: 'discoverRelationships',
-        method: 'discoverRelationships'
-    });
-
     const existingDependencies = normalizeExistingDependencies(
         requiredDependencies
     );
@@ -895,72 +870,6 @@ async function discoverRelationships({
                     existingDependencies,
                     relationships
                 );
-
-                // TEMPORARY DEBUG — Phase 10.13 Part 2
-                logBookingTrace({
-                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
-                    collection: 'newRelationships (discoveredRelationships)',
-                    items: relationships,
-                    caller: 'discoverRelationships',
-                    method: 'discoverRelationships'
-                });
-                logBookingTrace({
-                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
-                    collection: 'newDependencies (enrichedDependencies)',
-                    items: enrichedDependencies,
-                    caller: 'discoverRelationships',
-                    method: 'discoverRelationships'
-                });
-                logBookingTrace({
-                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
-                    collection: 'newMetadata (selectedMetadata input; not mutated)',
-                    items: selectedMetadata,
-                    caller: 'discoverRelationships',
-                    method: 'discoverRelationships'
-                });
-
-                // TEMPORARY DEBUG — Phase 10.17 PART 2
-                logCustomFieldLifecycleTrace({
-                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
-                    collection: 'discoveredRelationships',
-                    items: relationships,
-                    caller: 'discoverRelationships',
-                    method: 'discoverRelationships'
-                });
-                logCustomFieldLifecycleTrace({
-                    stage: 'PART 2 — relationshipDiscovery.discoverRelationships() return',
-                    collection: 'enrichedDependencies',
-                    items: enrichedDependencies,
-                    caller: 'discoverRelationships',
-                    method: 'discoverRelationships',
-                    lifecycleStage: 'Relationship'
-                });
-
-                // TEMPORARY DEBUG — Phase 10.18 STAGE 3
-                logPipelineCollection({
-                    stage: 'STAGE 3 — after discoverRelationships()',
-                    collectionName: 'discoveredRelationships / relationships',
-                    variableName: 'relationships',
-                    collection: relationships,
-                    caller: 'discoverRelationships',
-                    method: 'discoverRelationships'
-                });
-                logPipelineCollection({
-                    stage: 'STAGE 3 — after discoverRelationships()',
-                    collectionName: 'enrichedDependencies (mergeDependencies result)',
-                    variableName: 'enrichedDependencies',
-                    collection: enrichedDependencies,
-                    caller: 'discoverRelationships',
-                    method: 'discoverRelationships'
-                });
-                logPipelineCollection({
-                    stage: 'STAGE 3 — after discoverRelationships()',
-                    collectionName: 'existingDependencies (normalized input)',
-                    variableName: 'existingDependencies',
-                    collection: existingDependencies,
-                    caller: 'discoverRelationships',
-                    method: 'discoverRelationships'
-                });
 
                 return {
                     discoveredRelationships: relationships,

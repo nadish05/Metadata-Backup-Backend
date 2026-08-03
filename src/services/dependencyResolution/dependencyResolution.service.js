@@ -8,9 +8,6 @@ const {
     classifyDependency,
     classifyDependencies
 } = require('./dependencyClassification.service');
-const {
-    logPipelineCollection
-} = require('../dependencyPipelineReconciliation.temp');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -269,32 +266,6 @@ async function resolveDependencies({
 } = {}) {
     logSection('Dependency Resolution Engine');
 
-    // TEMPORARY DEBUG — Phase 10.18 STAGE 7
-    logPipelineCollection({
-        stage: 'STAGE 7 — before resolveDependencies() merge/classify',
-        collectionName: 'requiredDependencies (exact arg)',
-        variableName: 'requiredDependencies',
-        collection: requiredDependencies,
-        caller: 'resolveDependencies',
-        method: 'resolveDependencies'
-    });
-    logPipelineCollection({
-        stage: 'STAGE 7 — before resolveDependencies() merge/classify',
-        collectionName: 'discoveredReferences (exact arg)',
-        variableName: 'discoveredReferences',
-        collection: discoveredReferences,
-        caller: 'resolveDependencies',
-        method: 'resolveDependencies'
-    });
-    logPipelineCollection({
-        stage: 'STAGE 7 — before resolveDependencies() merge/classify',
-        collectionName: 'selectedMetadata (exact arg)',
-        variableName: 'selectedMetadata',
-        collection: selectedMetadata,
-        caller: 'resolveDependencies',
-        method: 'resolveDependencies'
-    });
-
     const dependencies = classifyDependencies(
         normalizeDependencyList(
             mergeDeployableReferences(
@@ -304,15 +275,6 @@ async function resolveDependencies({
         )
     );
 
-    logPipelineCollection({
-        stage: 'STAGE 7 — after merge+classify (collection actually resolved)',
-        collectionName: 'dependencies (merged+classified)',
-        variableName: 'dependencies',
-        collection: dependencies,
-        caller: 'resolveDependencies',
-        method: 'resolveDependencies'
-    });
-
     const resolvers = getRegisteredResolvers();
     const selectedMetadataKeys = buildSelectedMetadataKeys(selectedMetadata);
 
@@ -320,16 +282,6 @@ async function resolveDependencies({
         const summary = buildSummary([]);
         console.log('Dependencies analyzed: 0');
         logSection('Dependency Resolution Summary');
-
-        // TEMPORARY DEBUG — Phase 10.18 STAGE 8
-        logPipelineCollection({
-            stage: 'STAGE 8 — after resolveDependencies()',
-            collectionName: 'resolvedDependencies (empty)',
-            variableName: 'resolvedDependencies',
-            collection: [],
-            caller: 'resolveDependencies',
-            method: 'resolveDependencies'
-        });
 
         return {
             decisions: [],
@@ -380,16 +332,6 @@ async function resolveDependencies({
 
     const summary = buildSummary(decisions, warnings);
     logResolutionResults(decisions, summary);
-
-    // TEMPORARY DEBUG — Phase 10.18 STAGE 8
-    logPipelineCollection({
-        stage: 'STAGE 8 — after resolveDependencies()',
-        collectionName: 'resolvedDependencies / decisions',
-        variableName: 'decisions',
-        collection: decisions,
-        caller: 'resolveDependencies',
-        method: 'resolveDependencies'
-    });
 
     return {
         decisions,

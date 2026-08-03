@@ -300,33 +300,6 @@ function generateDeploymentPackage(deploymentPackage) {
         };
     }
 
-    // TEMPORARY DEBUG — Phase 10.18 STAGE 12 (before filtering)
-    try {
-        const {
-            logPipelineCollection
-        } = require('./dependencyPipelineReconciliation.temp');
-        logPipelineCollection({
-            stage: 'STAGE 12 — inside generateDeploymentPackage() BEFORE filter',
-            collectionName: 'raw requiredDependencies input',
-            variableName: 'deploymentPackage.requiredDependencies',
-            collection: deploymentPackage.requiredDependencies,
-            caller: 'generateDeploymentPackage',
-            method: 'generateDeploymentPackage',
-            note: 'Before shouldAutoIncludeDependency filtering'
-        });
-        logPipelineCollection({
-            stage: 'STAGE 12 — inside generateDeploymentPackage() BEFORE filter',
-            collectionName: 'raw selectedMetadata input',
-            variableName: 'deploymentPackage.selectedMetadata',
-            collection: deploymentPackage.selectedMetadata,
-            caller: 'generateDeploymentPackage',
-            method: 'generateDeploymentPackage',
-            note: 'Before compose/filter'
-        });
-    } catch (error) {
-        // Debug-only; never affect package generation.
-    }
-
     const metadata = composeMetadataWithRequiredDependencies(
         deploymentPackage.selectedMetadata,
         deploymentPackage.requiredDependencies
@@ -344,77 +317,6 @@ function generateDeploymentPackage(deploymentPackage) {
         testClasses,
         summary: buildSummary(metadata, dependencies, testClasses)
     };
-
-    // TEMPORARY DEBUG — Phase 10.13 Part 10 (inside generateDeploymentPackage)
-    try {
-        const { logBookingTrace } = require('./bookingTrace.temp');
-        logBookingTrace({
-            stage: 'PART 10 — inside generateDeploymentPackage()',
-            collection: 'generatedDeploymentPackage.dependencies',
-            items: generatedDeploymentPackage.dependencies,
-            caller: 'generateDeploymentPackage',
-            method: 'generateDeploymentPackage'
-        });
-        logBookingTrace({
-            stage: 'PART 10 — inside generateDeploymentPackage()',
-            collection: 'generatedDeploymentPackage.metadata',
-            items: generatedDeploymentPackage.metadata,
-            caller: 'generateDeploymentPackage',
-            method: 'generateDeploymentPackage'
-        });
-    } catch (error) {
-        // Debug-only; never affect package generation.
-    }
-
-    // TEMPORARY DEBUG — Phase 10.17 PART 10 (inside generateDeploymentPackage)
-    try {
-        const {
-            logCustomFieldLifecycleTrace
-        } = require('./customFieldLifecycleTrace.temp');
-        logCustomFieldLifecycleTrace({
-            stage: 'PART 10 — inside generateDeploymentPackage()',
-            collection: 'generatedDeploymentPackage.dependencies',
-            items: generatedDeploymentPackage.dependencies,
-            caller: 'generateDeploymentPackage',
-            method: 'generateDeploymentPackage'
-        });
-        logCustomFieldLifecycleTrace({
-            stage: 'PART 10 — inside generateDeploymentPackage()',
-            collection: 'generatedDeploymentPackage.metadata',
-            items: generatedDeploymentPackage.metadata,
-            caller: 'generateDeploymentPackage',
-            method: 'generateDeploymentPackage'
-        });
-    } catch (error) {
-        // Debug-only; never affect package generation.
-    }
-
-    // TEMPORARY DEBUG — Phase 10.18 STAGE 12 (after filtering)
-    try {
-        const {
-            logPipelineCollection
-        } = require('./dependencyPipelineReconciliation.temp');
-        logPipelineCollection({
-            stage: 'STAGE 12 — inside generateDeploymentPackage() AFTER filter',
-            collectionName: 'filtered dependencies',
-            variableName: 'generatedDeploymentPackage.dependencies',
-            collection: generatedDeploymentPackage.dependencies,
-            caller: 'generateDeploymentPackage',
-            method: 'generateDeploymentPackage',
-            note: 'After shouldAutoIncludeDependency filtering'
-        });
-        logPipelineCollection({
-            stage: 'STAGE 12 — inside generateDeploymentPackage() AFTER filter',
-            collectionName: 'composed metadata',
-            variableName: 'generatedDeploymentPackage.metadata',
-            collection: generatedDeploymentPackage.metadata,
-            caller: 'generateDeploymentPackage',
-            method: 'generateDeploymentPackage',
-            note: 'After composeMetadataWithRequiredDependencies'
-        });
-    } catch (error) {
-        // Debug-only; never affect package generation.
-    }
 
     return generatedDeploymentPackage;
 }

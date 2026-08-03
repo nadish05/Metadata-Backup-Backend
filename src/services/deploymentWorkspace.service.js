@@ -8,17 +8,6 @@ const { METADATA_TYPE_RULES, isBundleMetadataType, getMetadataTypeRule } = requi
 const {
     CHILD_METADATA_CONFIG
 } = require('./deploymentReview/customObjectChildMetadataAnalyzer.service');
-const {
-    isTracedItem,
-    getItemName,
-    logStage1PackageInputs,
-    logStage2BeforeCopy,
-    logStage3AfterCopy,
-    logStage4VerifyWorkspace,
-    logStage5BeforeCli,
-    logSelectedButNotCopied,
-    logFinalWorkspaceMaterializationReport
-} = require('./workspaceMaterializationTrace.temp');
 
 const execAsync = util.promisify(exec);
 const mkdir = util.promisify(fs.mkdir);
@@ -621,24 +610,8 @@ async function copyMetadataItems({
             item.metadataName,
             resolvedPath
         );
-        const traced = isTracedItem(item);
-        const tracedName = getItemName(item);
 
         if (!resolvedPath) {
-            // TEMPORARY DEBUG — Phase 10.19 STAGE 2 (unresolved)
-            if (traced) {
-                await logStage2BeforeCopy({
-                    componentName: tracedName,
-                    resolvedSourceRelativePath: null,
-                    absoluteSourcePath: null
-                });
-                await logStage3AfterCopy({
-                    componentName: tracedName,
-                    destinationPath: null,
-                    copied: false
-                });
-            }
-
             missingFiles.push(missingLabel);
             continue;
         }
@@ -652,61 +625,17 @@ async function copyMetadataItems({
         let itemMissing = false;
 
         if (!filesToCopy.length) {
-            if (traced) {
-                await logStage2BeforeCopy({
-                    componentName: tracedName,
-                    resolvedSourceRelativePath: resolvedPath,
-                    absoluteSourcePath: path.join(
-                        repoPath,
-                        ...resolvedPath.replace(/\\/g, '/').split('/')
-                    )
-                });
-                await logStage3AfterCopy({
-                    componentName: tracedName,
-                    destinationPath: null,
-                    copied: false
-                });
-            }
-
             missingFiles.push(missingLabel);
             continue;
         }
 
         for (const filePath of filesToCopy) {
-            const normalizedPath = filePath.replace(/\\/g, '/');
-            const absoluteSourcePath = path.join(
-                repoPath,
-                ...normalizedPath.split('/')
-            );
-            const destinationPath = path.join(
-                workspacePath,
-                ...normalizedPath.split('/')
-            );
-
-            // TEMPORARY DEBUG — Phase 10.19 STAGE 2
-            if (traced) {
-                await logStage2BeforeCopy({
-                    componentName: tracedName,
-                    resolvedSourceRelativePath: normalizedPath,
-                    absoluteSourcePath
-                });
-            }
-
             const copied = await copyRepositoryFile({
                 repoPath,
                 workspacePath,
                 relativeFilePath: filePath,
                 workspaceStats
             });
-
-            // TEMPORARY DEBUG — Phase 10.19 STAGE 3
-            if (traced) {
-                await logStage3AfterCopy({
-                    componentName: tracedName,
-                    destinationPath,
-                    copied
-                });
-            }
 
             if (copied) {
                 itemCopied = true;
@@ -758,24 +687,8 @@ async function copyDependencyItems({
             dependency.name,
             resolvedPath
         );
-        const traced = isTracedItem(dependencyAsItem);
-        const tracedName = getItemName(dependencyAsItem);
 
         if (!resolvedPath) {
-            // TEMPORARY DEBUG — Phase 10.19 STAGE 2 (unresolved)
-            if (traced) {
-                await logStage2BeforeCopy({
-                    componentName: tracedName,
-                    resolvedSourceRelativePath: null,
-                    absoluteSourcePath: null
-                });
-                await logStage3AfterCopy({
-                    componentName: tracedName,
-                    destinationPath: null,
-                    copied: false
-                });
-            }
-
             missingFiles.push(missingLabel);
             continue;
         }
@@ -789,61 +702,17 @@ async function copyDependencyItems({
         let itemMissing = false;
 
         if (!filesToCopy.length) {
-            if (traced) {
-                await logStage2BeforeCopy({
-                    componentName: tracedName,
-                    resolvedSourceRelativePath: resolvedPath,
-                    absoluteSourcePath: path.join(
-                        repoPath,
-                        ...resolvedPath.replace(/\\/g, '/').split('/')
-                    )
-                });
-                await logStage3AfterCopy({
-                    componentName: tracedName,
-                    destinationPath: null,
-                    copied: false
-                });
-            }
-
             missingFiles.push(missingLabel);
             continue;
         }
 
         for (const filePath of filesToCopy) {
-            const normalizedPath = filePath.replace(/\\/g, '/');
-            const absoluteSourcePath = path.join(
-                repoPath,
-                ...normalizedPath.split('/')
-            );
-            const destinationPath = path.join(
-                workspacePath,
-                ...normalizedPath.split('/')
-            );
-
-            // TEMPORARY DEBUG — Phase 10.19 STAGE 2
-            if (traced) {
-                await logStage2BeforeCopy({
-                    componentName: tracedName,
-                    resolvedSourceRelativePath: normalizedPath,
-                    absoluteSourcePath
-                });
-            }
-
             const copied = await copyRepositoryFile({
                 repoPath,
                 workspacePath,
                 relativeFilePath: filePath,
                 workspaceStats
             });
-
-            // TEMPORARY DEBUG — Phase 10.19 STAGE 3
-            if (traced) {
-                await logStage3AfterCopy({
-                    componentName: tracedName,
-                    destinationPath,
-                    copied
-                });
-            }
 
             if (copied) {
                 itemCopied = true;
@@ -963,9 +832,6 @@ async function buildDeploymentWorkspace({
 }) {
     logSection('Workspace Builder Started');
 
-    // TEMPORARY DEBUG — Phase 10.19 STAGE 1
-    logStage1PackageInputs(generatedDeploymentPackage);
-
     const missingFiles = [];
 
     if (!repoUrl || !sourceBranch) {
@@ -974,8 +840,6 @@ async function buildDeploymentWorkspace({
             status: 'BLOCKED'
         });
         logWorkspaceSummary(result);
-        // TEMPORARY DEBUG — Phase 10.19 STAGE 6
-        logFinalWorkspaceMaterializationReport();
         return result;
     }
 
@@ -987,8 +851,6 @@ async function buildDeploymentWorkspace({
             status: 'BLOCKED'
         });
         logWorkspaceSummary(result);
-        // TEMPORARY DEBUG — Phase 10.19 STAGE 6
-        logFinalWorkspaceMaterializationReport();
         return result;
     }
 
@@ -1061,23 +923,6 @@ async function buildDeploymentWorkspace({
     });
 
     logWorkspaceSummary(result);
-
-    // TEMPORARY DEBUG — Phase 10.19 STAGE 4 / 5 / 6
-    // Stage 5 runs here (workspace handoff) without touching Deployment Execution.
-    logSelectedButNotCopied();
-
-    if (workspaceCreated) {
-        await logStage4VerifyWorkspace(workspacePath);
-        await logStage5BeforeCli({
-            workspacePath,
-            metadataCount: metadata.length,
-            dependencyCount: dependencies.length,
-            workspaceFileCount: workspaceStats.copiedFiles,
-            copiedFilePaths: workspaceStats.copiedFilePaths
-        });
-    }
-
-    logFinalWorkspaceMaterializationReport();
 
     return result;
 }
