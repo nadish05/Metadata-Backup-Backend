@@ -6,6 +6,7 @@ const deploymentReadinessService = require('./deploymentReadiness.service');
 const deploymentReadinessAnalysisService = require('./deploymentReadinessAnalysis.service');
 const formulaCompatibilityService = require('./formulaCompatibility.service');
 const deploymentCompatibilityPlanService = require('./deploymentCompatibility.service');
+const deploymentCompatibilityFilterService = require('./deploymentCompatibilityFilter.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -962,7 +963,7 @@ async function validateDeployment({
         requiredDependencies: resolvedRequiredDependencies
     };
 
-    const generatedDeploymentPackage =
+    let generatedDeploymentPackage =
         deploymentPackageService.generateDeploymentPackage(
             deploymentPackageWithResolvedDependencies
         );
@@ -1325,6 +1326,48 @@ async function validateDeployment({
         };
     }
 
+    // Phase 11.1 — Compatibility Package Filter (AUTO EXCLUDE).
+    // Removes only incompatible package members; does not block deployment.
+    let compatibilityPackageFilter = {
+        excludedComponents: [],
+        compatibilitySummary: {
+            totalExcluded: 0,
+            totalRemaining: 0,
+            excludedByCategory: {}
+        }
+    };
+
+    try {
+        const filterResult = deploymentCompatibilityFilterService.filter({
+            generatedDeploymentPackage,
+            deploymentCompatibilityPlan
+        });
+
+        generatedDeploymentPackage = filterResult.deploymentPackage;
+        compatibilityPackageFilter = {
+            excludedComponents: filterResult.excludedComponents || [],
+            compatibilitySummary: filterResult.compatibilitySummary || {
+                totalExcluded: 0,
+                totalRemaining: 0,
+                excludedByCategory: {}
+            }
+        };
+    } catch (compatibilityFilterError) {
+        console.error('COMPATIBILITY PACKAGE FILTER ERROR');
+        console.error(compatibilityFilterError);
+        // Fail-open: keep unfiltered package so deployment behavior is unchanged.
+        compatibilityPackageFilter = {
+            excludedComponents: [],
+            compatibilitySummary: {
+                totalExcluded: 0,
+                totalRemaining:
+                    (generatedDeploymentPackage?.metadata || []).length +
+                    (generatedDeploymentPackage?.dependencies || []).length,
+                excludedByCategory: {}
+            }
+        };
+    }
+
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage,
@@ -1482,6 +1525,9 @@ async function validateDeployment({
         deploymentCompatibilityPlan,
         compatibilityWarnings:
             deploymentCompatibilityPlan?.compatibilityWarnings || [],
+        compatibilityPackageFilter,
+        excludedComponents:
+            compatibilityPackageFilter?.excludedComponents || [],
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
