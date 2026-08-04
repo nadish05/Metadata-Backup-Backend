@@ -10,6 +10,7 @@ const deploymentCompatibilityFilterService = require('./deploymentCompatibilityF
 const deploymentCompatibilityImpactService = require('./deploymentCompatibilityImpact.service');
 const deploymentCompatibilityGateService = require('./deploymentCompatibilityGate.service');
 const deploymentCompatibilityAdvisorService = require('./deploymentCompatibilityAdvisor.service');
+const deploymentPreviewService = require('./deploymentPreview.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1454,6 +1455,22 @@ async function validateDeployment({
             }
         );
 
+    // Phase 12.1 — Enterprise Deployment Preview (read-only).
+    // Describes post-compatibility deployable set. Does not change behavior.
+    const deploymentPreview = deploymentPreviewService.buildDeploymentPreviewSafe(
+        {
+            generatedDeploymentPackage,
+            deploymentReadiness,
+            deploymentCompatibilityAdvisor,
+            excludedComponents:
+                compatibilityPackageFilter?.excludedComponents || [],
+            blockingComponents:
+                deploymentCompatibilityImpact?.blockingComponents || [],
+            compatibilityWarnings:
+                deploymentCompatibilityPlan?.compatibilityWarnings || []
+        }
+    );
+
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage,
@@ -1640,6 +1657,7 @@ async function validateDeployment({
             blockingByCategory: {}
         },
         deploymentCompatibilityAdvisor,
+        deploymentPreview,
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
