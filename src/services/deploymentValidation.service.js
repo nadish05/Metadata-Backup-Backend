@@ -9,6 +9,7 @@ const deploymentCompatibilityPlanService = require('./deploymentCompatibility.se
 const deploymentCompatibilityFilterService = require('./deploymentCompatibilityFilter.service');
 const deploymentCompatibilityImpactService = require('./deploymentCompatibilityImpact.service');
 const deploymentCompatibilityGateService = require('./deploymentCompatibilityGate.service');
+const deploymentCompatibilityAdvisorService = require('./deploymentCompatibilityAdvisor.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1436,6 +1437,23 @@ async function validateDeployment({
     deploymentReadiness.compatibilitySummary =
         compatibilityDeploymentReadiness.summary;
 
+    // Phase 11.6 — Enterprise Compatibility Advisor (read-only guidance).
+    // Does not change package, readiness, gate, workspace, or CLI behavior.
+    const deploymentCompatibilityAdvisor =
+        deploymentCompatibilityAdvisorService.buildDeploymentCompatibilityAdvisorSafe(
+            {
+                deploymentCompatibilityPlan,
+                deploymentCompatibilityImpact,
+                deploymentReadiness,
+                excludedComponents:
+                    compatibilityPackageFilter?.excludedComponents || [],
+                blockingComponents:
+                    deploymentCompatibilityImpact?.blockingComponents || [],
+                compatibilityWarnings:
+                    deploymentCompatibilityPlan?.compatibilityWarnings || []
+            }
+        );
+
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage,
@@ -1621,6 +1639,7 @@ async function validateDeployment({
             blockingByMetadataType: {},
             blockingByCategory: {}
         },
+        deploymentCompatibilityAdvisor,
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
