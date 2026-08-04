@@ -7,6 +7,7 @@ const deploymentReadinessAnalysisService = require('./deploymentReadinessAnalysi
 const formulaCompatibilityService = require('./formulaCompatibility.service');
 const deploymentCompatibilityPlanService = require('./deploymentCompatibility.service');
 const deploymentCompatibilityFilterService = require('./deploymentCompatibilityFilter.service');
+const deploymentCompatibilityImpactService = require('./deploymentCompatibilityImpact.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1368,6 +1369,41 @@ async function validateDeployment({
         };
     }
 
+    // Phase 11.2 — Compatibility Dependency Impact Analysis (report-only).
+    // Does not modify package, workspace, manifest, or CLI.
+    let deploymentCompatibilityImpact = {
+        blockingComponents: [],
+        blockingSummary: {
+            totalBlocking: 0,
+            blockingByMetadataType: {},
+            blockingByCategory: {}
+        }
+    };
+
+    try {
+        deploymentCompatibilityImpact =
+            deploymentCompatibilityImpactService.analyze({
+                filteredDeploymentPackage: generatedDeploymentPackage,
+                excludedComponents:
+                    compatibilityPackageFilter?.excludedComponents || [],
+                resolvedDependencies: resolvedRequiredDependencies,
+                discoveredRelationships,
+                discoveredReferences,
+                dependencyExplorer
+            });
+    } catch (compatibilityImpactError) {
+        console.error('COMPATIBILITY IMPACT ANALYSIS ERROR');
+        console.error(compatibilityImpactError);
+        deploymentCompatibilityImpact = {
+            blockingComponents: [],
+            blockingSummary: {
+                totalBlocking: 0,
+                blockingByMetadataType: {},
+                blockingByCategory: {}
+            }
+        };
+    }
+
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage,
@@ -1528,6 +1564,14 @@ async function validateDeployment({
         compatibilityPackageFilter,
         excludedComponents:
             compatibilityPackageFilter?.excludedComponents || [],
+        deploymentCompatibilityImpact,
+        blockingComponents:
+            deploymentCompatibilityImpact?.blockingComponents || [],
+        blockingSummary: deploymentCompatibilityImpact?.blockingSummary || {
+            totalBlocking: 0,
+            blockingByMetadataType: {},
+            blockingByCategory: {}
+        },
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
