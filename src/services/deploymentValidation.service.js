@@ -1404,6 +1404,37 @@ async function validateDeployment({
         };
     }
 
+    // Phase 11.3 — Compatibility Deployment Readiness Planner (report-only).
+    // Does not cancel deployment or mutate package / workspace / CLI.
+    const compatibilityDeploymentReadiness =
+        deploymentReadinessService.planCompatibilityDeploymentReadiness({
+            filteredDeploymentPackage: generatedDeploymentPackage,
+            excludedComponents:
+                compatibilityPackageFilter?.excludedComponents || [],
+            blockingComponents:
+                deploymentCompatibilityImpact?.blockingComponents || [],
+            compatibilitySummary:
+                compatibilityPackageFilter?.compatibilitySummary || null,
+            blockingSummary:
+                deploymentCompatibilityImpact?.blockingSummary || null,
+            totalWarnings: Array.isArray(
+                deploymentCompatibilityPlan?.compatibilityWarnings
+            )
+                ? deploymentCompatibilityPlan.compatibilityWarnings.length
+                : 0
+        });
+
+    deploymentReadiness.readyForDeployment =
+        compatibilityDeploymentReadiness.readyForDeployment;
+    deploymentReadiness.deployableComponents =
+        compatibilityDeploymentReadiness.deployableComponents;
+    deploymentReadiness.excludedComponents =
+        compatibilityDeploymentReadiness.excludedComponents;
+    deploymentReadiness.blockingComponents =
+        compatibilityDeploymentReadiness.blockingComponents;
+    deploymentReadiness.compatibilitySummary =
+        compatibilityDeploymentReadiness.summary;
+
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage,

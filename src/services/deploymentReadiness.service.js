@@ -151,6 +151,121 @@ function evaluateDeploymentReadiness({
     };
 }
 
+function getItemType(item) {
+    return item?.metadataType || item?.type || null;
+}
+
+function getItemName(item) {
+    return item?.metadataName || item?.name || null;
+}
+
+function itemKey(type, name) {
+    if (!type || !name) {
+        return null;
+    }
+
+    return `${String(type)}:${String(name)}`;
+}
+
+function collectPackageComponents(filteredDeploymentPackage) {
+    const items = [
+        ...(filteredDeploymentPackage?.metadata || []),
+        ...(filteredDeploymentPackage?.dependencies || [])
+    ];
+    const components = [];
+    const seen = new Set();
+
+    for (const item of items) {
+        const metadataType = getItemType(item);
+        const metadataName = getItemName(item);
+        const key = itemKey(metadataType, metadataName);
+
+        if (!key || seen.has(key)) {
+            continue;
+        }
+
+        seen.add(key);
+        components.push({
+            metadataType,
+            metadataName
+        });
+    }
+
+    return components;
+}
+
+/**
+ * Phase 11.3 — Compatibility Deployment Readiness Planner.
+ * Computes readyForDeployment from exclusions + blocking impact.
+ * Does not cancel deployment or mutate the package.
+ */
+function planCompatibilityDeploymentReadiness({
+    filteredDeploymentPackage,
+    excludedComponents = [],
+    blockingComponents = [],
+    compatibilitySummary = null,
+    blockingSummary = null,
+    totalWarnings = null
+} = {}) {
+    const excluded = Array.isArray(excludedComponents)
+        ? excludedComponents
+        : [];
+    const blocking = Array.isArray(blockingComponents)
+        ? blockingComponents
+        : [];
+
+    const blockingKeys = new Set(
+        blocking
+            .map((item) => itemKey(item?.metadataType, item?.metadataName))
+            .filter(Boolean)
+    );
+
+    const packageComponents = collectPackageComponents(
+        filteredDeploymentPackage
+    );
+
+    const deployableComponents = packageComponents.filter((component) => {
+        const key = itemKey(component.metadataType, component.metadataName);
+        return key && !blockingKeys.has(key);
+    });
+
+    const readyForDeployment = blocking.length === 0;
+
+    const resolvedExcludedCount =
+        compatibilitySummary?.totalExcluded != null
+            ? compatibilitySummary.totalExcluded
+            : excluded.length;
+    const resolvedBlockingCount =
+        blockingSummary?.totalBlocking != null
+            ? blockingSummary.totalBlocking
+            : blocking.length;
+    const resolvedWarningCount =
+        totalWarnings != null
+            ? Number(totalWarnings) || 0
+            : resolvedExcludedCount + resolvedBlockingCount;
+
+    const summary = {
+        totalDeployable: deployableComponents.length,
+        totalExcluded: resolvedExcludedCount,
+        totalBlocking: resolvedBlockingCount,
+        totalWarnings: resolvedWarningCount,
+        // Convenience aliases for UI payloads.
+        deployable: deployableComponents.length,
+        excluded: resolvedExcludedCount,
+        blocking: resolvedBlockingCount,
+        warnings: resolvedWarningCount
+    };
+
+    return {
+        readyForDeployment,
+        deployableComponents,
+        excludedComponents: excluded,
+        blockingComponents: blocking,
+        summary
+    };
+}
+
 module.exports = {
-    evaluateDeploymentReadiness
+    evaluateDeploymentReadiness,
+    planCompatibilityDeploymentReadiness
 };
