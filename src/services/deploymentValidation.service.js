@@ -8,6 +8,7 @@ const formulaCompatibilityService = require('./formulaCompatibility.service');
 const deploymentCompatibilityPlanService = require('./deploymentCompatibility.service');
 const deploymentCompatibilityFilterService = require('./deploymentCompatibilityFilter.service');
 const deploymentCompatibilityImpactService = require('./deploymentCompatibilityImpact.service');
+const deploymentCompatibilityGateService = require('./deploymentCompatibilityGate.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1477,9 +1478,19 @@ async function validateDeployment({
                 finding.blocking === true)
     );
 
+    // Phase 11.4 — Deployment gate using compatibility readiness.
+    // Skips workspace + CLI when readyForDeployment === false.
+    const compatibilityDeploymentSkipped =
+        deploymentCompatibilityGateService.shouldSkipDeploymentForCompatibility(
+            deploymentReadiness
+        );
+
     let generatedWorkspace;
 
-    if (artifactCompatibilityBlocked) {
+    if (compatibilityDeploymentSkipped) {
+        generatedWorkspace =
+            deploymentCompatibilityGateService.buildCompatibilitySkippedWorkspace();
+    } else if (artifactCompatibilityBlocked) {
         const missingArtifacts = (compatibilityFindings || [])
             .filter(
                 (finding) =>
@@ -1537,7 +1548,10 @@ async function validateDeployment({
         })
     );
 
-    if (generatedWorkspace.status === 'READY') {
+    if (
+        !compatibilityDeploymentSkipped &&
+        generatedWorkspace.status === 'READY'
+    ) {
         compatibilitySummary =
             await metadataCompatibilityService.processWorkspace({
                 workspacePath: generatedWorkspace.workspacePath
@@ -1548,7 +1562,9 @@ async function validateDeployment({
             rulesExecuted: [],
             filesModified: [],
             warnings: [
-                'Workspace not READY; compatibility processing skipped'
+                compatibilityDeploymentSkipped
+                    ? 'Workspace skipped due to compatibility blocking dependencies.'
+                    : 'Workspace not READY; compatibility processing skipped'
             ]
         };
     }
@@ -1561,23 +1577,25 @@ async function validateDeployment({
     let checkOnlyDeployment;
     let deploymentExecution;
 
-    if (deploymentMode === 'DEPLOY') {
-        deploymentExecution =
-            await deploymentExecutionService.runDeploymentExecution({
-                generatedWorkspace,
-                generatedManifest,
-                deploymentReadiness,
-                refreshToken,
-                instanceUrl
-            });
-    } else {
-        checkOnlyDeployment =
-            await checkOnlyDeploymentService.runCheckOnlyDeployment({
-                generatedWorkspace,
-                generatedManifest,
-                refreshToken,
-                instanceUrl
-            });
+    if (!compatibilityDeploymentSkipped) {
+        if (deploymentMode === 'DEPLOY') {
+            deploymentExecution =
+                await deploymentExecutionService.runDeploymentExecution({
+                    generatedWorkspace,
+                    generatedManifest,
+                    deploymentReadiness,
+                    refreshToken,
+                    instanceUrl
+                });
+        } else {
+            checkOnlyDeployment =
+                await checkOnlyDeploymentService.runCheckOnlyDeployment({
+                    generatedWorkspace,
+                    generatedManifest,
+                    refreshToken,
+                    instanceUrl
+                });
+        }
     }
 
     const response = {
@@ -1628,16 +1646,31 @@ async function validateDeployment({
         deploymentPackageProvenance
     };
 
-    if (deploymentMode === 'DEPLOY') {
+    if (compatibilityDeploymentSkipped) {
+        Object.assign(
+            response,
+            deploymentCompatibilityGateService.buildCompatibilitySkipFields({
+                deploymentReadiness,
+                compatibilitySummary:
+                    compatibilityPackageFilter?.compatibilitySummary || null,
+                excludedComponents:
+                    compatibilityPackageFilter?.excludedComponents || [],
+                blockingComponents:
+                    deploymentCompatibilityImpact?.blockingComponents || []
+            })
+        );
+    } else if (deploymentMode === 'DEPLOY') {
         response.deploymentExecution = deploymentExecution;
     } else {
         response.checkOnlyDeployment = checkOnlyDeployment;
     }
 
     const deploymentResult =
-        deploymentMode === 'DEPLOY'
-            ? deploymentExecution
-            : checkOnlyDeployment;
+        compatibilityDeploymentSkipped
+            ? null
+            : deploymentMode === 'DEPLOY'
+              ? deploymentExecution
+              : checkOnlyDeployment;
 
     // Additive diagnostics only — existing nested deploy payloads unchanged.
     if (deploymentResult?.deploymentDiagnostics) {
@@ -1647,14 +1680,19 @@ async function validateDeployment({
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
             stage:
-                deploymentMode === 'DEPLOY'
-                    ? deploymentHistoryService.STAGES.DEPLOYMENT_EXECUTED
-                    : deploymentHistoryService.STAGES.CHECK_ONLY_COMPLETED,
+                compatibilityDeploymentSkipped
+                    ? deploymentHistoryService.STAGES.PACKAGE_GENERATED
+                    : deploymentMode === 'DEPLOY'
+                      ? deploymentHistoryService.STAGES.DEPLOYMENT_EXECUTED
+                      : deploymentHistoryService.STAGES.CHECK_ONLY_COMPLETED,
             deploymentSummary: deploymentResult?.deploymentSummary || null,
             deploymentId: deploymentResult?.deploymentId || null,
-            errors: deploymentResult?.success === false && deploymentResult?.message
-                ? [deploymentResult.message]
-                : []
+            errors: compatibilityDeploymentSkipped
+                ? ['BLOCKING_DEPENDENCIES']
+                : deploymentResult?.success === false &&
+                    deploymentResult?.message
+                  ? [deploymentResult.message]
+                  : []
         })
     );
 
