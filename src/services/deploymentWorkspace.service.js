@@ -8,6 +8,7 @@ const { METADATA_TYPE_RULES, isBundleMetadataType, getMetadataTypeRule } = requi
 const {
     CHILD_METADATA_CONFIG
 } = require('./deploymentReview/customObjectChildMetadataAnalyzer.service');
+const objectDependencyTrace = require('./objectDependencyTrace.temp');
 
 const execAsync = util.promisify(exec);
 const mkdir = util.promisify(fs.mkdir);
@@ -562,11 +563,27 @@ async function copyRepositoryFile({
     repoPath,
     workspacePath,
     relativeFilePath,
-    workspaceStats
+    workspaceStats,
+    tracedItem = null
 }) {
     const normalizedPath = relativeFilePath.replace(/\\/g, '/');
 
     if (workspaceStats.copiedFilePaths.has(normalizedPath)) {
+        if (tracedItem) {
+            const sourcePath = path.join(repoPath, ...normalizedPath.split('/'));
+            const destinationPath = path.join(
+                workspacePath,
+                ...normalizedPath.split('/')
+            );
+            objectDependencyTrace.logWorkspaceCopyAttempt({
+                item: tracedItem,
+                sourcePath,
+                sourceExists: true,
+                destinationPath,
+                copied: true,
+                phase: 'AFTER (already present)'
+            });
+        }
         return true;
     }
 
@@ -576,7 +593,30 @@ async function copyRepositoryFile({
         ...normalizedPath.split('/')
     );
 
-    if (!(await pathExists(sourcePath))) {
+    const sourceExists = await pathExists(sourcePath);
+
+    if (tracedItem) {
+        objectDependencyTrace.logWorkspaceCopyAttempt({
+            item: tracedItem,
+            sourcePath,
+            sourceExists,
+            destinationPath,
+            copied: null,
+            phase: 'BEFORE'
+        });
+    }
+
+    if (!sourceExists) {
+        if (tracedItem) {
+            objectDependencyTrace.logWorkspaceCopyAttempt({
+                item: tracedItem,
+                sourcePath,
+                sourceExists: false,
+                destinationPath,
+                copied: false,
+                phase: 'AFTER'
+            });
+        }
         return false;
     }
 
@@ -587,6 +627,17 @@ async function copyRepositoryFile({
     workspaceStats.copiedFilePaths.add(normalizedPath);
     workspaceStats.copiedFiles += 1;
     workspaceStats.totalBytes += fileStat.size;
+
+    if (tracedItem) {
+        objectDependencyTrace.logWorkspaceCopyAttempt({
+            item: tracedItem,
+            sourcePath,
+            sourceExists: true,
+            destinationPath,
+            copied: true,
+            phase: 'AFTER'
+        });
+    }
 
     return true;
 }
@@ -612,6 +663,16 @@ async function copyMetadataItems({
         );
 
         if (!resolvedPath) {
+            if (objectDependencyTrace.isTracedItem(item)) {
+                objectDependencyTrace.logWorkspaceCopyAttempt({
+                    item,
+                    sourcePath: null,
+                    sourceExists: false,
+                    destinationPath: null,
+                    copied: false,
+                    phase: 'BEFORE (unresolved path)'
+                });
+            }
             missingFiles.push(missingLabel);
             continue;
         }
@@ -625,6 +686,16 @@ async function copyMetadataItems({
         let itemMissing = false;
 
         if (!filesToCopy.length) {
+            if (objectDependencyTrace.isTracedItem(item)) {
+                objectDependencyTrace.logWorkspaceCopyAttempt({
+                    item,
+                    sourcePath: resolvedPath,
+                    sourceExists: false,
+                    destinationPath: null,
+                    copied: false,
+                    phase: 'BEFORE (no files to copy)'
+                });
+            }
             missingFiles.push(missingLabel);
             continue;
         }
@@ -634,7 +705,10 @@ async function copyMetadataItems({
                 repoPath,
                 workspacePath,
                 relativeFilePath: filePath,
-                workspaceStats
+                workspaceStats,
+                tracedItem: objectDependencyTrace.isTracedItem(item)
+                    ? item
+                    : null
             });
 
             if (copied) {
@@ -689,6 +763,16 @@ async function copyDependencyItems({
         );
 
         if (!resolvedPath) {
+            if (objectDependencyTrace.isTracedItem(dependencyAsItem)) {
+                objectDependencyTrace.logWorkspaceCopyAttempt({
+                    item: dependencyAsItem,
+                    sourcePath: null,
+                    sourceExists: false,
+                    destinationPath: null,
+                    copied: false,
+                    phase: 'BEFORE (unresolved path)'
+                });
+            }
             missingFiles.push(missingLabel);
             continue;
         }
@@ -702,6 +786,16 @@ async function copyDependencyItems({
         let itemMissing = false;
 
         if (!filesToCopy.length) {
+            if (objectDependencyTrace.isTracedItem(dependencyAsItem)) {
+                objectDependencyTrace.logWorkspaceCopyAttempt({
+                    item: dependencyAsItem,
+                    sourcePath: resolvedPath,
+                    sourceExists: false,
+                    destinationPath: null,
+                    copied: false,
+                    phase: 'BEFORE (no files to copy)'
+                });
+            }
             missingFiles.push(missingLabel);
             continue;
         }
@@ -711,7 +805,10 @@ async function copyDependencyItems({
                 repoPath,
                 workspacePath,
                 relativeFilePath: filePath,
-                workspaceStats
+                workspaceStats,
+                tracedItem: objectDependencyTrace.isTracedItem(dependencyAsItem)
+                    ? dependencyAsItem
+                    : null
             });
 
             if (copied) {
