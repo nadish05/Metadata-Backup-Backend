@@ -15,10 +15,16 @@ const MAX_GRAPH_DEPTH = 10;
 
 /**
  * Dependency types that expand through relationship discoverers even when they
- * are not user-selected primary metadata (e.g. Flow/Apex → CustomField).
+ * are not user-selected primary metadata (e.g. Flow/Apex → CustomField,
+ * Flow/Apex/FlexiPage → CustomObject). CustomObject seeds let the existing
+ * discoverers expand internal object dependencies (search layouts, record
+ * types, compact layouts, nameField) for indirectly discovered objects.
  * Keeps expansion generic — not Flow-specific.
  */
-const EXPANDABLE_DEPENDENCY_TYPES = Object.freeze(['CustomField']);
+const EXPANDABLE_DEPENDENCY_TYPES = Object.freeze([
+    'CustomField',
+    'CustomObject'
+]);
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -573,12 +579,35 @@ async function discoverUntilStable({
     );
 
     // User-selected metadata is reviewed upstream; do not re-review here.
-    // Expandable dependency seeds (e.g. CustomField) are also marked reviewed
-    // so relationship expansion does not re-run Review on them.
+    // CustomField seeds are also marked reviewed so relationship expansion does
+    // not re-run Review on them. CustomObject seeds stay reviewable so objects
+    // pulled in by another metadata type keep their Deployment Review.
+    const preReviewedKeys = new Set();
+
+    for (const item of selectedMetadata || []) {
+        const key = getDependencyKey(toScanTarget(item) || {});
+
+        if (key) {
+            preReviewedKeys.add(key);
+        }
+    }
+
+    for (const item of expandableDependencies || []) {
+        if ((item?.type || item?.metadataType) !== 'CustomField') {
+            continue;
+        }
+
+        const key = getDependencyKey(toScanTarget(item) || {});
+
+        if (key) {
+            preReviewedKeys.add(key);
+        }
+    }
+
     for (const item of frontier) {
         const key = getDependencyKey(item);
 
-        if (key) {
+        if (key && preReviewedKeys.has(key)) {
             reviewedMetadata.add(key);
         }
     }

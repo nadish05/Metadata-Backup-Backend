@@ -68,12 +68,18 @@ async function readRepoFile(filePath) {
 }
 
 async function main() {
-    await runTest('EXPANDABLE_DEPENDENCY_TYPES includes CustomField only', () => {
-        assert.deepStrictEqual([...EXPANDABLE_DEPENDENCY_TYPES], ['CustomField']);
-    });
+    await runTest(
+        'EXPANDABLE_DEPENDENCY_TYPES includes CustomField and CustomObject',
+        () => {
+            assert.deepStrictEqual(
+                [...EXPANDABLE_DEPENDENCY_TYPES],
+                ['CustomField', 'CustomObject']
+            );
+        }
+    );
 
     await runTest(
-        'buildInitialFrontier seeds selected metadata + CustomField deps',
+        'buildInitialFrontier seeds selected metadata + CustomField/CustomObject deps',
         () => {
             const frontier = buildInitialFrontier(
                 [
@@ -110,7 +116,7 @@ async function main() {
             assert.ok(keys.includes('CustomField:Session__c.Experience__c'));
             assert.ok(keys.includes('CustomField:Session__c.Date__c'));
             assert.ok(!keys.includes('ApexClass:SessionService'));
-            assert.ok(!keys.includes('CustomObject:Session__c'));
+            assert.ok(keys.includes('CustomObject:Session__c'));
         }
     );
 

@@ -11,7 +11,6 @@ const deploymentCompatibilityImpactService = require('./deploymentCompatibilityI
 const deploymentCompatibilityGateService = require('./deploymentCompatibilityGate.service');
 const deploymentCompatibilityAdvisorService = require('./deploymentCompatibilityAdvisor.service');
 const deploymentPreviewService = require('./deploymentPreview.service');
-const objectDependencyTrace = require('./objectDependencyTrace.temp');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1472,14 +1471,6 @@ async function validateDeployment({
         }
     );
 
-    // TEMPORARY DEBUG ONLY — Phase 12.2 Object Dependency Investigation.
-    // Traces Booking__c / Booking__c.Experience_Name__c presence only.
-    objectDependencyTrace.logPlannerPackageTrace({
-        generatedDeploymentPackage,
-        resolvedDependencies: resolvedRequiredDependencies,
-        resolvedMetadata: artifactEnrichedSelectedMetadata
-    });
-
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage,
@@ -1507,12 +1498,12 @@ async function validateDeployment({
         }
     );
 
-    // TEMPORARY / diagnostics — restored generated package.xml log (Phase 12.2).
-    // Useful for troubleshooting; does not modify manifest or deployment behaviour.
-    objectDependencyTrace.logGeneratedPackageXml(
-        generatedManifest?.packageXml
-    );
-    objectDependencyTrace.logManifestTrace(generatedManifest?.packageXml);
+    // Diagnostics only — logs the manifest that will be deployed.
+    console.log('====================================================');
+    console.log('GENERATED PACKAGE.XML');
+    console.log('====================================================');
+    console.log(generatedManifest?.packageXml || '(empty package.xml)');
+    console.log('====================================================');
 
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
@@ -1541,9 +1532,6 @@ async function validateDeployment({
     if (compatibilityDeploymentSkipped) {
         generatedWorkspace =
             deploymentCompatibilityGateService.buildCompatibilitySkippedWorkspace();
-        objectDependencyTrace.markWorkspaceSkipped(
-            'Compatibility readiness blocked deployment (readyForDeployment=false).'
-        );
     } else if (artifactCompatibilityBlocked) {
         const missingArtifacts = (compatibilityFindings || [])
             .filter(
@@ -1574,9 +1562,6 @@ async function validateDeployment({
             'Workspace Builder skipped due to missing source artifacts:',
             missingArtifacts
         );
-        objectDependencyTrace.markWorkspaceSkipped(
-            'Workspace skipped due to missing source artifacts.'
-        );
     } else {
         generatedWorkspace =
             await deploymentWorkspaceService.buildDeploymentWorkspace({
@@ -1587,9 +1572,6 @@ async function validateDeployment({
                     deploymentPackage.sourceBranch || deploymentPackage.branch
             });
     }
-
-    // TEMPORARY DEBUG ONLY — Phase 12.2 final investigation summary.
-    objectDependencyTrace.logObjectDependencyTraceSummary();
 
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
