@@ -11,6 +11,7 @@ const deploymentCompatibilityImpactService = require('./deploymentCompatibilityI
 const deploymentCompatibilityGateService = require('./deploymentCompatibilityGate.service');
 const deploymentCompatibilityAdvisorService = require('./deploymentCompatibilityAdvisor.service');
 const deploymentPreviewService = require('./deploymentPreview.service');
+const deploymentPermissionSetCompatibilityService = require('./deploymentPermissionSetCompatibility.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1471,6 +1472,17 @@ async function validateDeployment({
         }
     );
 
+    // Phase 13.1 — PermissionSet compatibility diagnostics only.
+    // Reads the final package XML sources without rewriting or filtering them.
+    const permissionSetCompatibility =
+        await deploymentPermissionSetCompatibilityService.analyzePermissionSetCompatibilitySafe(
+            {
+                generatedDeploymentPackage,
+                deploymentApiVersionPolicy,
+                readFile: packageSourceReadFile
+            }
+        );
+
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage,
@@ -1665,6 +1677,7 @@ async function validateDeployment({
         },
         deploymentCompatibilityAdvisor,
         deploymentPreview,
+        permissionSetCompatibility,
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,
