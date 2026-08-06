@@ -1,5 +1,7 @@
 const path = require('path');
 
+const personAccountTrace = require('../../personAccountTrace.temp');
+
 const PERMISSION_SET_META_SUFFIX = '.permissionset-meta.xml';
 const DISCOVERER_ID = 'PermissionSetRelationshipDiscoverer';
 const CUSTOM_OBJECT_SUFFIX = '__c';
@@ -336,14 +338,19 @@ const permissionSetRelationshipDiscoverer = {
 
             try {
                 const xml = await readRepoFile(permissionSetPath);
-
-                relationships.push(
-                    ...discoverPermissionSetRelationships(
-                        xml,
-                        permissionSetName,
-                        depth
-                    )
+                const discovered = discoverPermissionSetRelationships(
+                    xml,
+                    permissionSetName,
+                    depth
                 );
+
+                // TEMP (Phase 15.3.1) — PersonAccount trace step 1.
+                personAccountTrace.logDiscoveryStep({
+                    permissionSetName,
+                    relationships: discovered
+                });
+
+                relationships.push(...discovered);
             } catch (error) {
                 warnings.push(
                     `Unable to read PermissionSet metadata ${permissionSetPath}: ${

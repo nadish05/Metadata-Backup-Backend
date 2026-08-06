@@ -13,6 +13,7 @@ const {
     buildExistenceQuery,
     usesToolingApi
 } = require('./destinationExistenceQueries');
+const personAccountTrace = require('../personAccountTrace.temp');
 
 const DESTINATION_STATE = Object.freeze({
     EXISTS: 'EXISTS',
@@ -191,6 +192,17 @@ async function querySingleExistence({
     const api = useTooling ? 'TOOLING' : 'REST';
 
     if (!soql) {
+        // TEMP (Phase 15.3.1) — PersonAccount trace step 4.
+        personAccountTrace.logDestinationStep({
+            metadataType,
+            metadataName,
+            soql: null,
+            records: [],
+            totalSize: 0,
+            decision: DESTINATION_STATE.UNKNOWN,
+            warning: `${metadataType} existence query is not supported.`
+        });
+
         return createEntry({
             metadataType,
             metadataName,
@@ -213,6 +225,18 @@ async function querySingleExistence({
 
         const exists = (queryResult.totalSize || 0) > 0;
 
+        // TEMP (Phase 15.3.1) — PersonAccount trace step 4.
+        personAccountTrace.logDestinationStep({
+            metadataType,
+            metadataName,
+            soql,
+            records: queryResult.records || [],
+            totalSize: queryResult.totalSize || 0,
+            decision: exists
+                ? DESTINATION_STATE.EXISTS
+                : DESTINATION_STATE.MISSING
+        });
+
         return createEntry({
             metadataType,
             metadataName,
@@ -224,6 +248,19 @@ async function querySingleExistence({
             warning: null
         });
     } catch (error) {
+        // TEMP (Phase 15.3.1) — PersonAccount trace step 4.
+        personAccountTrace.logDestinationStep({
+            metadataType,
+            metadataName,
+            soql,
+            records: [],
+            totalSize: null,
+            decision: DESTINATION_STATE.UNKNOWN,
+            warning:
+                error?.message ||
+                `Unable to query destination state for ${metadataType}:${metadataName}.`
+        });
+
         return createEntry({
             metadataType,
             metadataName,

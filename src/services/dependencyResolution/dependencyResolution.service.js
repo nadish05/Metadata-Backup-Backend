@@ -8,6 +8,7 @@ const {
     classifyDependency,
     classifyDependencies
 } = require('./dependencyClassification.service');
+const personAccountTrace = require('../personAccountTrace.temp');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -309,28 +310,38 @@ async function resolveDependencies({
     const decisions = [];
 
     for (const dependency of dependencies) {
+        // TEMP (Phase 15.3.1) — PersonAccount trace step 3 (incoming).
+        personAccountTrace.logResolutionIncoming(dependency);
+
         const resolver = resolvers.find((entry) => entry.applies(dependency));
+
+        // TEMP (Phase 15.3.1) — PersonAccount trace step 3 (resolver selection).
+        personAccountTrace.logResolverSelection(dependency, resolver);
+
         const decision = resolver
             ? resolver.resolve(dependency, context)
             : createDefaultDecision(dependency);
 
-        decisions.push(
-            attachClassificationFields(
-                {
-                    ...decision,
-                    filePath: dependency.filePath || decision.filePath || null,
-                    sourceExists:
-                        dependency.sourceExists != null
-                            ? dependency.sourceExists
-                            : decision.sourceExists,
-                    artifactResolved:
-                        dependency.artifactResolved != null
-                            ? dependency.artifactResolved
-                            : decision.artifactResolved
-                },
-                dependency
-            )
+        const resolvedDecision = attachClassificationFields(
+            {
+                ...decision,
+                filePath: dependency.filePath || decision.filePath || null,
+                sourceExists:
+                    dependency.sourceExists != null
+                        ? dependency.sourceExists
+                        : decision.sourceExists,
+                artifactResolved:
+                    dependency.artifactResolved != null
+                        ? dependency.artifactResolved
+                        : decision.artifactResolved
+            },
+            dependency
         );
+
+        // TEMP (Phase 15.3.1) — PersonAccount trace step 3 (decision).
+        personAccountTrace.logResolverDecision(dependency, resolvedDecision);
+
+        decisions.push(resolvedDecision);
     }
 
     const summary = buildSummary(decisions, warnings);

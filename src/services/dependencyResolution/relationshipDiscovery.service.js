@@ -5,6 +5,7 @@ const { exec } = require('child_process');
 
 const { getRegisteredDiscoverers } = require('./relationshipRegistry');
 const deploymentReviewService = require('../deploymentReview.service');
+const personAccountTrace = require('../personAccountTrace.temp');
 const {
     METADATA_ORIGINS
 } = require('./metadataGraphOrigin.model');
@@ -899,6 +900,12 @@ async function discoverRelationships({
                     existingDependencies,
                     relationships
                 );
+
+                // TEMP (Phase 15.3.1) — PersonAccount trace step 2.
+                personAccountTrace.logMergeStep({
+                    dependencies: enrichedDependencies,
+                    relationships
+                });
 
                 return {
                     discoveredRelationships: relationships,

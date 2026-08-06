@@ -14,6 +14,7 @@ const deploymentPreviewService = require('./deploymentPreview.service');
 const deploymentPermissionSetCompatibilityService = require('./deploymentPermissionSetCompatibility.service');
 const deploymentApiNegotiationService = require('./deploymentApiNegotiation.service');
 const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
+const personAccountTrace = require('./personAccountTrace.temp');
 const repositorySnapshotMetadataService = require('./repositorySnapshotMetadata.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
@@ -468,6 +469,9 @@ async function validateDeployment({
             console.error(error);
         }
     }
+
+    // TEMP (Phase 15.3.1) — reset the PersonAccount trace for this request.
+    personAccountTrace.beginPersonAccountTrace();
 
     try {
         const discoveryResult =
@@ -975,6 +979,12 @@ async function validateDeployment({
         deploymentPackageService.generateDeploymentPackage(
             deploymentPackageWithResolvedDependencies
         );
+
+    // TEMP (Phase 15.3.1) — PersonAccount trace step 5.
+    personAccountTrace.logPackageStep({
+        generatedDeploymentPackage,
+        resolvedDependencies: resolvedRequiredDependencies
+    });
 
     // Report-only: explain WHY members exist in the generated package.
     // Must not influence package, validation, planner, manifest, workspace, or deploy.
@@ -1687,6 +1697,19 @@ async function validateDeployment({
 
     let generatedWorkspace;
 
+    // TEMP (Phase 15.3.1) — PersonAccount trace step 6.
+    personAccountTrace.logWorkspaceStep({
+        resolvedDependencies: resolvedRequiredDependencies,
+        generatedDeploymentPackage,
+        workspaceSkipped:
+            compatibilityDeploymentSkipped || artifactCompatibilityBlocked,
+        skipReason: compatibilityDeploymentSkipped
+            ? 'Compatibility readiness reported blocking dependencies.'
+            : artifactCompatibilityBlocked
+              ? 'Missing source artifacts blocked workspace construction.'
+              : null
+    });
+
     if (compatibilityDeploymentSkipped) {
         generatedWorkspace =
             deploymentCompatibilityGateService.buildCompatibilitySkippedWorkspace();
@@ -1782,6 +1805,17 @@ async function validateDeployment({
 
     let checkOnlyDeployment;
     let deploymentExecution;
+
+    // TEMP (Phase 15.3.1) — PersonAccount trace step 7 and final report.
+    personAccountTrace.logDeploymentStep({
+        resolvedDependencies: resolvedRequiredDependencies,
+        generatedDeploymentPackage,
+        dependencyResolutionSummary,
+        dependencyValidationStatus: dependencyValidation?.overallStatus || null,
+        deploymentSkipped: compatibilityDeploymentSkipped,
+        deploymentMode
+    });
+    personAccountTrace.logPersonAccountReport();
 
     if (!compatibilityDeploymentSkipped) {
         if (deploymentMode === 'DEPLOY') {
