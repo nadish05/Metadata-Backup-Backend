@@ -15,6 +15,7 @@ const deploymentPermissionSetCompatibilityService = require('./deploymentPermiss
 const deploymentApiNegotiationService = require('./deploymentApiNegotiation.service');
 const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
 const personAccountTrace = require('./personAccountTrace.temp');
+const personAccountQueryTrace = require('./personAccountQueryTrace.temp');
 const repositorySnapshotMetadataService = require('./repositorySnapshotMetadata.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
@@ -472,6 +473,8 @@ async function validateDeployment({
 
     // TEMP (Phase 15.3.1) — reset the PersonAccount trace for this request.
     personAccountTrace.beginPersonAccountTrace();
+    // TEMP (Phase 15.3.2) — reset the PersonAccount destination query trace.
+    personAccountQueryTrace.beginQueryTrace();
 
     try {
         const discoveryResult =

@@ -14,6 +14,7 @@ const {
     usesToolingApi
 } = require('./destinationExistenceQueries');
 const personAccountTrace = require('../personAccountTrace.temp');
+const personAccountQueryTrace = require('../personAccountQueryTrace.temp');
 
 const DESTINATION_STATE = Object.freeze({
     EXISTS: 'EXISTS',
@@ -163,21 +164,47 @@ async function runSoqlQuery(
     accessToken,
     apiVersion,
     soql,
-    useToolingApi = false
+    useToolingApi = false,
+    traceContext = null
 ) {
     const encodedQuery = encodeURIComponent(soql);
     const queryPath = useToolingApi ? 'tooling/query' : 'query';
-    const response = await axios.get(
-        `${instanceUrl}/services/data/v${apiVersion}/${queryPath}/?q=${encodedQuery}`,
-        {
+    const endpoint = `${instanceUrl}/services/data/v${apiVersion}/${queryPath}/?q=${encodedQuery}`;
+
+    // TEMP (Phase 15.3.2) — PersonAccount destination query request.
+    personAccountQueryTrace.logQueryRequest({
+        ...(traceContext || {}),
+        endpoint,
+        soql,
+        apiVersion,
+        api: useToolingApi ? 'TOOLING' : 'REST'
+    });
+
+    try {
+        const response = await axios.get(endpoint, {
             headers: {
                 Authorization: `Bearer ${accessToken}`
             },
             timeout: 15000
-        }
-    );
+        });
 
-    return response.data;
+        // TEMP (Phase 15.3.2) — PersonAccount destination query response.
+        personAccountQueryTrace.logQueryResponse({
+            ...(traceContext || {}),
+            status: response.status,
+            data: response.data
+        });
+
+        return response.data;
+    } catch (error) {
+        // TEMP (Phase 15.3.2) — PersonAccount destination query error payload.
+        personAccountQueryTrace.logQueryError({
+            ...(traceContext || {}),
+            error
+        });
+
+        throw error;
+    }
 }
 
 async function querySingleExistence({
@@ -220,7 +247,9 @@ async function querySingleExistence({
             accessToken,
             apiVersion,
             soql,
-            useTooling
+            useTooling,
+            // TEMP (Phase 15.3.2) — identifies the traced query; logging only.
+            { metadataType, metadataName }
         );
 
         const exists = (queryResult.totalSize || 0) > 0;
