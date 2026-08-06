@@ -14,7 +14,9 @@ const RELATIONSHIPS = Object.freeze({
     TAB_SETTING: 'PermissionSetTabSetting',
     CLASS_ACCESS: 'PermissionSetClassAccess',
     PAGE_ACCESS: 'PermissionSetPageAccess',
-    FLOW_ACCESS: 'PermissionSetFlowAccess'
+    FLOW_ACCESS: 'PermissionSetFlowAccess',
+    EXTERNAL_CREDENTIAL_PRINCIPAL_ACCESS:
+        'PermissionSetExternalCredentialPrincipalAccess'
 });
 
 function normalizePath(filePath) {
@@ -145,6 +147,27 @@ function parseRecordTypeReference(value) {
     }
 
     return `${parts[0]}.${parts[1]}`;
+}
+
+function parseExternalCredentialPrincipalReference(value) {
+    const reference = String(value || '').trim();
+    const separatorIndex = reference.indexOf('-');
+
+    if (
+        separatorIndex <= 0 ||
+        separatorIndex === reference.length - 1
+    ) {
+        return null;
+    }
+
+    const externalCredentialName = reference.slice(0, separatorIndex).trim();
+    const principalName = reference.slice(separatorIndex + 1).trim();
+
+    if (!isValidMetadataName(externalCredentialName) || !principalName) {
+        return null;
+    }
+
+    return externalCredentialName;
 }
 
 function createRelationshipRecord({
@@ -348,6 +371,34 @@ function discoverPermissionSetRelationships(
                 sourceField: 'flow',
                 discoveryMethod: 'flowAccesses',
                 reason: 'PermissionSet flow access',
+                depth
+            })
+        );
+    }
+
+    for (const principalReference of extractSectionValues(
+        xml,
+        'externalCredentialPrincipalAccesses',
+        'externalCredentialPrincipal'
+    )) {
+        const externalCredentialName =
+            parseExternalCredentialPrincipalReference(principalReference);
+
+        if (!externalCredentialName) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: externalCredentialName,
+                metadataType: 'ExternalCredential',
+                relationship:
+                    RELATIONSHIPS.EXTERNAL_CREDENTIAL_PRINCIPAL_ACCESS,
+                sourceMetadata,
+                sourceField: 'externalCredentialPrincipal',
+                discoveryMethod: 'externalCredentialPrincipalAccesses',
+                reason:
+                    'PermissionSet external credential principal access',
                 depth
             })
         );

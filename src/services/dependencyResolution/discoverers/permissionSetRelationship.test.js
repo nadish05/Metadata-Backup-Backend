@@ -522,6 +522,113 @@ async function main() {
     );
 
     await runTest(
+        'externalCredentialPrincipalAccesses emits the owning ExternalCredential',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <externalCredentialPrincipalAccesses>
+                        <enabled>false</enabled>
+                        <externalCredentialPrincipal>Weather-WeatherPrincipal</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, [
+                {
+                    name: 'Weather',
+                    metadataType: 'ExternalCredential',
+                    type: 'ExternalCredential',
+                    relationship:
+                        'PermissionSetExternalCredentialPrincipalAccess',
+                    sourceMetadata: 'Subscription_Access',
+                    sourceField: 'externalCredentialPrincipal',
+                    discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                    discoveryMethod:
+                        'externalCredentialPrincipalAccesses',
+                    required: true,
+                    selected: true,
+                    depth: 1,
+                    reason:
+                        'PermissionSet external credential principal access'
+                }
+            ]);
+        }
+    );
+
+    await runTest(
+        'multiple principals for one ExternalCredential emit one dependency',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal>Weather-WeatherPrincipal</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal>Weather-Backup Principal</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'ExternalCredential').map(
+                    (item) => item.name
+                ),
+                ['Weather']
+            );
+        }
+    );
+
+    await runTest(
+        'multiple ExternalCredentials emit distinct dependencies',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal>Weather-WeatherPrincipal</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal>Billing-BillingPrincipal</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'ExternalCredential').map(
+                    (item) => item.name
+                ),
+                ['Weather', 'Billing']
+            );
+        }
+    );
+
+    await runTest(
+        'empty and malformed external credential principal references are ignored',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal></externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal>NoSeparator</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal>-MissingCredential</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal>MissingPrincipal-</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                    <externalCredentialPrincipalAccesses>
+                        <externalCredentialPrincipal>Bad Credential-Principal</externalCredentialPrincipal>
+                    </externalCredentialPrincipalAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, []);
+        }
+    );
+
+    await runTest(
         'registry retains existing discoverers and adds PermissionSet',
         async () => {
             assert.deepStrictEqual(
