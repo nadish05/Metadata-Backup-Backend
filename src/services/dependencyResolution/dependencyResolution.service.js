@@ -184,7 +184,10 @@ function attachClassificationFields(decision, dependency) {
     return {
         ...decision,
         classification: classification.classification,
-        artifactRequired: classification.artifactRequired,
+        artifactRequired:
+            typeof decision.artifactRequired === 'boolean'
+                ? decision.artifactRequired
+                : classification.artifactRequired,
         packageable: classification.packageable,
         destinationValidationRequired:
             classification.destinationValidationRequired,

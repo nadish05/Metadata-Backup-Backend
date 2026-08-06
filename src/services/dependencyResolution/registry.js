@@ -4,9 +4,10 @@
  */
 
 const customObjectResolver = require('./resolvers/customObject.resolver');
+const personAccountRecordTypeResolver = require('./resolvers/personAccountRecordType.resolver');
 
 function getRegisteredResolvers() {
-    return [customObjectResolver];
+    return [customObjectResolver, personAccountRecordTypeResolver];
 }
 
 module.exports = {

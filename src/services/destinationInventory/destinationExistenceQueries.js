@@ -167,6 +167,15 @@ function buildRecordTypeSoql(name) {
         return null;
     }
 
+    if (objectApiName === 'PersonAccount') {
+        return (
+            'SELECT Id, DeveloperName, SobjectType, IsPersonType FROM RecordType ' +
+            `WHERE DeveloperName = '${escapeSoql(developerName)}' ` +
+            "AND SobjectType = 'Account' " +
+            'AND IsPersonType = true LIMIT 1'
+        );
+    }
+
     return (
         'SELECT Id, DeveloperName, SobjectType FROM RecordType ' +
         `WHERE DeveloperName = '${escapeSoql(developerName)}' ` +
