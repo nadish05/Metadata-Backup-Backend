@@ -11,7 +11,8 @@ const CATEGORIES = Object.freeze({
     FORMULA_COMPILATION: 'FORMULA_COMPILATION',
     FLOW_API_VERSION: 'FLOW_API_VERSION',
     LWC_DEPENDENCY: 'LWC_DEPENDENCY',
-    FLEXIPAGE_DEPENDENCY: 'FLEXIPAGE_DEPENDENCY'
+    FLEXIPAGE_DEPENDENCY: 'FLEXIPAGE_DEPENDENCY',
+    PERMISSION_SET_API_VERSION: 'PERMISSION_SET_API_VERSION'
 });
 
 const FLOW_API_COMPAT_TAGS = Object.freeze([
@@ -92,7 +93,8 @@ function createWarning({
     category,
     severity = 'WARNING',
     message,
-    recommendation
+    recommendation,
+    ...details
 }) {
     return {
         metadataName,
@@ -100,7 +102,8 @@ function createWarning({
         category,
         severity,
         message,
-        recommendation
+        recommendation,
+        ...details
     };
 }
 
@@ -236,6 +239,109 @@ function mapExistingFindingWarnings(existingFindings = []) {
                     message,
                     recommendation:
                         'Raise the deployment API version or remove unsupported Flow properties before deploy.'
+                })
+            );
+        }
+    }
+
+    return warnings;
+}
+
+function parseRequiredApiVersion(findings = []) {
+    let required = null;
+
+    for (const finding of findings || []) {
+        const value = finding?.requiredApiVersion;
+
+        if (!value) {
+            continue;
+        }
+
+        const numeric = Number.parseFloat(value);
+
+        if (!Number.isNaN(numeric) && (required == null || numeric > required)) {
+            required = numeric;
+        }
+    }
+
+    return required == null ? null : required.toFixed(1);
+}
+
+/**
+ * Map Phase 13.1 diagnostics into the existing compatibility warning model.
+ * Version-gated properties are blockers because removing them changes security.
+ * Unknown/malformed XML remains advisory and never blocks by itself.
+ */
+function mapPermissionSetCompatibilityWarnings(permissionSetCompatibility) {
+    const warnings = [];
+    const permissionSets = Array.isArray(
+        permissionSetCompatibility?.permissionSets
+    )
+        ? permissionSetCompatibility.permissionSets
+        : [];
+
+    for (const diagnostic of permissionSets) {
+        const unsupportedProperties = Array.isArray(
+            diagnostic?.unsupportedProperties
+        )
+            ? diagnostic.unsupportedProperties
+            : [];
+        const unknownNodes = Array.isArray(diagnostic?.unknownNodes)
+            ? diagnostic.unknownNodes
+            : [];
+        const findings = Array.isArray(diagnostic?.compatibilityFindings)
+            ? diagnostic.compatibilityFindings
+            : [];
+        const requiredApi = parseRequiredApiVersion(findings);
+        const displayProperties = unsupportedProperties.map((property) =>
+            String(property).split('.').pop()
+        );
+
+        if (unsupportedProperties.length) {
+            warnings.push(
+                createWarning({
+                    metadataName: diagnostic.permissionSet || null,
+                    metadataType: 'PermissionSet',
+                    category: CATEGORIES.PERMISSION_SET_API_VERSION,
+                    severity: 'BLOCKER',
+                    status: 'INCOMPATIBLE',
+                    currentApi: diagnostic.detectedApiVersion || null,
+                    requiredApi,
+                    unsupportedProperties: displayProperties,
+                    versionGatedNodes: [...displayProperties],
+                    unknownNodes,
+                    safeToRemove: false,
+                    requiresUserAttention: true,
+                    message: `PermissionSet ${diagnostic.permissionSet || 'Unknown'} contains properties unsupported by Metadata API ${diagnostic.detectedApiVersion || 'unknown'}: ${displayProperties.join(', ')}. Automatic removal is unsafe because it changes the security model.`,
+                    recommendation:
+                        diagnostic.recommendedAction ||
+                        `Deploy using Metadata API ${requiredApi || 'a supported version'} or review the PermissionSet security model before deployment.`
+                })
+            );
+            continue;
+        }
+
+        if (unknownNodes.length || diagnostic?.malformedXml === true) {
+            warnings.push(
+                createWarning({
+                    metadataName: diagnostic.permissionSet || null,
+                    metadataType: 'PermissionSet',
+                    category: CATEGORIES.PERMISSION_SET_API_VERSION,
+                    severity: 'WARNING',
+                    status: 'REVIEW_REQUIRED',
+                    currentApi: diagnostic.detectedApiVersion || null,
+                    requiredApi: null,
+                    unsupportedProperties: [],
+                    versionGatedNodes: [],
+                    unknownNodes,
+                    safeToRemove: false,
+                    requiresUserAttention: true,
+                    message: diagnostic?.malformedXml
+                        ? `PermissionSet ${diagnostic.permissionSet || 'Unknown'} XML is malformed and compatibility could not be determined.`
+                        : `PermissionSet ${diagnostic.permissionSet || 'Unknown'} contains unrecognized nodes: ${unknownNodes.join(', ')}.`,
+                    recommendation:
+                        diagnostic.recommendedAction ||
+                        'Review the PermissionSet XML against the destination Metadata API schema.'
                 })
             );
         }
@@ -394,12 +500,64 @@ function dedupeWarnings(warnings) {
     return result;
 }
 
+function buildBlockingSummary(blockingComponents = []) {
+    const blockingByMetadataType = {};
+    const blockingByCategory = {};
+
+    for (const component of blockingComponents || []) {
+        const metadataType = component?.metadataType || 'Unknown';
+        const category = component?.category || 'UNKNOWN';
+        blockingByMetadataType[metadataType] =
+            (blockingByMetadataType[metadataType] || 0) + 1;
+        blockingByCategory[category] =
+            (blockingByCategory[category] || 0) + 1;
+    }
+
+    return {
+        totalBlocking: blockingComponents.length,
+        blockingByMetadataType,
+        blockingByCategory
+    };
+}
+
+function mergeCompatibilityBlockingComponents(...collections) {
+    const byComponent = new Map();
+
+    for (const collection of collections) {
+        for (const component of collection || []) {
+            const metadataType =
+                component?.metadataType || component?.type || null;
+            const metadataName =
+                component?.metadataName || component?.name || null;
+
+            if (!metadataType || !metadataName) {
+                continue;
+            }
+
+            const key = `${metadataType}:${metadataName}`;
+
+            if (!byComponent.has(key)) {
+                byComponent.set(key, {
+                    ...component,
+                    metadataType,
+                    metadataName
+                });
+            }
+        }
+    }
+
+    return [...byComponent.values()];
+}
+
 function buildEmptyResult(reason) {
     return {
         overallStatus: 'PASS',
         compatibilityWarnings: [],
+        blockingComponents: [],
+        blockingSummary: buildBlockingSummary([]),
         summary: {
             warningCount: 0,
+            blockingCount: 0,
             reason: reason || null
         }
     };
@@ -412,6 +570,7 @@ function buildEmptyResult(reason) {
 async function analyzeDeploymentCompatibilityPlan({
     generatedDeploymentPackage,
     formulaCompatibility = null,
+    permissionSetCompatibility = null,
     existingFindings = [],
     deploymentApiVersionPolicy = null,
     readFile = null
@@ -425,6 +584,18 @@ async function analyzeDeploymentCompatibilityPlan({
 
     warnings.push(...mapFormulaCompatibilityWarnings(formulaCompatibility));
     warnings.push(...mapExistingFindingWarnings(existingFindings));
+
+    // PermissionSet compatibility is fail-safe: analyzer/mapping failures must
+    // never create a blocker or affect existing compatibility categories.
+    try {
+        warnings.push(
+            ...mapPermissionSetCompatibilityWarnings(
+                permissionSetCompatibility
+            )
+        );
+    } catch (error) {
+        // Intentionally empty — existing compatibility planning continues.
+    }
 
     const deploymentApiVersion =
         deploymentApiVersionPolicy?.deploymentApiVersion ||
@@ -461,13 +632,41 @@ async function analyzeDeploymentCompatibilityPlan({
     }
 
     const compatibilityWarnings = dedupeWarnings(warnings);
-    const overallStatus = compatibilityWarnings.length ? 'WARNING' : 'PASS';
+    const blockingComponents = compatibilityWarnings
+        .filter(
+            (warning) =>
+                warning.category === CATEGORIES.PERMISSION_SET_API_VERSION &&
+                warning.status === 'INCOMPATIBLE' &&
+                warning.severity === 'BLOCKER'
+        )
+        .map((warning) => ({
+            metadataType: warning.metadataType,
+            metadataName: warning.metadataName,
+            category: warning.category,
+            severity: warning.severity,
+            status: warning.status,
+            action: 'BLOCKING',
+            reason: warning.message,
+            currentApi: warning.currentApi || null,
+            requiredApi: warning.requiredApi || null,
+            unsupportedProperties: warning.unsupportedProperties || [],
+            recommendation: warning.recommendation
+        }));
+    const blockingSummary = buildBlockingSummary(blockingComponents);
+    const overallStatus = blockingComponents.length
+        ? 'INCOMPATIBLE'
+        : compatibilityWarnings.length
+          ? 'WARNING'
+          : 'PASS';
 
     return {
         overallStatus,
         compatibilityWarnings,
+        blockingComponents,
+        blockingSummary,
         summary: {
             warningCount: compatibilityWarnings.length,
+            blockingCount: blockingComponents.length,
             reason: null
         }
     };
@@ -477,8 +676,11 @@ module.exports = {
     CATEGORIES,
     analyzeDeploymentCompatibilityPlan,
     mapFormulaCompatibilityWarnings,
+    mapPermissionSetCompatibilityWarnings,
     mapExistingFindingWarnings,
     analyzeFlowApiCompatibility,
     extractLwcComponentNames,
-    analyzeLwcAndFlexiDependencies
+    analyzeLwcAndFlexiDependencies,
+    buildBlockingSummary,
+    mergeCompatibilityBlockingComponents
 };

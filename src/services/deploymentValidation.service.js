@@ -1264,6 +1264,17 @@ async function validateDeployment({
         };
     }
 
+    // Phase 13.1/13.2 — PermissionSet compatibility diagnostics feed the
+    // existing compatibility planner. Analysis is fail-safe and read-only.
+    const permissionSetCompatibility =
+        await deploymentPermissionSetCompatibilityService.analyzePermissionSetCompatibilitySafe(
+            {
+                generatedDeploymentPackage,
+                deploymentApiVersionPolicy,
+                readFile: packageSourceReadFile
+            }
+        );
+
     // Phase 10.24 — Deployment Compatibility Planner (warnings only).
     // Distinct from dependency validation. Does not change deploy behavior.
     let deploymentCompatibilityPlan = {
@@ -1299,6 +1310,7 @@ async function validateDeployment({
                 {
                     generatedDeploymentPackage,
                     formulaCompatibility,
+                    permissionSetCompatibility,
                     existingFindings: compatibilityPlanFindings,
                     deploymentApiVersionPolicy,
                     readFile: packageSourceReadFile
@@ -1408,6 +1420,16 @@ async function validateDeployment({
         };
     }
 
+    const compatibilityBlockingComponents =
+        deploymentCompatibilityPlanService.mergeCompatibilityBlockingComponents(
+            deploymentCompatibilityImpact?.blockingComponents || [],
+            deploymentCompatibilityPlan?.blockingComponents || []
+        );
+    const compatibilityBlockingSummary =
+        deploymentCompatibilityPlanService.buildBlockingSummary(
+            compatibilityBlockingComponents
+        );
+
     // Phase 11.3 — Compatibility Deployment Readiness Planner (report-only).
     // Does not cancel deployment or mutate package / workspace / CLI.
     const compatibilityDeploymentReadiness =
@@ -1415,12 +1437,10 @@ async function validateDeployment({
             filteredDeploymentPackage: generatedDeploymentPackage,
             excludedComponents:
                 compatibilityPackageFilter?.excludedComponents || [],
-            blockingComponents:
-                deploymentCompatibilityImpact?.blockingComponents || [],
+            blockingComponents: compatibilityBlockingComponents,
             compatibilitySummary:
                 compatibilityPackageFilter?.compatibilitySummary || null,
-            blockingSummary:
-                deploymentCompatibilityImpact?.blockingSummary || null,
+            blockingSummary: compatibilityBlockingSummary,
             totalWarnings: Array.isArray(
                 deploymentCompatibilityPlan?.compatibilityWarnings
             )
@@ -1438,6 +1458,7 @@ async function validateDeployment({
         compatibilityDeploymentReadiness.blockingComponents;
     deploymentReadiness.compatibilitySummary =
         compatibilityDeploymentReadiness.summary;
+    deploymentReadiness.reason = compatibilityDeploymentReadiness.reason;
 
     // Phase 11.6 — Enterprise Compatibility Advisor (read-only guidance).
     // Does not change package, readiness, gate, workspace, or CLI behavior.
@@ -1449,8 +1470,7 @@ async function validateDeployment({
                 deploymentReadiness,
                 excludedComponents:
                     compatibilityPackageFilter?.excludedComponents || [],
-                blockingComponents:
-                    deploymentCompatibilityImpact?.blockingComponents || [],
+                blockingComponents: compatibilityBlockingComponents,
                 compatibilityWarnings:
                     deploymentCompatibilityPlan?.compatibilityWarnings || []
             }
@@ -1465,23 +1485,11 @@ async function validateDeployment({
             deploymentCompatibilityAdvisor,
             excludedComponents:
                 compatibilityPackageFilter?.excludedComponents || [],
-            blockingComponents:
-                deploymentCompatibilityImpact?.blockingComponents || [],
+            blockingComponents: compatibilityBlockingComponents,
             compatibilityWarnings:
                 deploymentCompatibilityPlan?.compatibilityWarnings || []
         }
     );
-
-    // Phase 13.1 — PermissionSet compatibility diagnostics only.
-    // Reads the final package XML sources without rewriting or filtering them.
-    const permissionSetCompatibility =
-        await deploymentPermissionSetCompatibilityService.analyzePermissionSetCompatibilitySafe(
-            {
-                generatedDeploymentPackage,
-                deploymentApiVersionPolicy,
-                readFile: packageSourceReadFile
-            }
-        );
 
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
@@ -1668,13 +1676,8 @@ async function validateDeployment({
         excludedComponents:
             compatibilityPackageFilter?.excludedComponents || [],
         deploymentCompatibilityImpact,
-        blockingComponents:
-            deploymentCompatibilityImpact?.blockingComponents || [],
-        blockingSummary: deploymentCompatibilityImpact?.blockingSummary || {
-            totalBlocking: 0,
-            blockingByMetadataType: {},
-            blockingByCategory: {}
-        },
+        blockingComponents: compatibilityBlockingComponents,
+        blockingSummary: compatibilityBlockingSummary,
         deploymentCompatibilityAdvisor,
         deploymentPreview,
         permissionSetCompatibility,
@@ -1712,8 +1715,7 @@ async function validateDeployment({
                     compatibilityPackageFilter?.compatibilitySummary || null,
                 excludedComponents:
                     compatibilityPackageFilter?.excludedComponents || [],
-                blockingComponents:
-                    deploymentCompatibilityImpact?.blockingComponents || []
+                blockingComponents: compatibilityBlockingComponents
             })
         );
     } else if (deploymentMode === 'DEPLOY') {

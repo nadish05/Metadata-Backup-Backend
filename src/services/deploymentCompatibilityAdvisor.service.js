@@ -81,6 +81,19 @@ const CATEGORY_GUIDANCE = Object.freeze({
             'Deploy Lightning components referenced by the FlexiPage before or with the page.',
         defaultSeverity: 'WARNING'
     }),
+    PERMISSION_SET_API_VERSION: Object.freeze({
+        reason:
+            'Permission Set contains security properties unsupported by the selected Metadata API version.',
+        salesforceBehavior:
+            'Salesforce rejects version-gated PermissionSet XML properties. Removing them can reduce or otherwise change granted access, and Salesforce does not recreate omitted security grants.',
+        recommendedAction:
+            'Deploy using Metadata API 63.0 or later; upgrade the destination to support the required Metadata API when necessary; or replace View All Fields with explicit field permissions only after security review.',
+        deploymentImpact:
+            'Blocks deployment because the Permission Set security model cannot be preserved automatically.',
+        documentationHint:
+            'Review the Salesforce Metadata API PermissionSet schema and property availability for the destination API version.',
+        defaultSeverity: 'BLOCKER'
+    }),
     BLOCKING_DEPENDENCY: Object.freeze({
         reason:
             'Component depends on metadata that was excluded for compatibility reasons.',
@@ -218,7 +231,9 @@ function collectBlockingRecommendations(blockingComponents, seen) {
                 ? blocking.blockedBy[0]
                 : null;
         const category =
-            primaryBlocker?.category || 'BLOCKING_DEPENDENCY';
+            blocking?.category ||
+            primaryBlocker?.category ||
+            'BLOCKING_DEPENDENCY';
         const key = `BLOCKING:${componentKey(metadataType, component)}`;
 
         if (key && seen.has(key)) {
@@ -229,7 +244,11 @@ function collectBlockingRecommendations(blockingComponents, seen) {
             seen.add(key);
         }
 
-        const guidance = getGuidance('BLOCKING_DEPENDENCY');
+        const guidance = getGuidance(
+            category === 'PERMISSION_SET_API_VERSION'
+                ? category
+                : 'BLOCKING_DEPENDENCY'
+        );
         const blockerNames = (blocking?.blockedBy || [])
             .map((item) => item?.metadataName)
             .filter(Boolean)
@@ -264,7 +283,8 @@ function collectWarningRecommendations(compatibilityWarnings, seen) {
         'FORMULA_TYPE_CHANGE',
         'FORMULA_COMPILATION',
         'FIELD_TYPE_CHANGE',
-        'PICKLIST_TYPE_CHANGE'
+        'PICKLIST_TYPE_CHANGE',
+        'PERMISSION_SET_API_VERSION'
     ]);
 
     for (const warning of compatibilityWarnings || []) {
@@ -280,7 +300,12 @@ function collectWarningRecommendations(compatibilityWarnings, seen) {
         const key = componentKey(metadataType, component);
 
         // Prefer excluded/blocking recommendations already recorded.
-        if (key && seen.has(key)) {
+        if (
+            key &&
+            (seen.has(key) ||
+                (category === 'PERMISSION_SET_API_VERSION' &&
+                    seen.has(`BLOCKING:${key}`)))
+        ) {
             continue;
         }
 

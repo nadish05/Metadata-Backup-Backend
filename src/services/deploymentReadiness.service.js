@@ -230,6 +230,10 @@ function planCompatibilityDeploymentReadiness({
     });
 
     const readyForDeployment = blocking.length === 0;
+    const reason = readyForDeployment
+        ? null
+        : blocking.find((item) => item?.category)?.category ||
+          'BLOCKING_DEPENDENCIES';
 
     const resolvedExcludedCount =
         compatibilitySummary?.totalExcluded != null
@@ -258,6 +262,7 @@ function planCompatibilityDeploymentReadiness({
 
     return {
         readyForDeployment,
+        reason,
         deployableComponents,
         excludedComponents: excluded,
         blockingComponents: blocking,

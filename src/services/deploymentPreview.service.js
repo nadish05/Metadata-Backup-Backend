@@ -20,7 +20,12 @@ function emptyPreview() {
             totalMetadata: 0,
             deployableMetadata: 0,
             excludedMetadata: 0,
-            blockedMetadata: 0
+            blockedMetadata: 0,
+            permissionSets: {
+                compatible: 0,
+                blocked: 0,
+                requiresNewerMetadataApi: 0
+            }
         },
         notes: []
     };
@@ -101,6 +106,50 @@ function hasMetadataType(breakdown, type) {
     return breakdown.some((entry) => entry.metadataType === type);
 }
 
+function buildPermissionSetStatistics({
+    deployableMembers,
+    blockingComponents,
+    compatibilityWarnings
+}) {
+    const permissionSetNames = new Set(
+        (deployableMembers || [])
+            .filter((member) => member.metadataType === 'PermissionSet')
+            .map((member) => member.metadataName)
+            .filter(Boolean)
+    );
+    const blockedNames = new Set(
+        (blockingComponents || [])
+            .filter(
+                (component) =>
+                    (component?.metadataType || component?.type) ===
+                        'PermissionSet' &&
+                    component?.category === 'PERMISSION_SET_API_VERSION'
+            )
+            .map((component) => component?.metadataName || component?.name)
+            .filter(Boolean)
+    );
+    const requiresNewerNames = new Set(
+        (compatibilityWarnings || [])
+            .filter(
+                (warning) =>
+                    warning?.metadataType === 'PermissionSet' &&
+                    warning?.category === 'PERMISSION_SET_API_VERSION' &&
+                    warning?.status === 'INCOMPATIBLE' &&
+                    warning?.requiredApi
+            )
+            .map((warning) => warning?.metadataName)
+            .filter(Boolean)
+    );
+
+    return {
+        compatible: [...permissionSetNames].filter(
+            (name) => !blockedNames.has(name)
+        ).length,
+        blocked: blockedNames.size,
+        requiresNewerMetadataApi: requiresNewerNames.size
+    };
+}
+
 function buildNotes({
     deploymentMode,
     excludedCount,
@@ -108,6 +157,7 @@ function buildNotes({
     warningCount,
     metadataBreakdown,
     excludedComponents,
+    blockingComponents,
     deploymentCompatibilityAdvisor
 }) {
     const notes = [];
@@ -148,6 +198,20 @@ function buildNotes({
 
     if (hasMetadataType(metadataBreakdown, 'LightningComponentBundle')) {
         notes.push('Deployment contains LWC bundles.');
+    }
+
+    const permissionSetBlockers = (blockingComponents || []).filter(
+        (component) =>
+            component?.metadataType === 'PermissionSet' &&
+            component?.category === 'PERMISSION_SET_API_VERSION'
+    );
+
+    if (permissionSetBlockers.length) {
+        notes.push(
+            `${permissionSetBlockers.length} Permission Set${
+                permissionSetBlockers.length === 1 ? '' : 's'
+            } require a newer Metadata API version or security review.`
+        );
     }
 
     if (warningCount > 0 && deploymentMode !== 'BLOCKED') {
@@ -226,6 +290,11 @@ function buildDeploymentPreview({
         blockingCount
     );
     const estimatedRisk = resolveEstimatedRisk(excludedCount, blockingCount);
+    const permissionSetStatistics = buildPermissionSetStatistics({
+        deployableMembers,
+        blockingComponents: blocking,
+        compatibilityWarnings: warnings
+    });
 
     return {
         deploymentMode,
@@ -241,7 +310,8 @@ function buildDeploymentPreview({
             totalMetadata: deployableCount + excludedCount,
             deployableMetadata: deployableCount,
             excludedMetadata: excludedCount,
-            blockedMetadata: blockingCount
+            blockedMetadata: blockingCount,
+            permissionSets: permissionSetStatistics
         },
         notes: buildNotes({
             deploymentMode,
@@ -250,6 +320,7 @@ function buildDeploymentPreview({
             warningCount,
             metadataBreakdown,
             excludedComponents: excluded,
+            blockingComponents: blocking,
             deploymentCompatibilityAdvisor
         })
     };
@@ -272,5 +343,6 @@ module.exports = {
     buildDeploymentPreviewSafe,
     resolveDeploymentMode,
     resolveEstimatedRisk,
-    buildMetadataBreakdown
+    buildMetadataBreakdown,
+    buildPermissionSetStatistics
 };

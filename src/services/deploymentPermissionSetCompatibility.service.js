@@ -219,6 +219,8 @@ function createUnsupportedFinding({
         category: 'PERMISSION_SET_API_VERSION',
         rootCause: 'PERMISSION_SET_XML_SCHEMA_EVOLUTION',
         severity: 'WARNING',
+        currentApiVersion: deploymentApiVersion || null,
+        requiredApiVersion: minimum,
         reason: `${property} is ${versionRule}, but deployment uses API ${deploymentApiVersion || 'unknown'}.`,
         salesforceBehavior:
             'Salesforce validates PermissionSet XML against the deployment Metadata API schema and rejects properties unavailable in that version.',
