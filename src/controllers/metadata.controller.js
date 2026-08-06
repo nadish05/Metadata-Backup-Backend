@@ -12,8 +12,78 @@ const {
 const {
     cleanupRetrievalResources
 } = require('../services/retrievalCleanup.service');
+const {
+    persistRetrievalSnapshotMetadata
+} = require('../services/retrievalSnapshotMetadata.service');
+const {
+    getLatestApiVersion
+} = require('../services/destinationInventory/destinationInventoryBuilder.service');
 
 const RETRIEVAL_CLI_ALIAS = 'temporg';
+
+function resolveSourceOrgId(identityUrl) {
+    try {
+        const segments = new URL(identityUrl).pathname
+            .split('/')
+            .filter(Boolean);
+
+        return segments[0] === 'id' ? segments[1] || null : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+async function createRetrievalSnapshot({
+    projectPath,
+    tokenResponse,
+    instanceUrl,
+    accessToken
+}) {
+    const sourceOrgId = resolveSourceOrgId(tokenResponse?.data?.id);
+    let result;
+
+    try {
+        result = await persistRetrievalSnapshotMetadata({
+            projectPath,
+            sourceOrgId,
+            instanceUrl,
+            accessToken,
+            retrievedAt: new Date().toISOString(),
+            getLatestApiVersionFn: getLatestApiVersion
+        });
+    } catch (error) {
+        result = {
+            snapshotMetadata: {
+                sourceOrgId,
+                sourceMetadataApiVersion: null
+            },
+            written: false
+        };
+    }
+
+    console.log('================================================');
+    console.log('RETRIEVAL SNAPSHOT METADATA');
+    console.log('================================================');
+    console.log('');
+    console.log(
+        'Source Org:',
+        result.snapshotMetadata.sourceOrgId || '(unknown)'
+    );
+    console.log('');
+    console.log(
+        'Metadata API:',
+        result.snapshotMetadata.sourceMetadataApiVersion || '(unknown)'
+    );
+    console.log('');
+    console.log(
+        'Snapshot File:',
+        '.metadata-backup/retrieval-metadata.json'
+    );
+    console.log('');
+    console.log('Written:', result.written ? 'YES' : 'NO');
+
+    return result;
+}
 
 exports.retrieveMetadataInternal = async (
     refreshToken,
@@ -85,6 +155,13 @@ console.log(
         );
  
         console.log('STEP 3 COMPLETE');
+
+        await createRetrievalSnapshot({
+            projectPath: `${workspace}/backup-project`,
+            tokenResponse,
+            instanceUrl,
+            accessToken
+        });
  
         console.log('STEP 4 - CLI Login');
         setStatus('CLI Login');
@@ -369,6 +446,13 @@ exports.retrieveAllMetadata = async (req, res) => {
         );
 
         console.log('Project generated');
+
+        await createRetrievalSnapshot({
+            projectPath: `${workspace}/backup-project`,
+            tokenResponse,
+            instanceUrl,
+            accessToken
+        });
 
         // STEP 4
         console.log('Logging into Salesforce CLI...');
