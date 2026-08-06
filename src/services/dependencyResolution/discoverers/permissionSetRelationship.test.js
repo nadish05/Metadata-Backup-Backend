@@ -179,6 +179,90 @@ async function main() {
         assert.deepStrictEqual(result.relationships, []);
     });
 
+    await runTest('tabSettings emits CustomTab', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <tabSettings>
+                    <tab>Gym_Trainer__c</tab>
+                </tabSettings>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'Gym_Trainer__c',
+                metadataType: 'CustomTab',
+                type: 'CustomTab',
+                relationship: 'PermissionSetTabSetting',
+                sourceMetadata: 'Subscription_Access',
+                sourceField: null,
+                discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                discoveryMethod: 'tabSettings',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'PermissionSet tab access'
+            }
+        ]);
+    });
+
+    await runTest('multiple custom tab settings emit unique dependencies', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <tabSettings><tab>Gym_Trainer__c</tab></tabSettings>
+                <tabSettings><tab>My_Custom_Tab</tab></tabSettings>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'CustomTab').map((item) => item.name),
+            ['Gym_Trainer__c', 'My_Custom_Tab']
+        );
+    });
+
+    await runTest('duplicate custom tab settings emit one dependency', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <tabSettings><tab>Gym_Trainer__c</tab></tabSettings>
+                <tabSettings><tab>Gym_Trainer__c</tab></tabSettings>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'CustomTab').map((item) => item.name),
+            ['Gym_Trainer__c']
+        );
+    });
+
+    await runTest('standard tab settings are ignored', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <tabSettings><tab>Account</tab></tabSettings>
+                <tabSettings><tab>Contact</tab></tabSettings>
+                <tabSettings><tab>Lead</tab></tabSettings>
+                <tabSettings><tab>Opportunity</tab></tabSettings>
+                <tabSettings><tab>Case</tab></tabSettings>
+                <tabSettings><tab>Campaign</tab></tabSettings>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('malformed tab settings are ignored', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <tabSettings><tab></tab></tabSettings>
+                <tabSettings><tab>Bad Tab</tab></tabSettings>
+                <tabSettings><tab>Bad.Tab</tab></tabSettings>
+                <tabSettings><tab>standard-Account</tab></tabSettings>
+                <tabSettings><tab>CustomTab</tab></tabSettings>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
     await runTest(
         'PermissionSet without object or field permissions emits nothing',
         async () => {

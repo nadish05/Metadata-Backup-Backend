@@ -7,7 +7,8 @@ const CUSTOM_OBJECT_SUFFIX = '__c';
 const RELATIONSHIPS = Object.freeze({
     OBJECT_PERMISSION: 'PermissionSetObjectPermission',
     FIELD_PERMISSION_OBJECT: 'PermissionSetFieldPermissionObject',
-    FIELD_PERMISSION: 'PermissionSetFieldPermission'
+    FIELD_PERMISSION: 'PermissionSetFieldPermission',
+    TAB_SETTING: 'PermissionSetTabSetting'
 });
 
 function normalizePath(filePath) {
@@ -58,6 +59,16 @@ function isCustomObjectName(value) {
         name.endsWith(CUSTOM_OBJECT_SUFFIX) &&
         /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
     );
+}
+
+function isCustomTabName(value) {
+    const name = String(value || '').trim();
+
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        return false;
+    }
+
+    return name.endsWith(CUSTOM_OBJECT_SUFFIX) || name.includes('_');
 }
 
 function extractTagValue(block, tagName) {
@@ -201,6 +212,24 @@ function discoverPermissionSetRelationships(
                 sourceMetadata,
                 discoveryMethod: 'fieldPermissions',
                 reason: 'PermissionSet field permission',
+                depth
+            })
+        );
+    }
+
+    for (const tabName of extractSectionValues(xml, 'tabSettings', 'tab')) {
+        if (!isCustomTabName(tabName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: tabName,
+                metadataType: 'CustomTab',
+                relationship: RELATIONSHIPS.TAB_SETTING,
+                sourceMetadata,
+                discoveryMethod: 'tabSettings',
+                reason: 'PermissionSet tab access',
                 depth
             })
         );
