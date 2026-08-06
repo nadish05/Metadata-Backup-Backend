@@ -11,7 +11,10 @@ const RELATIONSHIPS = Object.freeze({
     FIELD_PERMISSION_OBJECT: 'PermissionSetFieldPermissionObject',
     FIELD_PERMISSION: 'PermissionSetFieldPermission',
     RECORD_TYPE_VISIBILITY: 'PermissionSetRecordTypeVisibility',
-    TAB_SETTING: 'PermissionSetTabSetting'
+    TAB_SETTING: 'PermissionSetTabSetting',
+    CLASS_ACCESS: 'PermissionSetClassAccess',
+    PAGE_ACCESS: 'PermissionSetPageAccess',
+    FLOW_ACCESS: 'PermissionSetFlowAccess'
 });
 
 function normalizePath(filePath) {
@@ -72,6 +75,10 @@ function isCustomTabName(value) {
     }
 
     return name.endsWith(CUSTOM_OBJECT_SUFFIX) || name.includes('_');
+}
+
+function isValidMetadataName(value) {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value || '').trim());
 }
 
 function extractTagValue(block, tagName) {
@@ -276,6 +283,71 @@ function discoverPermissionSetRelationships(
                 sourceMetadata,
                 discoveryMethod: 'tabSettings',
                 reason: 'PermissionSet tab access',
+                depth
+            })
+        );
+    }
+
+    for (const className of extractSectionValues(
+        xml,
+        'classAccesses',
+        'apexClass'
+    )) {
+        if (!isValidMetadataName(className)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: className,
+                metadataType: 'ApexClass',
+                relationship: RELATIONSHIPS.CLASS_ACCESS,
+                sourceMetadata,
+                sourceField: 'apexClass',
+                discoveryMethod: 'classAccesses',
+                reason: 'PermissionSet Apex class access',
+                depth
+            })
+        );
+    }
+
+    for (const pageName of extractSectionValues(
+        xml,
+        'pageAccesses',
+        'apexPage'
+    )) {
+        if (!isValidMetadataName(pageName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: pageName,
+                metadataType: 'ApexPage',
+                relationship: RELATIONSHIPS.PAGE_ACCESS,
+                sourceMetadata,
+                sourceField: 'apexPage',
+                discoveryMethod: 'pageAccesses',
+                reason: 'PermissionSet Apex page access',
+                depth
+            })
+        );
+    }
+
+    for (const flowName of extractSectionValues(xml, 'flowAccesses', 'flow')) {
+        if (!isValidMetadataName(flowName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: flowName,
+                metadataType: 'Flow',
+                relationship: RELATIONSHIPS.FLOW_ACCESS,
+                sourceMetadata,
+                sourceField: 'flow',
+                discoveryMethod: 'flowAccesses',
+                reason: 'PermissionSet flow access',
                 depth
             })
         );

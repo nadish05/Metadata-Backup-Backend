@@ -385,7 +385,7 @@ async function main() {
     });
 
     await runTest(
-        'PermissionSet without object or field permissions emits nothing',
+        'classAccesses emits ApexClass using the existing relationship DTO',
         async () => {
             const result = await discover(`
                 <PermissionSet>
@@ -396,9 +396,128 @@ async function main() {
                 </PermissionSet>
             `);
 
-            assert.deepStrictEqual(result.relationships, []);
+            assert.deepStrictEqual(result.relationships, [
+                {
+                    name: 'SessionController',
+                    metadataType: 'ApexClass',
+                    type: 'ApexClass',
+                    relationship: 'PermissionSetClassAccess',
+                    sourceMetadata: 'Subscription_Access',
+                    sourceField: 'apexClass',
+                    discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                    discoveryMethod: 'classAccesses',
+                    required: true,
+                    selected: true,
+                    depth: 1,
+                    reason: 'PermissionSet Apex class access'
+                }
+            ]);
             assert.strictEqual(result.metadataScanned, 1);
             assert.strictEqual(result.filesScanned, 1);
+        }
+    );
+
+    await runTest('pageAccesses emits ApexPage without requiring enabled', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <pageAccesses>
+                    <apexPage>Weather_Dashboard</apexPage>
+                    <enabled>false</enabled>
+                </pageAccesses>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'Weather_Dashboard',
+                metadataType: 'ApexPage',
+                type: 'ApexPage',
+                relationship: 'PermissionSetPageAccess',
+                sourceMetadata: 'Subscription_Access',
+                sourceField: 'apexPage',
+                discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                discoveryMethod: 'pageAccesses',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'PermissionSet Apex page access'
+            }
+        ]);
+    });
+
+    await runTest('flowAccesses emits Flow without requiring enabled', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <flowAccesses>
+                    <flow>Weather_Sync_Flow</flow>
+                </flowAccesses>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'Weather_Sync_Flow',
+                metadataType: 'Flow',
+                type: 'Flow',
+                relationship: 'PermissionSetFlowAccess',
+                sourceMetadata: 'Subscription_Access',
+                sourceField: 'flow',
+                discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                discoveryMethod: 'flowAccesses',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'PermissionSet flow access'
+            }
+        ]);
+    });
+
+    await runTest(
+        'duplicate class, page and flow accesses emit one dependency per type',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <classAccesses><apexClass>SessionController</apexClass></classAccesses>
+                    <classAccesses><apexClass>SessionController</apexClass></classAccesses>
+                    <pageAccesses><apexPage>Weather_Dashboard</apexPage></pageAccesses>
+                    <pageAccesses><apexPage>Weather_Dashboard</apexPage></pageAccesses>
+                    <flowAccesses><flow>Weather_Sync_Flow</flow></flowAccesses>
+                    <flowAccesses><flow>Weather_Sync_Flow</flow></flowAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                result.relationships.map((item) => [
+                    item.metadataType,
+                    item.name
+                ]),
+                [
+                    ['ApexClass', 'SessionController'],
+                    ['ApexPage', 'Weather_Dashboard'],
+                    ['Flow', 'Weather_Sync_Flow']
+                ]
+            );
+        }
+    );
+
+    await runTest(
+        'empty and malformed class, page and flow access names are ignored',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <classAccesses><apexClass></apexClass></classAccesses>
+                    <classAccesses><apexClass>Bad Class</apexClass></classAccesses>
+                    <classAccesses><apexClass>Bad.Class</apexClass></classAccesses>
+                    <pageAccesses><apexPage> </apexPage></pageAccesses>
+                    <pageAccesses><apexPage>Bad-Page</apexPage></pageAccesses>
+                    <pageAccesses><apexPage>1BadPage</apexPage></pageAccesses>
+                    <flowAccesses><flow></flow></flowAccesses>
+                    <flowAccesses><flow>Bad Flow</flow></flowAccesses>
+                    <flowAccesses><flow>Bad/Flow</flow></flowAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, []);
         }
     );
 
