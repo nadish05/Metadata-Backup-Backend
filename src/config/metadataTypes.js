@@ -39,6 +39,13 @@ const METADATA_TYPE_RULES = {
         extension: '.object-meta.xml',
         requiresMetaXml: false
     },
+    CustomTab: {
+        kind: METADATA_KINDS.FILE,
+        folder: 'tabs',
+        extension: '.tab-meta.xml',
+        memberNamePattern: /^[A-Za-z_][A-Za-z0-9_]*$/,
+        requiresMetaXml: false
+    },
     Flow: {
         kind: METADATA_KINDS.FILE,
         extension: '.flow-meta.xml',

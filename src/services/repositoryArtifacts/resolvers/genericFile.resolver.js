@@ -58,6 +58,13 @@ const genericFileArtifactResolver = {
             return null;
         }
 
+        if (
+            rule.memberNamePattern instanceof RegExp &&
+            !rule.memberNamePattern.test(name)
+        ) {
+            return null;
+        }
+
         const suffix = rule.extension;
 
         // Object-child style names: Object.Child
@@ -124,6 +131,8 @@ const genericFileArtifactResolver = {
                 .find(
                     (repoFile) =>
                         repoFile.endsWith(suffix) &&
+                        (!rule.folder ||
+                            repoFile.includes(`/${rule.folder}/`)) &&
                         basenameWithoutSuffix(repoFile, suffix) === name
                 ) || null
         );
