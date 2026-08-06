@@ -105,8 +105,7 @@ function resolveSourceApiVersion({
     const explicit =
         normalizeApiVersion(sourceApiVersion) ||
         normalizeApiVersion(deploymentPackage?.sourceApiVersion) ||
-        normalizeApiVersion(deploymentPackage?.sourceMaxApiVersion) ||
-        normalizeApiVersion(deploymentPackage?.sourceOrgApiVersion);
+        normalizeApiVersion(deploymentPackage?.sourceMaxApiVersion);
 
     if (explicit) {
         return explicit;

@@ -14,6 +14,7 @@ const deploymentPreviewService = require('./deploymentPreview.service');
 const deploymentPermissionSetCompatibilityService = require('./deploymentPermissionSetCompatibility.service');
 const deploymentApiNegotiationService = require('./deploymentApiNegotiation.service');
 const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
+const sourceMetadataApiVersionService = require('./sourceMetadataApiVersion.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1098,6 +1099,12 @@ async function validateDeployment({
     try {
         let destinationMaxApiVersion = null;
 
+        await sourceMetadataApiVersionService.discoverSourceMetadataApiVersion({
+            deploymentPackage,
+            refreshAccessTokenFn: refreshAccessToken,
+            getLatestApiVersionFn: getLatestApiVersion
+        });
+
         if (accessTokenForDownstream && resolvedInstanceUrl) {
             try {
                 destinationMaxApiVersion = await getLatestApiVersion(
@@ -1156,11 +1163,7 @@ async function validateDeployment({
     // Phase 13.3/13.4 — negotiate and safely adopt the deployment API.
     const deploymentApiNegotiation =
         deploymentApiNegotiationService.negotiateDeploymentApiVersionsSafe({
-            sourceApiVersion:
-                deploymentPackage?.sourceApiVersion ||
-                deploymentPackage?.sourceMaxApiVersion ||
-                deploymentPackage?.sourceOrgApiVersion ||
-                null,
+            sourceApiVersion: deploymentPackage?.sourceApiVersion || null,
             destinationApiVersion:
                 deploymentApiVersionPolicy?.destinationMaxApiVersion || null,
             currentDeploymentApiVersion:
@@ -1170,6 +1173,29 @@ async function validateDeployment({
             embeddedApiVersions:
                 deploymentApiVersionPolicy?.embeddedApiVersions || []
         });
+
+    // TEMP (Phase 13.5) — remove after source API discovery verification.
+    console.log('====================================================');
+    console.log('SOURCE API DISCOVERY');
+    console.log('====================================================');
+    console.log(
+        'Source Org API:',
+        deploymentApiNegotiation?.sourceApiVersion || '(unknown)'
+    );
+    console.log(
+        'Destination API:',
+        deploymentApiNegotiation?.destinationApiVersion || '(unknown)'
+    );
+    console.log(
+        'Negotiated API:',
+        deploymentApiNegotiation?.negotiatedApiVersion || '(unknown)'
+    );
+    console.log(
+        'Effective Compatibility API:',
+        deploymentApiNegotiation?.effectiveCompatibilityApiVersion ||
+            '(unknown)'
+    );
+    console.log('====================================================');
 
     const deploymentApiVersion =
         deploymentApiNegotiationService.resolveDeploymentApiVersion({
