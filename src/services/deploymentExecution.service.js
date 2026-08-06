@@ -5,6 +5,7 @@ const { exec } = require('child_process');
 
 const { getCliCompatibility, buildCliCompatibilityDiagnostics } = require('./salesforceCliCompatibility.service');
 const { ensureSfdxProject } = require('./sfdxProject.service');
+const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
 const {
     logSection,
     shellQuote,
@@ -260,14 +261,26 @@ async function runDeploymentExecution({
 
             logSection('Executing Deployment');
 
+            const resolvedDeploymentApiVersion =
+                deploymentApiVersion ||
+                generatedManifest?.summary?.apiVersion ||
+                generatedManifest?.deploymentApiVersionPolicy
+                    ?.deploymentApiVersion;
+
+            // TEMP (Phase 13.5) — adoption trace stage 7.
+            metadataApiAdoptionTrace.logCliStage({
+                deploymentApiVersion: resolvedDeploymentApiVersion
+            });
+
             deployCommand = buildProjectDeployCommand({
                 workspacePath,
                 alias,
-                deploymentApiVersion:
-                    deploymentApiVersion ||
-                    generatedManifest?.summary?.apiVersion ||
-                    generatedManifest?.deploymentApiVersionPolicy
-                        ?.deploymentApiVersion
+                deploymentApiVersion: resolvedDeploymentApiVersion
+            });
+
+            // TEMP (Phase 13.5) — adoption trace stage 8.
+            metadataApiAdoptionTrace.logCliCommandStage({
+                cliCommand: deployCommand
             });
 
             let cliJson;

@@ -13,6 +13,7 @@ const deploymentCompatibilityAdvisorService = require('./deploymentCompatibility
 const deploymentPreviewService = require('./deploymentPreview.service');
 const deploymentPermissionSetCompatibilityService = require('./deploymentPermissionSetCompatibility.service');
 const deploymentApiNegotiationService = require('./deploymentApiNegotiation.service');
+const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1188,6 +1189,20 @@ async function validateDeployment({
             deploymentApiVersion
     };
 
+    // TEMP (Phase 13.5) — adoption trace stage 1.
+    metadataApiAdoptionTrace.beginAdoptionTrace();
+    metadataApiAdoptionTrace.logNegotiationStage({
+        currentDeploymentApiVersion:
+            deploymentApiNegotiation?.currentDeploymentApiVersion,
+        sourceApiVersion: deploymentApiNegotiation?.sourceApiVersion,
+        destinationApiVersion: deploymentApiNegotiation?.destinationApiVersion,
+        negotiatedApiVersion: deploymentApiNegotiation?.negotiatedApiVersion,
+        effectiveCompatibilityApiVersion:
+            deploymentApiNegotiation?.effectiveCompatibilityApiVersion,
+        negotiationStatus: deploymentApiNegotiation?.negotiationStatus,
+        adoptedDeploymentApiVersion: deploymentApiVersion
+    });
+
     const deploymentReadiness =
         deploymentReadinessService.evaluateDeploymentReadiness({
             deploymentValidation: connectivityResult.deploymentValidation,
@@ -1341,6 +1356,16 @@ async function validateDeployment({
                 ? formulaCompatibility.warnings
                 : [])
         ];
+
+        // TEMP (Phase 13.5) — adoption trace stage 2.
+        metadataApiAdoptionTrace.logPlannerInputStage({
+            plannerApiVersion:
+                compatibilityApiVersionPolicy?.deploymentApiVersion,
+            effectiveCompatibilityApiVersion:
+                deploymentApiNegotiation?.effectiveCompatibilityApiVersion,
+            negotiatedApiVersion:
+                deploymentApiNegotiation?.negotiatedApiVersion
+        });
 
         deploymentCompatibilityPlan =
             await deploymentCompatibilityPlanService.analyzeDeploymentCompatibilityPlan(
@@ -1552,6 +1577,11 @@ async function validateDeployment({
         })
     );
 
+    // TEMP (Phase 13.5) — adoption trace stage 4.
+    metadataApiAdoptionTrace.logPackageStage({
+        packageApiVersion: deploymentApiVersion
+    });
+
     const generatedManifest = packageXmlService.generateManifest(
         generatedDeploymentPackage,
         {
@@ -1569,6 +1599,12 @@ async function validateDeployment({
     console.log('====================================================');
     console.log(generatedManifest?.packageXml || '(empty package.xml)');
     console.log('====================================================');
+
+    // TEMP (Phase 13.5) — adoption trace stage 5.
+    metadataApiAdoptionTrace.logManifestStage({
+        packageXml: generatedManifest?.packageXml,
+        manifestSummary: generatedManifest?.summary
+    });
 
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
@@ -1628,6 +1664,12 @@ async function validateDeployment({
             missingArtifacts
         );
     } else {
+        // TEMP (Phase 13.5) — adoption trace stage 6.
+        metadataApiAdoptionTrace.logWorkspaceStage({
+            deploymentApiVersion:
+                generatedManifest?.summary?.apiVersion || deploymentApiVersion
+        });
+
         generatedWorkspace =
             await deploymentWorkspaceService.buildDeploymentWorkspace({
                 generatedDeploymentPackage,
@@ -1706,6 +1748,9 @@ async function validateDeployment({
                 });
         }
     }
+
+    // TEMP (Phase 13.5) — adoption reconciliation report.
+    metadataApiAdoptionTrace.logAdoptionReport();
 
     const response = {
         ...connectivityResult,

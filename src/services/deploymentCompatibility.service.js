@@ -6,6 +6,8 @@
  * planner, workspace, or deployment execution.
  */
 
+const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
+
 const CATEGORIES = Object.freeze({
     FORMULA_TYPE_CHANGE: 'FORMULA_TYPE_CHANGE',
     FORMULA_COMPILATION: 'FORMULA_COMPILATION',
@@ -632,6 +634,13 @@ async function analyzeDeploymentCompatibilityPlan({
     }
 
     const compatibilityWarnings = dedupeWarnings(warnings);
+
+    // TEMP (Phase 13.5) — adoption trace stage 3. Logging only.
+    metadataApiAdoptionTrace.logPlannerEvaluationStage({
+        deploymentApiVersion,
+        compatibilityWarnings
+    });
+
     const blockingComponents = compatibilityWarnings
         .filter(
             (warning) =>
