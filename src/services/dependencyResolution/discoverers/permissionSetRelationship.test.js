@@ -179,6 +179,127 @@ async function main() {
         assert.deepStrictEqual(result.relationships, []);
     });
 
+    await runTest('custom RecordType visibility emits RecordType relationship', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <recordTypeVisibilities>
+                    <recordType>Member__c.Standard</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'Member__c.Standard',
+                metadataType: 'RecordType',
+                type: 'RecordType',
+                relationship: 'PermissionSetRecordTypeVisibility',
+                sourceMetadata: 'Subscription_Access',
+                sourceField: 'recordType',
+                discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                discoveryMethod: 'XML',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'PermissionSet record type visibility'
+            }
+        ]);
+    });
+
+    await runTest(
+        'standard-object custom RecordType visibility is emitted',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <recordTypeVisibilities>
+                        <recordType>Account.Customer</recordType>
+                        <visible>true</visible>
+                    </recordTypeVisibilities>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'RecordType').map((item) => item.name),
+                ['Account.Customer']
+            );
+        }
+    );
+
+    await runTest(
+        'PersonAccount RecordType visibility is emitted without special handling',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <recordTypeVisibilities>
+                        <recordType>PersonAccount.PersonAccount</recordType>
+                        <visible>true</visible>
+                    </recordTypeVisibilities>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'RecordType').map((item) => item.name),
+                ['PersonAccount.PersonAccount']
+            );
+        }
+    );
+
+    await runTest('duplicate RecordType visibilities emit one relationship', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <recordTypeVisibilities>
+                    <recordType>Training_Program__c.Technical_Training</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+                <recordTypeVisibilities>
+                    <recordType>Training_Program__c.Technical_Training</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'RecordType').map((item) => item.name),
+            ['Training_Program__c.Technical_Training']
+        );
+    });
+
+    await runTest('malformed RecordType visibility values are ignored safely', async () => {
+        const result = await discover(`
+            <PermissionSet>
+                <recordTypeVisibilities><recordType></recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>Member__c</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>.Standard</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>Member__c.</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>A.B.C</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>Bad Object.Standard</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>Member__c.Bad Type</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>Member__c.Standard</recordType>
+            </PermissionSet>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest(
+        'PermissionSet without recordTypeVisibilities emits no RecordType relationships',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <label>Subscription Access</label>
+                    <tabSettings><tab>Gym_Trainer__c</tab></tabSettings>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(byType(result, 'RecordType'), []);
+            assert.deepStrictEqual(
+                byType(result, 'CustomTab').map((item) => item.name),
+                ['Gym_Trainer__c']
+            );
+        }
+    );
+
     await runTest('tabSettings emits CustomTab', async () => {
         const result = await discover(`
             <PermissionSet>

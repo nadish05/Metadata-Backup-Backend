@@ -8,6 +8,7 @@ const RELATIONSHIPS = Object.freeze({
     OBJECT_PERMISSION: 'PermissionSetObjectPermission',
     FIELD_PERMISSION_OBJECT: 'PermissionSetFieldPermissionObject',
     FIELD_PERMISSION: 'PermissionSetFieldPermission',
+    RECORD_TYPE_VISIBILITY: 'PermissionSetRecordTypeVisibility',
     TAB_SETTING: 'PermissionSetTabSetting'
 });
 
@@ -120,11 +121,29 @@ function parseCustomFieldReference(value) {
     };
 }
 
+function parseRecordTypeReference(value) {
+    const parts = String(value || '')
+        .trim()
+        .split('.');
+    const validApiName = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+    if (
+        parts.length !== 2 ||
+        !validApiName.test(parts[0]) ||
+        !validApiName.test(parts[1])
+    ) {
+        return null;
+    }
+
+    return `${parts[0]}.${parts[1]}`;
+}
+
 function createRelationshipRecord({
     name,
     metadataType,
     relationship,
     sourceMetadata,
+    sourceField = null,
     discoveryMethod,
     reason,
     depth
@@ -135,7 +154,7 @@ function createRelationshipRecord({
         type: metadataType,
         relationship,
         sourceMetadata,
-        sourceField: null,
+        sourceField,
         discoveredBy: DISCOVERER_ID,
         discoveryMethod,
         required: true,
@@ -212,6 +231,31 @@ function discoverPermissionSetRelationships(
                 sourceMetadata,
                 discoveryMethod: 'fieldPermissions',
                 reason: 'PermissionSet field permission',
+                depth
+            })
+        );
+    }
+
+    for (const recordTypeValue of extractSectionValues(
+        xml,
+        'recordTypeVisibilities',
+        'recordType'
+    )) {
+        const recordTypeName = parseRecordTypeReference(recordTypeValue);
+
+        if (!recordTypeName) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: recordTypeName,
+                metadataType: 'RecordType',
+                relationship: RELATIONSHIPS.RECORD_TYPE_VISIBILITY,
+                sourceMetadata,
+                sourceField: 'recordType',
+                discoveryMethod: 'XML',
+                reason: 'PermissionSet record type visibility',
                 depth
             })
         );
