@@ -15,6 +15,7 @@ const deploymentPermissionSetCompatibilityService = require('./deploymentPermiss
 const deploymentApiNegotiationService = require('./deploymentApiNegotiation.service');
 const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
 const sourceMetadataApiVersionService = require('./sourceMetadataApiVersion.service');
+const sourceApiDiscoveryTrace = require('./sourceApiDiscoveryTrace.temp');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1099,6 +1100,16 @@ async function validateDeployment({
     try {
         let destinationMaxApiVersion = null;
 
+        // TEMP (Phase 13.5.1) — discovery trace step 1.
+        sourceApiDiscoveryTrace.beginSourceApiDiscoveryTrace();
+        sourceApiDiscoveryTrace.traceSourceOrgIdentifier({
+            sourceOrgId:
+                deploymentPackage?.sourceOrgId ||
+                deploymentPackage?.sourceOrg?.orgId ||
+                null,
+            identifierField: 'deploymentPackage.sourceOrgId'
+        });
+
         await sourceMetadataApiVersionService.discoverSourceMetadataApiVersion({
             deploymentPackage,
             refreshAccessTokenFn: refreshAccessToken,
@@ -1173,6 +1184,14 @@ async function validateDeployment({
             embeddedApiVersions:
                 deploymentApiVersionPolicy?.embeddedApiVersions || []
         });
+
+    // TEMP (Phase 13.5.1) — discovery trace step 7 and full trace.
+    sourceApiDiscoveryTrace.traceNegotiationInput({
+        sourceApiVersion: deploymentApiNegotiation?.sourceApiVersion || null,
+        destinationApiVersion:
+            deploymentApiNegotiation?.destinationApiVersion || null
+    });
+    sourceApiDiscoveryTrace.logSourceApiDiscoveryTrace();
 
     // TEMP (Phase 13.5) — remove after source API discovery verification.
     console.log('====================================================');
