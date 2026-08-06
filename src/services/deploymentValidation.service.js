@@ -12,6 +12,7 @@ const deploymentCompatibilityGateService = require('./deploymentCompatibilityGat
 const deploymentCompatibilityAdvisorService = require('./deploymentCompatibilityAdvisor.service');
 const deploymentPreviewService = require('./deploymentPreview.service');
 const deploymentPermissionSetCompatibilityService = require('./deploymentPermissionSetCompatibility.service');
+const deploymentApiNegotiationService = require('./deploymentApiNegotiation.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1151,6 +1152,25 @@ async function validateDeployment({
         };
     }
 
+    // Phase 13.3 — Metadata API negotiation (analysis only).
+    // Does not change deploymentApiVersionPolicy, CLI, package.xml, or gate.
+    const deploymentApiNegotiation =
+        deploymentApiNegotiationService.negotiateDeploymentApiVersionsSafe({
+            sourceApiVersion:
+                deploymentPackage?.sourceApiVersion ||
+                deploymentPackage?.sourceMaxApiVersion ||
+                deploymentPackage?.sourceOrgApiVersion ||
+                null,
+            destinationApiVersion:
+                deploymentApiVersionPolicy?.destinationMaxApiVersion || null,
+            currentDeploymentApiVersion:
+                deploymentApiVersionPolicy?.deploymentApiVersion ||
+                DEFAULT_API_VERSION,
+            deploymentPackage,
+            embeddedApiVersions:
+                deploymentApiVersionPolicy?.embeddedApiVersions || []
+        });
+
     const deploymentReadiness =
         deploymentReadinessService.evaluateDeploymentReadiness({
             deploymentValidation: connectivityResult.deploymentValidation,
@@ -1472,7 +1492,8 @@ async function validateDeployment({
                     compatibilityPackageFilter?.excludedComponents || [],
                 blockingComponents: compatibilityBlockingComponents,
                 compatibilityWarnings:
-                    deploymentCompatibilityPlan?.compatibilityWarnings || []
+                    deploymentCompatibilityPlan?.compatibilityWarnings || [],
+                deploymentApiNegotiation
             }
         );
 
@@ -1487,7 +1508,8 @@ async function validateDeployment({
                 compatibilityPackageFilter?.excludedComponents || [],
             blockingComponents: compatibilityBlockingComponents,
             compatibilityWarnings:
-                deploymentCompatibilityPlan?.compatibilityWarnings || []
+                deploymentCompatibilityPlan?.compatibilityWarnings || [],
+            deploymentApiNegotiation
         }
     );
 
@@ -1681,6 +1703,7 @@ async function validateDeployment({
         deploymentCompatibilityAdvisor,
         deploymentPreview,
         permissionSetCompatibility,
+        deploymentApiNegotiation,
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,

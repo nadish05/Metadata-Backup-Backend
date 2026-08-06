@@ -181,10 +181,28 @@ async function main() {
             overallRisk: 'LOW',
             totalExcluded: 0,
             totalBlocking: 0,
-            manualActionsRequired: 0
+            manualActionsRequired: 0,
+            currentDeploymentApi: null,
+            negotiatedApi: null
         });
         assert.strictEqual(result.recommendations.length, 0);
         assert.strictEqual(resolveOverallRisk(0, 0), 'LOW');
+    });
+
+    await runTest('exposes current and negotiated API versions', async () => {
+        const result = buildDeploymentCompatibilityAdvisor({
+            excludedComponents: [],
+            blockingComponents: [],
+            compatibilityWarnings: [],
+            deploymentApiNegotiation: {
+                currentDeploymentApiVersion: '61.0',
+                negotiatedApiVersion: '64.0',
+                negotiationStatus: 'READY_FOR_UPGRADE'
+            }
+        });
+
+        assert.strictEqual(result.summary.currentDeploymentApi, '61.0');
+        assert.strictEqual(result.summary.negotiatedApi, '64.0');
     });
 
     await runTest('high risk summary', async () => {

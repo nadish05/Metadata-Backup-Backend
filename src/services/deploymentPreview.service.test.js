@@ -221,6 +221,46 @@ async function main() {
         });
         assert.deepStrictEqual(result.metadataBreakdown, []);
         assert.strictEqual(result.deploymentStatistics.totalMetadata, 0);
+        assert.deepStrictEqual(result.metadataApi, {
+            currentDeploymentApi: null,
+            sourceOrg: null,
+            destinationOrg: null,
+            negotiatedApi: null,
+            status: 'UNKNOWN'
+        });
+    });
+
+    await runTest('displays negotiated Metadata API informationally', async () => {
+        const result = buildDeploymentPreview({
+            generatedDeploymentPackage: {
+                metadata: [],
+                dependencies: [],
+                testClasses: []
+            },
+            excludedComponents: [],
+            blockingComponents: [],
+            compatibilityWarnings: [],
+            deploymentApiNegotiation: {
+                sourceApiVersion: '66.0',
+                destinationApiVersion: '64.0',
+                currentDeploymentApiVersion: '61.0',
+                negotiatedApiVersion: '64.0',
+                negotiationStatus: 'READY_FOR_UPGRADE'
+            }
+        });
+
+        assert.deepStrictEqual(result.metadataApi, {
+            currentDeploymentApi: '61.0',
+            sourceOrg: '66.0',
+            destinationOrg: '64.0',
+            negotiatedApi: '64.0',
+            status: 'READY_FOR_UPGRADE'
+        });
+        assert.ok(
+            result.notes.some((note) =>
+                note.includes('Metadata API upgrade available')
+            )
+        );
     });
 
     await runTest('fail-safe returns empty preview', async () => {

@@ -114,7 +114,9 @@ function emptyAdvisor() {
             overallRisk: 'LOW',
             totalExcluded: 0,
             totalBlocking: 0,
-            manualActionsRequired: 0
+            manualActionsRequired: 0,
+            currentDeploymentApi: null,
+            negotiatedApi: null
         },
         recommendations: []
     };
@@ -357,7 +359,8 @@ function buildDeploymentCompatibilityAdvisor({
     deploymentReadiness = null,
     excludedComponents = null,
     blockingComponents = null,
-    compatibilityWarnings = null
+    compatibilityWarnings = null,
+    deploymentApiNegotiation = null
 } = {}) {
     const excluded = Array.isArray(excludedComponents)
         ? excludedComponents
@@ -397,7 +400,11 @@ function buildDeploymentCompatibilityAdvisor({
             overallRisk: resolveOverallRisk(totalExcluded, totalBlocking),
             totalExcluded,
             totalBlocking,
-            manualActionsRequired
+            manualActionsRequired,
+            currentDeploymentApi:
+                deploymentApiNegotiation?.currentDeploymentApiVersion || null,
+            negotiatedApi:
+                deploymentApiNegotiation?.negotiatedApiVersion || null
         },
         recommendations
     };

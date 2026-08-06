@@ -27,6 +27,13 @@ function emptyPreview() {
                 requiresNewerMetadataApi: 0
             }
         },
+        metadataApi: {
+            currentDeploymentApi: null,
+            sourceOrg: null,
+            destinationOrg: null,
+            negotiatedApi: null,
+            status: 'UNKNOWN'
+        },
         notes: []
     };
 }
@@ -102,6 +109,27 @@ function resolveEstimatedRisk(excludedCount, blockingCount) {
     return 'LOW';
 }
 
+function buildMetadataApiPreview(deploymentApiNegotiation) {
+    if (!deploymentApiNegotiation || typeof deploymentApiNegotiation !== 'object') {
+        return {
+            currentDeploymentApi: null,
+            sourceOrg: null,
+            destinationOrg: null,
+            negotiatedApi: null,
+            status: 'UNKNOWN'
+        };
+    }
+
+    return {
+        currentDeploymentApi:
+            deploymentApiNegotiation.currentDeploymentApiVersion || null,
+        sourceOrg: deploymentApiNegotiation.sourceApiVersion || null,
+        destinationOrg: deploymentApiNegotiation.destinationApiVersion || null,
+        negotiatedApi: deploymentApiNegotiation.negotiatedApiVersion || null,
+        status: deploymentApiNegotiation.negotiationStatus || 'UNKNOWN'
+    };
+}
+
 function hasMetadataType(breakdown, type) {
     return breakdown.some((entry) => entry.metadataType === type);
 }
@@ -158,7 +186,8 @@ function buildNotes({
     metadataBreakdown,
     excludedComponents,
     blockingComponents,
-    deploymentCompatibilityAdvisor
+    deploymentCompatibilityAdvisor,
+    deploymentApiNegotiation
 }) {
     const notes = [];
 
@@ -231,6 +260,18 @@ function buildNotes({
         );
     }
 
+    const metadataApi = buildMetadataApiPreview(deploymentApiNegotiation);
+
+    if (metadataApi.status === 'READY_FOR_UPGRADE') {
+        notes.push(
+            `Metadata API upgrade available: current ${metadataApi.currentDeploymentApi}, negotiated ${metadataApi.negotiatedApi}.`
+        );
+    } else if (metadataApi.negotiatedApi) {
+        notes.push(
+            `Negotiated Metadata API ${metadataApi.negotiatedApi} (informational only).`
+        );
+    }
+
     if (deploymentMode === 'FULL' && excludedCount === 0 && blockingCount === 0) {
         notes.push('All package members are eligible for deployment.');
     }
@@ -257,7 +298,8 @@ function buildDeploymentPreview({
     deploymentCompatibilityAdvisor = null,
     excludedComponents = null,
     blockingComponents = null,
-    compatibilityWarnings = null
+    compatibilityWarnings = null,
+    deploymentApiNegotiation = null
 } = {}) {
     const excluded = Array.isArray(excludedComponents)
         ? excludedComponents
@@ -295,6 +337,7 @@ function buildDeploymentPreview({
         blockingComponents: blocking,
         compatibilityWarnings: warnings
     });
+    const metadataApi = buildMetadataApiPreview(deploymentApiNegotiation);
 
     return {
         deploymentMode,
@@ -313,6 +356,7 @@ function buildDeploymentPreview({
             blockedMetadata: blockingCount,
             permissionSets: permissionSetStatistics
         },
+        metadataApi,
         notes: buildNotes({
             deploymentMode,
             excludedCount,
@@ -321,7 +365,8 @@ function buildDeploymentPreview({
             metadataBreakdown,
             excludedComponents: excluded,
             blockingComponents: blocking,
-            deploymentCompatibilityAdvisor
+            deploymentCompatibilityAdvisor,
+            deploymentApiNegotiation
         })
     };
 }
@@ -344,5 +389,6 @@ module.exports = {
     resolveDeploymentMode,
     resolveEstimatedRisk,
     buildMetadataBreakdown,
-    buildPermissionSetStatistics
+    buildPermissionSetStatistics,
+    buildMetadataApiPreview
 };
