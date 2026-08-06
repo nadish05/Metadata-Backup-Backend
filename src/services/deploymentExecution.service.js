@@ -8,6 +8,7 @@ const { ensureSfdxProject } = require('./sfdxProject.service');
 const {
     logSection,
     shellQuote,
+    buildProjectDeployCommand,
     parseCliJson,
     resolveErrorMessage,
     refreshAccessToken,
@@ -138,7 +139,8 @@ async function runDeploymentExecution({
     generatedManifest,
     deploymentReadiness,
     refreshToken,
-    instanceUrl
+    instanceUrl,
+    deploymentApiVersion
 }) {
     logSection('Deployment Execution Started');
 
@@ -258,13 +260,15 @@ async function runDeploymentExecution({
 
             logSection('Executing Deployment');
 
-            deployCommand =
-                `cd ${shellQuote(workspacePath)} && ` +
-                `sf project deploy start ` +
-                `--manifest package.xml ` +
-                `--target-org ${shellQuote(alias)} ` +
-                `--wait 30 ` +
-                `--json`;
+            deployCommand = buildProjectDeployCommand({
+                workspacePath,
+                alias,
+                deploymentApiVersion:
+                    deploymentApiVersion ||
+                    generatedManifest?.summary?.apiVersion ||
+                    generatedManifest?.deploymentApiVersionPolicy
+                        ?.deploymentApiVersion
+            });
 
             let cliJson;
             const cliStartedAt = Date.now();

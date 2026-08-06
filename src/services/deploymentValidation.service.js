@@ -1152,8 +1152,7 @@ async function validateDeployment({
         };
     }
 
-    // Phase 13.3 — Metadata API negotiation (analysis only).
-    // Does not change deploymentApiVersionPolicy, CLI, package.xml, or gate.
+    // Phase 13.3/13.4 — negotiate and safely adopt the deployment API.
     const deploymentApiNegotiation =
         deploymentApiNegotiationService.negotiateDeploymentApiVersionsSafe({
             sourceApiVersion:
@@ -1170,6 +1169,24 @@ async function validateDeployment({
             embeddedApiVersions:
                 deploymentApiVersionPolicy?.embeddedApiVersions || []
         });
+
+    const deploymentApiVersion =
+        deploymentApiNegotiationService.resolveDeploymentApiVersion({
+            deploymentApiNegotiation,
+            currentDeploymentApiVersion:
+                deploymentApiVersionPolicy?.deploymentApiVersion ||
+                DEFAULT_API_VERSION
+        }) || DEFAULT_API_VERSION;
+    deploymentApiNegotiation.deploymentApiVersion = deploymentApiVersion;
+
+    // Compatibility logic is unchanged; only its API-version source advances
+    // to the effective mutually supported version.
+    const compatibilityApiVersionPolicy = {
+        ...deploymentApiVersionPolicy,
+        deploymentApiVersion:
+            deploymentApiNegotiation?.effectiveCompatibilityApiVersion ||
+            deploymentApiVersion
+    };
 
     const deploymentReadiness =
         deploymentReadinessService.evaluateDeploymentReadiness({
@@ -1290,7 +1307,7 @@ async function validateDeployment({
         await deploymentPermissionSetCompatibilityService.analyzePermissionSetCompatibilitySafe(
             {
                 generatedDeploymentPackage,
-                deploymentApiVersionPolicy,
+                deploymentApiVersionPolicy: compatibilityApiVersionPolicy,
                 readFile: packageSourceReadFile
             }
         );
@@ -1332,7 +1349,8 @@ async function validateDeployment({
                     formulaCompatibility,
                     permissionSetCompatibility,
                     existingFindings: compatibilityPlanFindings,
-                    deploymentApiVersionPolicy,
+                    deploymentApiVersionPolicy:
+                        compatibilityApiVersionPolicy,
                     readFile: packageSourceReadFile
                 }
             );
@@ -1509,7 +1527,10 @@ async function validateDeployment({
             blockingComponents: compatibilityBlockingComponents,
             compatibilityWarnings:
                 deploymentCompatibilityPlan?.compatibilityWarnings || [],
-            deploymentApiNegotiation
+            deploymentApiNegotiation: {
+                ...deploymentApiNegotiation,
+                currentDeploymentApiVersion: deploymentApiVersion
+            }
         }
     );
 
@@ -1534,9 +1555,11 @@ async function validateDeployment({
     const generatedManifest = packageXmlService.generateManifest(
         generatedDeploymentPackage,
         {
-            deploymentApiVersion:
-                deploymentApiVersionPolicy?.deploymentApiVersion,
-            deploymentApiVersionPolicy
+            deploymentApiVersion,
+            deploymentApiVersionPolicy: {
+                ...deploymentApiVersionPolicy,
+                deploymentApiVersion
+            }
         }
     );
 
@@ -1669,7 +1692,8 @@ async function validateDeployment({
                     generatedManifest,
                     deploymentReadiness,
                     refreshToken,
-                    instanceUrl
+                    instanceUrl,
+                    deploymentApiVersion
                 });
         } else {
             checkOnlyDeployment =
@@ -1677,7 +1701,8 @@ async function validateDeployment({
                     generatedWorkspace,
                     generatedManifest,
                     refreshToken,
-                    instanceUrl
+                    instanceUrl,
+                    deploymentApiVersion
                 });
         }
     }

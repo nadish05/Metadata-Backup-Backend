@@ -185,6 +185,37 @@ function negotiateDeploymentApiVersionsSafe(input) {
     }
 }
 
+/**
+ * Select the Metadata API version used at deployment runtime.
+ *
+ * Only READY_FOR_UPGRADE adopts the negotiated version. Every other status,
+ * including unknown future failure statuses, falls back to the current
+ * deployment version.
+ */
+function resolveDeploymentApiVersion({
+    deploymentApiNegotiation = null,
+    currentDeploymentApiVersion = null
+} = {}) {
+    const current =
+        normalizeApiVersion(currentDeploymentApiVersion) ||
+        normalizeApiVersion(
+            deploymentApiNegotiation?.currentDeploymentApiVersion
+        );
+
+    if (
+        deploymentApiNegotiation?.negotiationStatus ===
+        NEGOTIATION_STATUS.READY_FOR_UPGRADE
+    ) {
+        return (
+            normalizeApiVersion(
+                deploymentApiNegotiation?.negotiatedApiVersion
+            ) || current
+        );
+    }
+
+    return current;
+}
+
 module.exports = {
     NEGOTIATION_STATUS,
     emptyNegotiation,
@@ -194,5 +225,6 @@ module.exports = {
     maxApiVersion,
     resolveSourceApiVersion,
     negotiateDeploymentApiVersions,
-    negotiateDeploymentApiVersionsSafe
+    negotiateDeploymentApiVersionsSafe,
+    resolveDeploymentApiVersion
 };

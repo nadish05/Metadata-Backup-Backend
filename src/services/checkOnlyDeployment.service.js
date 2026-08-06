@@ -52,6 +52,31 @@ function shellQuote(value) {
     return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
+function buildProjectDeployCommand({
+    workspacePath,
+    alias,
+    deploymentApiVersion,
+    deploymentValidationFlag = ''
+}) {
+    const apiVersionFlag = deploymentApiVersion
+        ? `--api-version ${shellQuote(deploymentApiVersion)} `
+        : '';
+    const validationFlag = deploymentValidationFlag
+        ? `${deploymentValidationFlag} `
+        : '';
+
+    return (
+        `cd ${shellQuote(workspacePath)} && ` +
+        `sf project deploy start ` +
+        `--manifest package.xml ` +
+        apiVersionFlag +
+        validationFlag +
+        `--target-org ${shellQuote(alias)} ` +
+        `--wait 30 ` +
+        `--json`
+    );
+}
+
 function parseCliJson(output) {
     if (!output) {
         throw new Error('No JSON output from Salesforce CLI');
@@ -838,7 +863,8 @@ async function runCheckOnlyDeployment({
     generatedWorkspace,
     generatedManifest,
     refreshToken,
-    instanceUrl
+    instanceUrl,
+    deploymentApiVersion
 }) {
     logSection('Check-Only Deployment Started');
 
@@ -939,14 +965,17 @@ async function runCheckOnlyDeployment({
 
         logSection('Running Salesforce CLI');
 
-        deployCommand =
-            `cd ${shellQuote(workspacePath)} && ` +
-            `sf project deploy start ` +
-            `--manifest package.xml ` +
-            `${compatibility.deploymentValidationFlag} ` +
-            `--target-org ${shellQuote(alias)} ` +
-            `--wait 30 ` +
-            `--json`;
+        deployCommand = buildProjectDeployCommand({
+            workspacePath,
+            alias,
+            deploymentApiVersion:
+                deploymentApiVersion ||
+                generatedManifest?.summary?.apiVersion ||
+                generatedManifest?.deploymentApiVersionPolicy
+                    ?.deploymentApiVersion,
+            deploymentValidationFlag:
+                compatibility.deploymentValidationFlag
+        });
 
         let cliJson;
         const cliStartedAt = Date.now();
@@ -1017,6 +1046,7 @@ module.exports = {
     runCheckOnlyDeployment,
     logSection,
     shellQuote,
+    buildProjectDeployCommand,
     parseCliJson,
     resolveErrorMessage,
     refreshAccessToken,
