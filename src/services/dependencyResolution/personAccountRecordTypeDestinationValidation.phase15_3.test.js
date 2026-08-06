@@ -51,15 +51,15 @@ async function resolveRecordType(name, destinationState) {
 
 async function main() {
     await runTest(
-        'PersonAccount RecordType query maps to Account and requires person type',
+        'PersonAccount RecordType query maps to the Account SObject',
         () => {
             assert.strictEqual(
                 buildRecordTypeSoql('PersonAccount.PersonAccount'),
-                "SELECT Id, DeveloperName, SobjectType, IsPersonType FROM RecordType WHERE DeveloperName = 'PersonAccount' AND SobjectType = 'Account' AND IsPersonType = true LIMIT 1"
+                "SELECT Id, DeveloperName, SobjectType FROM RecordType WHERE DeveloperName = 'PersonAccount' AND SobjectType = 'Account' LIMIT 1"
             );
             assert.strictEqual(
                 buildRecordTypeSoql('PersonAccount.Customer_Person'),
-                "SELECT Id, DeveloperName, SobjectType, IsPersonType FROM RecordType WHERE DeveloperName = 'Customer_Person' AND SobjectType = 'Account' AND IsPersonType = true LIMIT 1"
+                "SELECT Id, DeveloperName, SobjectType FROM RecordType WHERE DeveloperName = 'Customer_Person' AND SobjectType = 'Account' LIMIT 1"
             );
         }
     );

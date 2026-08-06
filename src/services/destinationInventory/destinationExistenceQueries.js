@@ -167,12 +167,15 @@ function buildRecordTypeSoql(name) {
         return null;
     }
 
+    // Person Account record types live on Account. IsPersonType is feature-gated:
+    // orgs without Person Accounts reject it with INVALID_FIELD (HTTP 400), which
+    // would mask a genuinely missing record type as UNKNOWN.
     if (objectApiName === 'PersonAccount') {
         return (
-            'SELECT Id, DeveloperName, SobjectType, IsPersonType FROM RecordType ' +
+            'SELECT Id, DeveloperName, SobjectType FROM RecordType ' +
             `WHERE DeveloperName = '${escapeSoql(developerName)}' ` +
             "AND SobjectType = 'Account' " +
-            'AND IsPersonType = true LIMIT 1'
+            'LIMIT 1'
         );
     }
 
