@@ -194,6 +194,12 @@ function buildExistenceQuery(type, name) {
         case 'CustomField':
             return buildCustomFieldSoql(name);
 
+        case 'CustomTab':
+            return (
+                'SELECT DurableId, Name FROM TabDefinition ' +
+                `WHERE Name = '${escapedName}' LIMIT 1`
+            );
+
         case 'ListView':
             return buildListViewSoql(name);
 

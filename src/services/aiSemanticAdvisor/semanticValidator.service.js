@@ -628,7 +628,7 @@ function findInventedMetadataViolations(text, factIndex) {
 
     // Match Type:Name or Type.Name for known Salesforce custom suffixes / common types.
     const mentionPattern =
-        /\b(CustomField|CustomObject|ApexClass|ApexTrigger|CustomLabel|CustomMetadata|NamedCredential|PermissionSet|Profile|Layout|Flow|FlexiPage)\s*[:.]\s*([A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*|[A-Za-z][A-Za-z0-9_]*)\b/g;
+        /\b(CustomField|CustomObject|CustomTab|ApexClass|ApexTrigger|CustomLabel|CustomMetadata|NamedCredential|PermissionSet|Profile|Layout|Flow|FlexiPage)\s*[:.]\s*([A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*|[A-Za-z][A-Za-z0-9_]*)\b/g;
 
     let match = mentionPattern.exec(text);
 
