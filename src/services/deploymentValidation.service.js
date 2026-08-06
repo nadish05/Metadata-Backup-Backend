@@ -14,8 +14,7 @@ const deploymentPreviewService = require('./deploymentPreview.service');
 const deploymentPermissionSetCompatibilityService = require('./deploymentPermissionSetCompatibility.service');
 const deploymentApiNegotiationService = require('./deploymentApiNegotiation.service');
 const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
-const sourceMetadataApiVersionService = require('./sourceMetadataApiVersion.service');
-const sourceApiDiscoveryTrace = require('./sourceApiDiscoveryTrace.temp');
+const repositorySnapshotMetadataService = require('./repositorySnapshotMetadata.service');
 const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
@@ -1096,25 +1095,11 @@ async function validateDeployment({
     // Deployment API Version Policy — before manifest generation only.
     let deploymentApiVersionPolicy = null;
     let packageSourceReadFile = null;
+    let repositorySnapshotMetadata = null;
+    deploymentPackage.sourceApiVersion = null;
 
     try {
         let destinationMaxApiVersion = null;
-
-        // TEMP (Phase 13.5.1) — discovery trace step 1.
-        sourceApiDiscoveryTrace.beginSourceApiDiscoveryTrace();
-        sourceApiDiscoveryTrace.traceSourceOrgIdentifier({
-            sourceOrgId:
-                deploymentPackage?.sourceOrgId ||
-                deploymentPackage?.sourceOrg?.orgId ||
-                null,
-            identifierField: 'deploymentPackage.sourceOrgId'
-        });
-
-        await sourceMetadataApiVersionService.discoverSourceMetadataApiVersion({
-            deploymentPackage,
-            refreshAccessTokenFn: refreshAccessToken,
-            getLatestApiVersionFn: getLatestApiVersion
-        });
 
         if (accessTokenForDownstream && resolvedInstanceUrl) {
             try {
@@ -1138,6 +1123,15 @@ async function validateDeployment({
             console.error('API VERSION POLICY FILE READER ERROR');
             console.error(readerError);
         }
+
+        repositorySnapshotMetadata =
+            await repositorySnapshotMetadataService.readRepositorySnapshotMetadata(
+                {
+                    readFile: packageSourceReadFile
+                }
+            );
+        deploymentPackage.sourceApiVersion =
+            repositorySnapshotMetadata?.sourceMetadataApiVersion || null;
 
         deploymentApiVersionPolicy =
             await resolveDeploymentApiVersionPolicyAsync({
@@ -1171,6 +1165,33 @@ async function validateDeployment({
         };
     }
 
+    // TEMP (Phase 13.7) — remove after repository snapshot verification.
+    console.log('====================================================');
+    console.log('REPOSITORY SNAPSHOT METADATA');
+    console.log('====================================================');
+    console.log('');
+    console.log(
+        'Snapshot Found:',
+        repositorySnapshotMetadata ? 'YES' : 'NO'
+    );
+    console.log('');
+    console.log(
+        'Source Org:',
+        repositorySnapshotMetadata?.sourceOrgId || '(unknown)'
+    );
+    console.log('');
+    console.log(
+        'Source Metadata API:',
+        repositorySnapshotMetadata?.sourceMetadataApiVersion || '(unknown)'
+    );
+    console.log('');
+    console.log(
+        'Loaded Into Deployment Package:',
+        deploymentPackage?.sourceApiVersion ? 'YES' : 'NO'
+    );
+    console.log('');
+    console.log('====================================================');
+
     // Phase 13.3/13.4 — negotiate and safely adopt the deployment API.
     const deploymentApiNegotiation =
         deploymentApiNegotiationService.negotiateDeploymentApiVersionsSafe({
@@ -1185,35 +1206,26 @@ async function validateDeployment({
                 deploymentApiVersionPolicy?.embeddedApiVersions || []
         });
 
-    // TEMP (Phase 13.5.1) — discovery trace step 7 and full trace.
-    sourceApiDiscoveryTrace.traceNegotiationInput({
-        sourceApiVersion: deploymentApiNegotiation?.sourceApiVersion || null,
-        destinationApiVersion:
-            deploymentApiNegotiation?.destinationApiVersion || null
-    });
-    sourceApiDiscoveryTrace.logSourceApiDiscoveryTrace();
-
-    // TEMP (Phase 13.5) — remove after source API discovery verification.
+    // TEMP (Phase 13.7) — remove after negotiation input verification.
     console.log('====================================================');
-    console.log('SOURCE API DISCOVERY');
+    console.log('NEGOTIATION INPUT');
     console.log('====================================================');
+    console.log('');
     console.log(
-        'Source Org API:',
+        'Source API:',
         deploymentApiNegotiation?.sourceApiVersion || '(unknown)'
     );
+    console.log('');
     console.log(
         'Destination API:',
         deploymentApiNegotiation?.destinationApiVersion || '(unknown)'
     );
+    console.log('');
     console.log(
         'Negotiated API:',
         deploymentApiNegotiation?.negotiatedApiVersion || '(unknown)'
     );
-    console.log(
-        'Effective Compatibility API:',
-        deploymentApiNegotiation?.effectiveCompatibilityApiVersion ||
-            '(unknown)'
-    );
+    console.log('');
     console.log('====================================================');
 
     const deploymentApiVersion =
