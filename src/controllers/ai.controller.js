@@ -1,81 +1,6 @@
-const { GoogleGenAI } = require("@google/genai");
-const OpenAI = require("openai");
-
-// =====================================
-// Gemini Retry Helper
-// =====================================
-
-async function generateWithRetry(
-    ai,
-    prompt
-) {
-
-    for (let i = 0; i < 3; i++) {
-
-        try {
-
-            const response =
-                await ai.models.generateContent({
-                    model: "gemini-2.5-flash",
-                    contents: prompt
-                });
-
-            return response.text;
-
-        } catch (error) {
-
-            console.error(
-                `Attempt ${i + 1} failed`,
-                error.message
-            );
-
-            if (
-                error.message.includes('503')
-                &&
-                i < 2
-            ) {
-
-                await new Promise(
-                    resolve =>
-                        setTimeout(
-                            resolve,
-                            2000
-                        )
-                );
-
-                continue;
-            }
-
-            throw error;
-        }
-    }
-}
-
-async function generateWithOpenAI(prompt) {
-
-    const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY
-    });
-
-    const response =
-        await openai.chat.completions.create({
-
-            model: "gpt-4o-mini",
-
-            messages: [
-                {
-                    role: "user",
-                    content: prompt
-                }
-            ]
-
-        });
-
-    return response
-        .choices[0]
-        .message
-        .content;
-}
+const {
+    generateAiText
+} = require('../services/aiTextGeneration.service');
 
 // =====================================
 // AI Comparison Summary
@@ -85,11 +10,6 @@ exports.generateComparisonSummary =
 async (req, res) => {
 
     try {
-
-        const ai = new GoogleGenAI({
-            apiKey:
-                process.env.GEMINI_API_KEY
-        });
 
         const {
             comparisonName,
@@ -143,23 +63,9 @@ Recommended Testing:
 • Test Area 3
 `;
 
-        let summary;
-
-if (model === 'openai') {
-
-    summary =
-        await generateWithOpenAI(
-            prompt
-        );
-
-} else {
-
-    summary =
-        await generateWithRetry(
-            ai,
-            prompt
-        );
-}
+        const { text: summary } = await generateAiText(prompt, {
+            provider: model
+        });
 
         return res.json({
             success: true,
@@ -191,11 +97,6 @@ exports.explainDiff =
 async (req, res) => {
 
     try {
-
-        const ai = new GoogleGenAI({
-            apiKey:
-                process.env.GEMINI_API_KEY
-        });
 
         const {
             fileName,
@@ -240,23 +141,9 @@ Do not use markdown.
 Keep response under 250 words.
 `;
 
-        let explanation;
-
-if (model === 'openai') {
-
-    explanation =
-        await generateWithOpenAI(
-            prompt
-        );
-
-} else {
-
-    explanation =
-        await generateWithRetry(
-            ai,
-            prompt
-        );
-}
+        const { text: explanation } = await generateAiText(prompt, {
+            provider: model
+        });
 
         return res.json({
             success: true,

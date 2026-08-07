@@ -72,6 +72,9 @@ const {
 const {
     completeWithAutoValidationLoop
 } = require('./deploymentFailureClassification/deploymentAutoValidation.service');
+const {
+    generateAiResolutionReport
+} = require('./aiDeploymentAdvisor/aiDeploymentAdvisor.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -2053,7 +2056,7 @@ async function validateDeployment({
     // Phase 17.4 — Auto Validation Loop (additive).
     // At most one re-validation via existing validateDeployment. Never
     // retries DEPLOY execution (revalidation package forces VALIDATE).
-    return completeWithAutoValidationLoop({
+    const finalResponse = await completeWithAutoValidationLoop({
         initialResponse: response,
         autoFixResult,
         autoValidationContext,
@@ -2065,6 +2068,41 @@ async function validateDeployment({
         },
         runValidation: (args) => validateDeployment(args)
     });
+
+    // Phase 17.5 — AI Resolution Layer (additive, post-validation only).
+    // Never runs on auto-validation re-entry. Never influences decisions.
+    if (!autoValidationContext?.isRevalidation) {
+        try {
+            finalResponse.aiResolutionReport = await generateAiResolutionReport(
+                {
+                    failureClassification: finalResponse.failureClassification,
+                    resolutionReport: finalResponse.resolutionReport,
+                    autoFixReport: finalResponse.autoFixReport,
+                    autoValidationReport: finalResponse.autoValidationReport,
+                    deploymentDiagnostics: finalResponse.deploymentDiagnostics,
+                    deploymentSummary:
+                        finalResponse.checkOnlyDeployment?.deploymentSummary ||
+                        finalResponse.deploymentExecution?.deploymentSummary ||
+                        finalResponse.deploymentSummary ||
+                        null
+                }
+            );
+        } catch (error) {
+            console.error('AI RESOLUTION LAYER ATTACH ERROR');
+            console.error(error);
+            finalResponse.aiResolutionReport = {
+                available: false,
+                provider: null,
+                generated: false,
+                explanations: [],
+                summary: 'AI Resolution Layer failed to generate explanations.',
+                disclaimer:
+                    'AI explanations are advisory only. They do not change deployment decisions, packages, metadata, or validation results.'
+            };
+        }
+    }
+
+    return finalResponse;
 }
 
 module.exports = {
