@@ -75,6 +75,9 @@ const {
 const {
     generateAiResolutionReport
 } = require('./aiDeploymentAdvisor/aiDeploymentAdvisor.service');
+const {
+    buildEnterpriseDeploymentReport
+} = require('./deploymentReporting/enterpriseDeploymentReport.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -2098,6 +2101,58 @@ async function validateDeployment({
                 summary: 'AI Resolution Layer failed to generate explanations.',
                 disclaimer:
                     'AI explanations are advisory only. They do not change deployment decisions, packages, metadata, or validation results.'
+            };
+        }
+
+        // Phase 17.6 — Enterprise Deployment Report (additive aggregation only).
+        try {
+            finalResponse.enterpriseDeploymentReport =
+                buildEnterpriseDeploymentReport({
+                    deploymentSummary:
+                        finalResponse.checkOnlyDeployment?.deploymentSummary ||
+                        finalResponse.deploymentExecution?.deploymentSummary ||
+                        finalResponse.deploymentSummary ||
+                        null,
+                    deploymentDiagnostics: finalResponse.deploymentDiagnostics,
+                    failureClassification: finalResponse.failureClassification,
+                    resolutionReport: finalResponse.resolutionReport,
+                    autoFixReport: finalResponse.autoFixReport,
+                    autoValidationReport: finalResponse.autoValidationReport,
+                    aiResolutionReport: finalResponse.aiResolutionReport,
+                    executionMode:
+                        finalResponse.deploymentExecution
+                            ? 'DEPLOY'
+                            : 'VALIDATE'
+                });
+        } catch (error) {
+            console.error('ENTERPRISE DEPLOYMENT REPORT ERROR');
+            console.error(error);
+            finalResponse.enterpriseDeploymentReport = {
+                version: 1,
+                generatedAt: new Date().toISOString(),
+                overallStatus: 'FAILED',
+                summary: {
+                    deploymentStatus: 'FAILED',
+                    executionMode: 'VALIDATE',
+                    duration: null,
+                    totalMetadata: null,
+                    successfulMetadata: null,
+                    failedMetadata: null,
+                    autoFixesApplied: 0,
+                    validationAttempts: 1
+                },
+                failures: [],
+                resolutions: [],
+                autoFixes: [],
+                aiRecommendations: [],
+                nextActions: [],
+                statistics: {
+                    dependencyFailures: 0,
+                    compatibilityFailures: 0,
+                    manualActions: 0,
+                    autoResolved: 0,
+                    warnings: 0
+                }
             };
         }
     }
