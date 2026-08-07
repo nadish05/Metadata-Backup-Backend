@@ -919,6 +919,113 @@ async function main() {
     );
 
     await runTest(
+        'applicationVisibilities emits CustomApplication without requiring visible',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <applicationVisibilities>
+                        <application>Sales</application>
+                        <visible>false</visible>
+                    </applicationVisibilities>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, [
+                {
+                    name: 'Sales',
+                    metadataType: 'CustomApplication',
+                    type: 'CustomApplication',
+                    relationship: 'PermissionSetApplicationVisibility',
+                    sourceMetadata: 'Subscription_Access',
+                    sourceField: 'application',
+                    discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                    discoveryMethod: 'applicationVisibilities',
+                    required: true,
+                    selected: true,
+                    depth: 1,
+                    reason: 'PermissionSet application visibility'
+                }
+            ]);
+        }
+    );
+
+    await runTest(
+        'multiple applicationVisibilities emit unique CustomApplication dependencies',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <applicationVisibilities>
+                        <application>Sales</application>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application>Service_Console</application>
+                    </applicationVisibilities>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'CustomApplication').map(
+                    (item) => item.name
+                ),
+                ['Sales', 'Service_Console']
+            );
+        }
+    );
+
+    await runTest(
+        'duplicate applicationVisibilities emit one CustomApplication dependency',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <applicationVisibilities>
+                        <application>Sales</application>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application>Sales</application>
+                    </applicationVisibilities>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'CustomApplication').map(
+                    (item) => item.name
+                ),
+                ['Sales']
+            );
+        }
+    );
+
+    await runTest(
+        'empty and malformed applicationVisibilities names are ignored',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <applicationVisibilities>
+                        <application></application>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application> </application>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application>Bad App</application>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application>Bad-App</application>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application>1Sales</application>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application>Bad.App</application>
+                    </applicationVisibilities>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, []);
+        }
+    );
+
+    await runTest(
         'registry retains existing discoverers and adds PermissionSet',
         async () => {
             assert.deepStrictEqual(
