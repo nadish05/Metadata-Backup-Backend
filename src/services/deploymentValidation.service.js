@@ -66,6 +66,9 @@ const {
 const {
     buildResolutionReport
 } = require('./deploymentFailureClassification/deploymentResolution.service');
+const {
+    applyAutoFixes
+} = require('./deploymentFailureClassification/deploymentAutoFix.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -1960,6 +1963,49 @@ async function validateDeployment({
 
     response.failureClassification = failureClassification;
     response.resolutionReport = resolutionReport;
+
+    // Phase 17.3 — Auto Fix Orchestrator (additive).
+    // Reuses existing package/workspace services only. Never retries CLI,
+    // never mutates source metadata, never edits package.xml directly.
+    const autoFixResult = await applyAutoFixes({
+        failureClassification,
+        resolutionReport,
+        dependencyResolutionSummary,
+        resolvedDependencies: resolvedRequiredDependencies,
+        deploymentPackage,
+        generatedDeploymentPackage,
+        generatedWorkspace,
+        generatedManifest,
+        selectedMetadata: Array.isArray(deploymentPackage?.selectedMetadata)
+            ? deploymentPackage.selectedMetadata
+            : Array.isArray(deploymentPackage?.metadata)
+              ? deploymentPackage.metadata
+              : [],
+        repoUrl: deploymentPackage?.repoUrl || null,
+        sourceBranch:
+            deploymentPackage?.sourceBranch || deploymentPackage?.branch || null,
+        deploymentApiVersion,
+        deploymentApiVersionPolicy
+    });
+
+    response.autoFixReport = {
+        autoFixAvailable: autoFixResult.autoFixAvailable === true,
+        autoFixApplied: autoFixResult.autoFixApplied === true,
+        fixes: Array.isArray(autoFixResult.fixes) ? autoFixResult.fixes : []
+    };
+
+    if (autoFixResult.autoFixApplied === true) {
+        if (autoFixResult.generatedDeploymentPackage) {
+            response.generatedDeploymentPackage =
+                autoFixResult.generatedDeploymentPackage;
+        }
+        if (autoFixResult.generatedManifest) {
+            response.generatedManifest = autoFixResult.generatedManifest;
+        }
+        if (autoFixResult.generatedWorkspace) {
+            response.generatedWorkspace = autoFixResult.generatedWorkspace;
+        }
+    }
 
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
