@@ -69,6 +69,9 @@ const {
 const {
     applyAutoFixes
 } = require('./deploymentFailureClassification/deploymentAutoFix.service');
+const {
+    completeWithAutoValidationLoop
+} = require('./deploymentFailureClassification/deploymentAutoValidation.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -366,7 +369,9 @@ async function validateDeployment({
     refreshToken,
     instanceUrl,
     orgId,
-    deploymentPackage
+    deploymentPackage,
+    // Internal Phase 17.4 guard — never exposed as a public API contract.
+    autoValidationContext = null
 }) {
     const connectivityResult = await validateDestinationConnectivity({
         refreshToken,
@@ -2030,7 +2035,8 @@ async function validateDeployment({
         deploymentHistoryService.completeHistory(historyId, {
             deploymentMode,
             deploymentReadiness,
-            generatedWorkspace,
+            generatedWorkspace:
+                response.generatedWorkspace || generatedWorkspace,
             deploymentResult,
             destinationOrgId: orgId ?? null,
             sourceOrgId: deploymentPackage?.sourceOrgId ?? null,
@@ -2044,7 +2050,21 @@ async function validateDeployment({
         response.deploymentHistory = deploymentHistory;
     }
 
-    return response;
+    // Phase 17.4 — Auto Validation Loop (additive).
+    // At most one re-validation via existing validateDeployment. Never
+    // retries DEPLOY execution (revalidation package forces VALIDATE).
+    return completeWithAutoValidationLoop({
+        initialResponse: response,
+        autoFixResult,
+        autoValidationContext,
+        deploymentPackage,
+        validationArgs: {
+            refreshToken,
+            instanceUrl,
+            orgId
+        },
+        runValidation: (args) => validateDeployment(args)
+    });
 }
 
 module.exports = {
