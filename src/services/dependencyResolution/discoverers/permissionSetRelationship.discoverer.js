@@ -17,7 +17,8 @@ const RELATIONSHIPS = Object.freeze({
     FLOW_ACCESS: 'PermissionSetFlowAccess',
     EXTERNAL_CREDENTIAL_PRINCIPAL_ACCESS:
         'PermissionSetExternalCredentialPrincipalAccess',
-    CUSTOM_PERMISSION: 'PermissionSetCustomPermission'
+    CUSTOM_PERMISSION: 'PermissionSetCustomPermission',
+    CUSTOM_METADATA_TYPE_ACCESS: 'PermissionSetCustomMetadataTypeAccess'
 });
 
 function normalizePath(filePath) {
@@ -66,6 +67,15 @@ function isCustomObjectName(value) {
 
     return (
         name.endsWith(CUSTOM_OBJECT_SUFFIX) &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
+    );
+}
+
+function isCustomMetadataTypeName(value) {
+    const name = String(value || '').trim();
+
+    return (
+        name.endsWith('__mdt') &&
         /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
     );
 }
@@ -423,6 +433,29 @@ function discoverPermissionSetRelationships(
                 sourceField: 'name',
                 discoveryMethod: 'customPermissions',
                 reason: 'PermissionSet custom permission',
+                depth
+            })
+        );
+    }
+
+    for (const customMetadataTypeName of extractSectionValues(
+        xml,
+        'customMetadataTypeAccesses',
+        'name'
+    )) {
+        if (!isCustomMetadataTypeName(customMetadataTypeName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: customMetadataTypeName,
+                metadataType: 'CustomObject',
+                relationship: RELATIONSHIPS.CUSTOM_METADATA_TYPE_ACCESS,
+                sourceMetadata,
+                sourceField: 'name',
+                discoveryMethod: 'customMetadataTypeAccesses',
+                reason: 'PermissionSet custom metadata type access',
                 depth
             })
         );

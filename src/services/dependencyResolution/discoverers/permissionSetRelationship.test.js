@@ -720,6 +720,98 @@ async function main() {
     );
 
     await runTest(
+        'customMetadataTypeAccesses emits CustomObject without requiring enabled',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customMetadataTypeAccesses>
+                        <enabled>false</enabled>
+                        <name>Integration_Settings__mdt</name>
+                    </customMetadataTypeAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, [
+                {
+                    name: 'Integration_Settings__mdt',
+                    metadataType: 'CustomObject',
+                    type: 'CustomObject',
+                    relationship: 'PermissionSetCustomMetadataTypeAccess',
+                    sourceMetadata: 'Subscription_Access',
+                    sourceField: 'name',
+                    discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                    discoveryMethod: 'customMetadataTypeAccesses',
+                    required: true,
+                    selected: true,
+                    depth: 1,
+                    reason: 'PermissionSet custom metadata type access'
+                }
+            ]);
+        }
+    );
+
+    await runTest(
+        'multiple customMetadataTypeAccesses emit unique CustomObject dependencies',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customMetadataTypeAccesses>
+                        <name>Integration_Settings__mdt</name>
+                    </customMetadataTypeAccesses>
+                    <customMetadataTypeAccesses>
+                        <name>Feature_Flags__mdt</name>
+                    </customMetadataTypeAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'CustomObject').map((item) => item.name),
+                ['Integration_Settings__mdt', 'Feature_Flags__mdt']
+            );
+        }
+    );
+
+    await runTest(
+        'duplicate customMetadataTypeAccesses emit one CustomObject dependency',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customMetadataTypeAccesses>
+                        <name>Integration_Settings__mdt</name>
+                    </customMetadataTypeAccesses>
+                    <customMetadataTypeAccesses>
+                        <name>Integration_Settings__mdt</name>
+                    </customMetadataTypeAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'CustomObject').map((item) => item.name),
+                ['Integration_Settings__mdt']
+            );
+        }
+    );
+
+    await runTest(
+        'empty, malformed, and non-__mdt customMetadataTypeAccesses are ignored',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customMetadataTypeAccesses><name></name></customMetadataTypeAccesses>
+                    <customMetadataTypeAccesses><name> </name></customMetadataTypeAccesses>
+                    <customMetadataTypeAccesses><name>Integration_Settings</name></customMetadataTypeAccesses>
+                    <customMetadataTypeAccesses><name>Integration_Settings__c</name></customMetadataTypeAccesses>
+                    <customMetadataTypeAccesses><name>Bad Settings__mdt</name></customMetadataTypeAccesses>
+                    <customMetadataTypeAccesses><name>Bad-Settings__mdt</name></customMetadataTypeAccesses>
+                    <customMetadataTypeAccesses><name>1Settings__mdt</name></customMetadataTypeAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, []);
+        }
+    );
+
+    await runTest(
         'registry retains existing discoverers and adds PermissionSet',
         async () => {
             assert.deepStrictEqual(
