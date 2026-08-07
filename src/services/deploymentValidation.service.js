@@ -60,6 +60,12 @@ const {
 const {
     normalizeDeployableMetadata
 } = require('./deployableMetadataNormalizer.service');
+const {
+    classifyDeploymentFailures
+} = require('./deploymentFailureClassification/deploymentFailureClassification.service');
+const {
+    buildResolutionReport
+} = require('./deploymentFailureClassification/deploymentResolution.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -1922,6 +1928,38 @@ async function validateDeployment({
     if (deploymentResult?.deploymentDiagnostics) {
         response.deploymentDiagnostics = deploymentResult.deploymentDiagnostics;
     }
+
+    // Phase 17.2 — read-only failure classification + resolution recommendations.
+    // Additive only: never mutates package, workspace, CLI results, or gates.
+    const failureClassification = classifyDeploymentFailures({
+        deploymentDiagnostics: response.deploymentDiagnostics || null,
+        deployOutcome: deploymentResult,
+        dependencyValidation,
+        deploymentCompatibilityPlan,
+        compatibilityWarnings:
+            deploymentCompatibilityPlan?.compatibilityWarnings || [],
+        selectedMetadata: Array.isArray(deploymentPackage?.selectedMetadata)
+            ? deploymentPackage.selectedMetadata
+            : Array.isArray(deploymentPackage?.metadata)
+              ? deploymentPackage.metadata
+              : []
+    });
+    const resolutionReport = buildResolutionReport({
+        failureClassification,
+        deploymentDiagnostics: response.deploymentDiagnostics || null,
+        dependencyResolutionSummary,
+        dependencyValidation,
+        deploymentCompatibility,
+        deploymentPackage: generatedDeploymentPackage,
+        selectedMetadata: Array.isArray(deploymentPackage?.selectedMetadata)
+            ? deploymentPackage.selectedMetadata
+            : Array.isArray(deploymentPackage?.metadata)
+              ? deploymentPackage.metadata
+              : []
+    });
+
+    response.failureClassification = failureClassification;
+    response.resolutionReport = resolutionReport;
 
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
