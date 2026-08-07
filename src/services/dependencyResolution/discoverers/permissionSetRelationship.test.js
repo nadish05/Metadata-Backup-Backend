@@ -629,6 +629,97 @@ async function main() {
     );
 
     await runTest(
+        'customPermissions emits CustomPermission without requiring enabled',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customPermissions>
+                        <enabled>false</enabled>
+                        <name>Can_Approve_Refund</name>
+                    </customPermissions>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, [
+                {
+                    name: 'Can_Approve_Refund',
+                    metadataType: 'CustomPermission',
+                    type: 'CustomPermission',
+                    relationship: 'PermissionSetCustomPermission',
+                    sourceMetadata: 'Subscription_Access',
+                    sourceField: 'name',
+                    discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                    discoveryMethod: 'customPermissions',
+                    required: true,
+                    selected: true,
+                    depth: 1,
+                    reason: 'PermissionSet custom permission'
+                }
+            ]);
+        }
+    );
+
+    await runTest(
+        'multiple customPermissions emit unique CustomPermission dependencies',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customPermissions>
+                        <name>Can_Approve_Refund</name>
+                    </customPermissions>
+                    <customPermissions>
+                        <name>Can_View_Audit</name>
+                    </customPermissions>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'CustomPermission').map((item) => item.name),
+                ['Can_Approve_Refund', 'Can_View_Audit']
+            );
+        }
+    );
+
+    await runTest(
+        'duplicate customPermissions emit one CustomPermission dependency',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customPermissions>
+                        <name>Can_Approve_Refund</name>
+                    </customPermissions>
+                    <customPermissions>
+                        <name>Can_Approve_Refund</name>
+                    </customPermissions>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'CustomPermission').map((item) => item.name),
+                ['Can_Approve_Refund']
+            );
+        }
+    );
+
+    await runTest(
+        'empty and malformed customPermissions names are ignored',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customPermissions><name></name></customPermissions>
+                    <customPermissions><name> </name></customPermissions>
+                    <customPermissions><name>Bad Permission</name></customPermissions>
+                    <customPermissions><name>Bad-Permission</name></customPermissions>
+                    <customPermissions><name>1BadPermission</name></customPermissions>
+                    <customPermissions><name>Bad.Permission</name></customPermissions>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, []);
+        }
+    );
+
+    await runTest(
         'registry retains existing discoverers and adds PermissionSet',
         async () => {
             assert.deepStrictEqual(

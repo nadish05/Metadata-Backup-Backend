@@ -16,7 +16,8 @@ const RELATIONSHIPS = Object.freeze({
     PAGE_ACCESS: 'PermissionSetPageAccess',
     FLOW_ACCESS: 'PermissionSetFlowAccess',
     EXTERNAL_CREDENTIAL_PRINCIPAL_ACCESS:
-        'PermissionSetExternalCredentialPrincipalAccess'
+        'PermissionSetExternalCredentialPrincipalAccess',
+    CUSTOM_PERMISSION: 'PermissionSetCustomPermission'
 });
 
 function normalizePath(filePath) {
@@ -399,6 +400,29 @@ function discoverPermissionSetRelationships(
                 discoveryMethod: 'externalCredentialPrincipalAccesses',
                 reason:
                     'PermissionSet external credential principal access',
+                depth
+            })
+        );
+    }
+
+    for (const customPermissionName of extractSectionValues(
+        xml,
+        'customPermissions',
+        'name'
+    )) {
+        if (!isValidMetadataName(customPermissionName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: customPermissionName,
+                metadataType: 'CustomPermission',
+                relationship: RELATIONSHIPS.CUSTOM_PERMISSION,
+                sourceMetadata,
+                sourceField: 'name',
+                discoveryMethod: 'customPermissions',
+                reason: 'PermissionSet custom permission',
                 depth
             })
         );
