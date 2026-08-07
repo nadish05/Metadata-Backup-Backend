@@ -1026,6 +1026,98 @@ async function main() {
     );
 
     await runTest(
+        'customSettingAccesses emits CustomObject without requiring enabled',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customSettingAccesses>
+                        <enabled>false</enabled>
+                        <name>Integration_Settings__c</name>
+                    </customSettingAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, [
+                {
+                    name: 'Integration_Settings__c',
+                    metadataType: 'CustomObject',
+                    type: 'CustomObject',
+                    relationship: 'PermissionSetCustomSettingAccess',
+                    sourceMetadata: 'Subscription_Access',
+                    sourceField: 'name',
+                    discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                    discoveryMethod: 'customSettingAccesses',
+                    required: true,
+                    selected: true,
+                    depth: 1,
+                    reason: 'PermissionSet custom setting access'
+                }
+            ]);
+        }
+    );
+
+    await runTest(
+        'multiple customSettingAccesses emit unique CustomObject dependencies',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customSettingAccesses>
+                        <name>Integration_Settings__c</name>
+                    </customSettingAccesses>
+                    <customSettingAccesses>
+                        <name>Feature_Toggles__c</name>
+                    </customSettingAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'CustomObject').map((item) => item.name),
+                ['Integration_Settings__c', 'Feature_Toggles__c']
+            );
+        }
+    );
+
+    await runTest(
+        'duplicate customSettingAccesses emit one CustomObject dependency',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customSettingAccesses>
+                        <name>Integration_Settings__c</name>
+                    </customSettingAccesses>
+                    <customSettingAccesses>
+                        <name>Integration_Settings__c</name>
+                    </customSettingAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'CustomObject').map((item) => item.name),
+                ['Integration_Settings__c']
+            );
+        }
+    );
+
+    await runTest(
+        'empty and malformed customSettingAccesses names are ignored',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <customSettingAccesses><name></name></customSettingAccesses>
+                    <customSettingAccesses><name> </name></customSettingAccesses>
+                    <customSettingAccesses><name>Integration_Settings</name></customSettingAccesses>
+                    <customSettingAccesses><name>Integration_Settings__mdt</name></customSettingAccesses>
+                    <customSettingAccesses><name>Bad Settings__c</name></customSettingAccesses>
+                    <customSettingAccesses><name>Bad-Settings__c</name></customSettingAccesses>
+                    <customSettingAccesses><name>1Settings__c</name></customSettingAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, []);
+        }
+    );
+
+    await runTest(
         'registry retains existing discoverers and adds PermissionSet',
         async () => {
             assert.deepStrictEqual(

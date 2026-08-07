@@ -20,7 +20,8 @@ const RELATIONSHIPS = Object.freeze({
     CUSTOM_PERMISSION: 'PermissionSetCustomPermission',
     CUSTOM_METADATA_TYPE_ACCESS: 'PermissionSetCustomMetadataTypeAccess',
     EXTERNAL_DATA_SOURCE_ACCESS: 'PermissionSetExternalDataSourceAccess',
-    APPLICATION_VISIBILITY: 'PermissionSetApplicationVisibility'
+    APPLICATION_VISIBILITY: 'PermissionSetApplicationVisibility',
+    CUSTOM_SETTING_ACCESS: 'PermissionSetCustomSettingAccess'
 });
 
 function normalizePath(filePath) {
@@ -504,6 +505,29 @@ function discoverPermissionSetRelationships(
                 sourceField: 'application',
                 discoveryMethod: 'applicationVisibilities',
                 reason: 'PermissionSet application visibility',
+                depth
+            })
+        );
+    }
+
+    for (const customSettingName of extractSectionValues(
+        xml,
+        'customSettingAccesses',
+        'name'
+    )) {
+        if (!isCustomObjectName(customSettingName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: customSettingName,
+                metadataType: 'CustomObject',
+                relationship: RELATIONSHIPS.CUSTOM_SETTING_ACCESS,
+                sourceMetadata,
+                sourceField: 'name',
+                discoveryMethod: 'customSettingAccesses',
+                reason: 'PermissionSet custom setting access',
                 depth
             })
         );
