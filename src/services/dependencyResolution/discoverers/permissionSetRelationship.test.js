@@ -812,6 +812,113 @@ async function main() {
     );
 
     await runTest(
+        'externalDataSourceAccesses emits ExternalDataSource without requiring enabled',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <externalDataSourceAccesses>
+                        <enabled>false</enabled>
+                        <externalDataSource>Snowflake</externalDataSource>
+                    </externalDataSourceAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, [
+                {
+                    name: 'Snowflake',
+                    metadataType: 'ExternalDataSource',
+                    type: 'ExternalDataSource',
+                    relationship: 'PermissionSetExternalDataSourceAccess',
+                    sourceMetadata: 'Subscription_Access',
+                    sourceField: 'externalDataSource',
+                    discoveredBy: 'PermissionSetRelationshipDiscoverer',
+                    discoveryMethod: 'externalDataSourceAccesses',
+                    required: true,
+                    selected: true,
+                    depth: 1,
+                    reason: 'PermissionSet external data source access'
+                }
+            ]);
+        }
+    );
+
+    await runTest(
+        'multiple externalDataSourceAccesses emit unique ExternalDataSource dependencies',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <externalDataSourceAccesses>
+                        <externalDataSource>Snowflake</externalDataSource>
+                    </externalDataSourceAccesses>
+                    <externalDataSourceAccesses>
+                        <externalDataSource>BigQuery</externalDataSource>
+                    </externalDataSourceAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'ExternalDataSource').map(
+                    (item) => item.name
+                ),
+                ['Snowflake', 'BigQuery']
+            );
+        }
+    );
+
+    await runTest(
+        'duplicate externalDataSourceAccesses emit one ExternalDataSource dependency',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <externalDataSourceAccesses>
+                        <externalDataSource>Snowflake</externalDataSource>
+                    </externalDataSourceAccesses>
+                    <externalDataSourceAccesses>
+                        <externalDataSource>Snowflake</externalDataSource>
+                    </externalDataSourceAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(
+                byType(result, 'ExternalDataSource').map(
+                    (item) => item.name
+                ),
+                ['Snowflake']
+            );
+        }
+    );
+
+    await runTest(
+        'empty and malformed externalDataSourceAccesses names are ignored',
+        async () => {
+            const result = await discover(`
+                <PermissionSet>
+                    <externalDataSourceAccesses>
+                        <externalDataSource></externalDataSource>
+                    </externalDataSourceAccesses>
+                    <externalDataSourceAccesses>
+                        <externalDataSource> </externalDataSource>
+                    </externalDataSourceAccesses>
+                    <externalDataSourceAccesses>
+                        <externalDataSource>Bad Source</externalDataSource>
+                    </externalDataSourceAccesses>
+                    <externalDataSourceAccesses>
+                        <externalDataSource>Bad-Source</externalDataSource>
+                    </externalDataSourceAccesses>
+                    <externalDataSourceAccesses>
+                        <externalDataSource>1Snowflake</externalDataSource>
+                    </externalDataSourceAccesses>
+                    <externalDataSourceAccesses>
+                        <externalDataSource>Bad.Source</externalDataSource>
+                    </externalDataSourceAccesses>
+                </PermissionSet>
+            `);
+
+            assert.deepStrictEqual(result.relationships, []);
+        }
+    );
+
+    await runTest(
         'registry retains existing discoverers and adds PermissionSet',
         async () => {
             assert.deepStrictEqual(
