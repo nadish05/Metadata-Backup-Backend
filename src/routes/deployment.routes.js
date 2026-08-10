@@ -10,6 +10,7 @@ const deploymentController =
     );
 
 const deploymentAiResolutionController = require('../controllers/deploymentAiResolution.controller');
+const deploymentSupportBundleController = require('../controllers/deploymentSupportBundle.controller');
 
 router.post(
     '/analyze',
@@ -24,6 +25,11 @@ router.post(
 router.post(
     '/ai-resolution',
     deploymentAiResolutionController.resolveDeploymentWithAi
+);
+
+router.post(
+    '/support-bundle',
+    deploymentSupportBundleController.createSupportBundle
 );
 
 module.exports =
