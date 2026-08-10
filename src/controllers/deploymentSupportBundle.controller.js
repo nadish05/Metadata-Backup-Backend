@@ -1,8 +1,8 @@
 const supportBundleApi = require('../services/supportBundle/supportBundleApi.service');
 
 /**
- * Phase 17.8 — On-demand Enterprise Support Bundle (+ email delivery).
- * Diagnostic only. Never deploys, validates Salesforce, auto-fixes, or calls AI.
+ * Phase 17.8 — On-demand Enterprise Support Bundle (download-only JSON).
+ * Diagnostic only. Never deploys, validates Salesforce, auto-fixes, emails, or calls AI.
  */
 exports.createSupportBundle = async (req, res) => {
     try {
@@ -20,7 +20,7 @@ exports.createSupportBundle = async (req, res) => {
         return res.status(200).json({
             success: true,
             supportBundle: result.supportBundle,
-            supportBundleDelivery: result.supportBundleDelivery
+            delivery: result.delivery
         });
     } catch (error) {
         if (error instanceof supportBundleApi.SupportBundleRequestError) {

@@ -1,9 +1,9 @@
 /**
- * Support Bundle API orchestration (Phase 17.8.3)
+ * Support Bundle API orchestration (Phase 17.8)
  *
  * Resolves validation context, validates issue selection, sanitizes,
- * then builds the Support Bundle. Does not deploy, validate, auto-fix,
- * call AI, or persist.
+ * then builds the Support Bundle for DOWNLOAD-only delivery.
+ * Does not deploy, validate, auto-fix, call AI, send email, or persist.
  *
  * Architectural limitation:
  * deploymentHistory stores summaries only — not full Phase 17 reports.
@@ -22,9 +22,6 @@ const {
     buildSupportBundle,
     ISSUE_SCOPE
 } = require('./supportBundle.service');
-const {
-    sendSupportBundleEmail
-} = require('./supportBundleEmail.service');
 
 class SupportBundleRequestError extends Error {
     constructor(message, statusCode = 400, code = 'SUPPORT_BUNDLE_BAD_REQUEST') {
@@ -290,9 +287,8 @@ function sanitizeAiReport(aiResolutionReport) {
 /**
  * Create a Support Bundle from an API request shape.
  *
- * Order: allowlist → history merge → sanitize → validate selection → build → email
- *
- * Client-supplied email/recipient/subject fields are ignored.
+ * Order: allowlist → history merge → sanitize → validate selection → build
+ * Delivery mode is DOWNLOAD only (no email providers).
  *
  * @param {object} request
  * @param {object} [deps] - injectable for tests
@@ -302,7 +298,6 @@ async function createSupportBundleFromRequest(request = {}, deps = {}) {
         deps.sanitizeSupportBundlePayload || sanitizeSupportBundlePayload;
     const build = deps.buildSupportBundle || buildSupportBundle;
     const resolveHistory = deps.resolveHistoryRecord || resolveHistoryRecord;
-    const sendEmail = deps.sendSupportBundleEmail || sendSupportBundleEmail;
 
     const callOrder = deps.callOrder || null;
 
@@ -384,25 +379,14 @@ async function createSupportBundleFromRequest(request = {}, deps = {}) {
         aiResolutionReport
     });
 
-    if (callOrder) {
-        callOrder.push('email');
-    }
-
-    // Email recipient/subject are backend-controlled — ignore client overrides.
-    const emailDelivery = await sendEmail(
-        { supportBundle },
-        {
-            transport: deps.emailTransport,
-            env: deps.env,
-            httpPost: deps.httpPost
-        }
-    );
+    const bundleId = supportBundle?.bundleId || null;
 
     return {
         success: true,
         supportBundle,
-        supportBundleDelivery: {
-            email: emailDelivery
+        delivery: {
+            mode: 'DOWNLOAD',
+            filename: bundleId ? `${bundleId}.json` : null
         },
         architecturalNote:
             'validationContext is client-supplied and allowlisted+sanitized because deployment history does not persist full Phase 17 diagnostic reports.'

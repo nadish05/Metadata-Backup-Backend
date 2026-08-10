@@ -839,7 +839,6 @@ async function main() {
                 validationContext: formulaContext()
             },
             {
-                env: { SUPPORT_BUNDLE_EMAIL_ENABLED: 'false' },
                 sanitizeSupportBundlePayload: (input) => {
                     sanitizeCalls += 1;
                     return require('../services/supportBundle/supportBundleSanitizer').sanitizeSupportBundlePayload(
@@ -958,7 +957,6 @@ async function main() {
             },
             {
                 callOrder,
-                env: { SUPPORT_BUNDLE_EMAIL_ENABLED: 'false' },
                 sanitizeSupportBundlePayload: (input) =>
                     require('../services/supportBundle/supportBundleSanitizer').sanitizeSupportBundlePayload(
                         input
@@ -969,7 +967,71 @@ async function main() {
                     )
             }
         );
-        assert.deepStrictEqual(callOrder, ['sanitize', 'build', 'email']);
+        assert.deepStrictEqual(callOrder, ['sanitize', 'build']);
+    });
+
+    await runTest('download-only delivery mode', async () => {
+        await withServer(async (port) => {
+            const validationId = seedHistory();
+            const response = await postJson(port, '/api/deployment/support-bundle', {
+                validationId,
+                validationContext: formulaContext()
+            });
+            assert.strictEqual(response.statusCode, 200);
+            assert.strictEqual(response.body.delivery.mode, 'DOWNLOAD');
+            assert.strictEqual(
+                response.body.delivery.filename,
+                `${response.body.supportBundle.bundleId}.json`
+            );
+            assert.strictEqual(response.body.supportBundleDelivery, undefined);
+            assert.ok(!JSON.stringify(response.body).includes('"sent":true'));
+        });
+    });
+
+    await runTest('downloadable JSON payload', async () => {
+        await withServer(async (port) => {
+            const validationId = seedHistory();
+            const response = await postJson(port, '/api/deployment/support-bundle', {
+                validationId,
+                validationContext: formulaContext()
+            });
+            const serialized = JSON.stringify(response.body.supportBundle);
+            assert.ok(serialized.includes(response.body.supportBundle.bundleId));
+            assert.doesNotThrow(() => JSON.parse(serialized));
+        });
+    });
+
+    await runTest('no email service call', async () => {
+        const apiPath = require.resolve(
+            '../services/supportBundle/supportBundleApi.service'
+        );
+        const children = Module._cache[apiPath]?.children || [];
+        const ids = children.map((c) => c.id || '');
+        assert.ok(!ids.some((id) => id.includes('supportBundleEmail')));
+        assert.ok(!ids.some((id) => id.includes('resend')));
+        assert.ok(!ids.some((id) => id.includes('sendgrid')));
+
+        let emailModuleExists = true;
+        try {
+            require.resolve('../services/supportBundle/supportBundleEmail.service');
+        } catch (_err) {
+            emailModuleExists = false;
+        }
+        assert.strictEqual(emailModuleExists, false);
+    });
+
+    await runTest('missing email configuration does not matter', async () => {
+        await withServer(async (port) => {
+            const validationId = seedHistory();
+            const response = await postJson(port, '/api/deployment/support-bundle', {
+                validationId,
+                validationContext: formulaContext()
+            });
+            assert.strictEqual(response.statusCode, 200);
+            assert.strictEqual(response.body.success, true);
+            assert.ok(response.body.supportBundle.bundleId);
+            assert.strictEqual(response.body.delivery.mode, 'DOWNLOAD');
+        });
     });
 
     if (process.exitCode && process.exitCode !== 0) {
