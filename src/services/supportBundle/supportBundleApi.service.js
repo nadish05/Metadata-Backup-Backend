@@ -22,6 +22,9 @@ const {
     buildSupportBundle,
     ISSUE_SCOPE
 } = require('./supportBundle.service');
+const {
+    sendSupportBundleEmail
+} = require('./supportBundleEmail.service');
 
 class SupportBundleRequestError extends Error {
     constructor(message, statusCode = 400, code = 'SUPPORT_BUNDLE_BAD_REQUEST') {
@@ -287,16 +290,19 @@ function sanitizeAiReport(aiResolutionReport) {
 /**
  * Create a Support Bundle from an API request shape.
  *
- * Order: allowlist → history merge → sanitize → validate selection → build
+ * Order: allowlist → history merge → sanitize → validate selection → build → email
+ *
+ * Client-supplied email/recipient/subject fields are ignored.
  *
  * @param {object} request
  * @param {object} [deps] - injectable for tests
  */
-function createSupportBundleFromRequest(request = {}, deps = {}) {
+async function createSupportBundleFromRequest(request = {}, deps = {}) {
     const sanitize =
         deps.sanitizeSupportBundlePayload || sanitizeSupportBundlePayload;
     const build = deps.buildSupportBundle || buildSupportBundle;
     const resolveHistory = deps.resolveHistoryRecord || resolveHistoryRecord;
+    const sendEmail = deps.sendSupportBundleEmail || sendSupportBundleEmail;
 
     const callOrder = deps.callOrder || null;
 
@@ -378,9 +384,26 @@ function createSupportBundleFromRequest(request = {}, deps = {}) {
         aiResolutionReport
     });
 
+    if (callOrder) {
+        callOrder.push('email');
+    }
+
+    // Email recipient/subject are backend-controlled — ignore client overrides.
+    const emailDelivery = await sendEmail(
+        { supportBundle },
+        {
+            transport: deps.emailTransport,
+            env: deps.env,
+            httpPost: deps.httpPost
+        }
+    );
+
     return {
         success: true,
         supportBundle,
+        supportBundleDelivery: {
+            email: emailDelivery
+        },
         architecturalNote:
             'validationContext is client-supplied and allowlisted+sanitized because deployment history does not persist full Phase 17 diagnostic reports.'
     };

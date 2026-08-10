@@ -1,7 +1,7 @@
 const supportBundleApi = require('../services/supportBundle/supportBundleApi.service');
 
 /**
- * Phase 17.8.3 — On-demand Enterprise Support Bundle.
+ * Phase 17.8 — On-demand Enterprise Support Bundle (+ email delivery).
  * Diagnostic only. Never deploys, validates Salesforce, auto-fixes, or calls AI.
  */
 exports.createSupportBundle = async (req, res) => {
@@ -13,11 +13,14 @@ exports.createSupportBundle = async (req, res) => {
                 String(body.validationId || body.historyId || '')
         );
 
-        const result = supportBundleApi.createSupportBundleFromRequest(body);
+        const result = await supportBundleApi.createSupportBundleFromRequest(
+            body
+        );
 
         return res.status(200).json({
             success: true,
-            supportBundle: result.supportBundle
+            supportBundle: result.supportBundle,
+            supportBundleDelivery: result.supportBundleDelivery
         });
     } catch (error) {
         if (error instanceof supportBundleApi.SupportBundleRequestError) {

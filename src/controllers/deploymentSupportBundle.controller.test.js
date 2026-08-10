@@ -833,12 +833,13 @@ async function main() {
     await runTest('no validation retry', async () => {
         const validationId = seedHistory();
         let sanitizeCalls = 0;
-        const result = supportBundleApi.createSupportBundleFromRequest(
+        const result = await supportBundleApi.createSupportBundleFromRequest(
             {
                 validationId,
                 validationContext: formulaContext()
             },
             {
+                env: { SUPPORT_BUNDLE_EMAIL_ENABLED: 'false' },
                 sanitizeSupportBundlePayload: (input) => {
                     sanitizeCalls += 1;
                     return require('../services/supportBundle/supportBundleSanitizer').sanitizeSupportBundlePayload(
@@ -894,7 +895,7 @@ async function main() {
     await runTest('HTTP 500 safe response', async () => {
         await withServer(async (port) => {
             const original = supportBundleApi.createSupportBundleFromRequest;
-            supportBundleApi.createSupportBundleFromRequest = () => {
+            supportBundleApi.createSupportBundleFromRequest = async () => {
                 throw new Error('unexpected internal failure with SECRET');
             };
             try {
@@ -947,16 +948,17 @@ async function main() {
         });
     });
 
-    await runTest('sanitizer always executed before builder', () => {
+    await runTest('sanitizer always executed before builder', async () => {
         const validationId = seedHistory();
         const callOrder = [];
-        supportBundleApi.createSupportBundleFromRequest(
+        await supportBundleApi.createSupportBundleFromRequest(
             {
                 validationId,
                 validationContext: formulaContext()
             },
             {
                 callOrder,
+                env: { SUPPORT_BUNDLE_EMAIL_ENABLED: 'false' },
                 sanitizeSupportBundlePayload: (input) =>
                     require('../services/supportBundle/supportBundleSanitizer').sanitizeSupportBundlePayload(
                         input
@@ -967,7 +969,7 @@ async function main() {
                     )
             }
         );
-        assert.deepStrictEqual(callOrder, ['sanitize', 'build']);
+        assert.deepStrictEqual(callOrder, ['sanitize', 'build', 'email']);
     });
 
     if (process.exitCode && process.exitCode !== 0) {
