@@ -70,6 +70,9 @@ const {
     applyAutoFixes
 } = require('./deploymentFailureClassification/deploymentAutoFix.service');
 const {
+    applySafeSkips
+} = require('./deploymentFailureClassification/safeSkip.service');
+const {
     completeWithAutoValidationLoop
 } = require('./deploymentFailureClassification/deploymentAutoValidation.service');
 const {
@@ -2018,6 +2021,67 @@ async function validateDeployment({
         }
     }
 
+    // Phase 17.9 — SAFE_SKIP Engine (additive, deterministic).
+    // Evaluates canSafeSkip + dependency impact; applies package exclusions
+    // only when proven safe. Never trusts client/AI safeToSkip. Never edits
+    // package.xml or source metadata directly.
+    const packageForSafeSkip =
+        response.generatedDeploymentPackage || generatedDeploymentPackage;
+    const safeSkipResult = await applySafeSkips({
+        failureClassification,
+        resolutionReport,
+        generatedDeploymentPackage: packageForSafeSkip,
+        generatedManifest:
+            response.generatedManifest || generatedManifest,
+        generatedWorkspace:
+            response.generatedWorkspace || generatedWorkspace,
+        deploymentPackage,
+        selectedMetadata: Array.isArray(deploymentPackage?.selectedMetadata)
+            ? deploymentPackage.selectedMetadata
+            : Array.isArray(deploymentPackage?.metadata)
+              ? deploymentPackage.metadata
+              : [],
+        resolvedDependencies: resolvedRequiredDependencies,
+        discoveredRelationships,
+        discoveredReferences,
+        dependencyExplorer,
+        repoUrl: deploymentPackage?.repoUrl || null,
+        sourceBranch:
+            deploymentPackage?.sourceBranch || deploymentPackage?.branch || null,
+        deploymentApiVersion,
+        deploymentApiVersionPolicy
+    });
+
+    response.safeSkipReport = {
+        safeSkipAvailable: safeSkipResult.safeSkipAvailable === true,
+        safeSkipApplied: safeSkipResult.safeSkipApplied === true,
+        decisions: Array.isArray(safeSkipResult.decisions)
+            ? safeSkipResult.decisions
+            : [],
+        skippedComponents: Array.isArray(safeSkipResult.skippedComponents)
+            ? safeSkipResult.skippedComponents
+            : [],
+        summary: safeSkipResult.summary || {
+            available: 0,
+            applied: 0,
+            blocked: 0,
+            unknown: 0
+        }
+    };
+
+    if (safeSkipResult.safeSkipApplied === true) {
+        if (safeSkipResult.generatedDeploymentPackage) {
+            response.generatedDeploymentPackage =
+                safeSkipResult.generatedDeploymentPackage;
+        }
+        if (safeSkipResult.generatedManifest) {
+            response.generatedManifest = safeSkipResult.generatedManifest;
+        }
+        if (safeSkipResult.generatedWorkspace) {
+            response.generatedWorkspace = safeSkipResult.generatedWorkspace;
+        }
+    }
+
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
             stage:
@@ -2059,9 +2123,15 @@ async function validateDeployment({
     // Phase 17.4 — Auto Validation Loop (additive).
     // At most one re-validation via existing validateDeployment. Never
     // retries DEPLOY execution (revalidation package forces VALIDATE).
+    // Triggers when Auto Fix OR SAFE_SKIP was applied.
+    const packageMutationResult =
+        safeSkipResult.safeSkipApplied === true
+            ? safeSkipResult
+            : autoFixResult;
+
     const finalResponse = await completeWithAutoValidationLoop({
         initialResponse: response,
-        autoFixResult,
+        autoFixResult: packageMutationResult,
         autoValidationContext,
         deploymentPackage,
         validationArgs: {
@@ -2071,6 +2141,11 @@ async function validateDeployment({
         },
         runValidation: (args) => validateDeployment(args)
     });
+
+    // Preserve SAFE_SKIP report across revalidation response merge.
+    if (!finalResponse.safeSkipReport) {
+        finalResponse.safeSkipReport = response.safeSkipReport;
+    }
 
     // Phase 17.7 — AI Resolution is on-demand only (no automatic LLM call).
     // Keep a stub aiResolutionReport for backward-compatible UI contracts.
@@ -2091,6 +2166,7 @@ async function validateDeployment({
                     resolutionReport: finalResponse.resolutionReport,
                     autoFixReport: finalResponse.autoFixReport,
                     autoValidationReport: finalResponse.autoValidationReport,
+                    safeSkipReport: finalResponse.safeSkipReport,
                     aiResolutionReport: finalResponse.aiResolutionReport,
                     executionMode:
                         finalResponse.deploymentExecution

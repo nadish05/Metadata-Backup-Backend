@@ -749,6 +749,12 @@ function buildSupportBundle({
             selection.issueScope
         ),
         autoValidationReport: buildAutoValidationReport(sanitized),
+        safeSkipReport: snapshotReport(sanitized.safeSkipReport, (report) => {
+            if (!isPlainObject(report)) {
+                return {};
+            }
+            return { ...report };
+        }),
         enterpriseDeploymentReport: buildEnterpriseDeploymentReportSnapshot(
             sanitized,
             selection.selectedKeys,

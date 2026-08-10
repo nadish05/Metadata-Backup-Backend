@@ -60,6 +60,7 @@ const CONTEXT_ALLOWLIST = Object.freeze([
     'autoFixReport',
     'autoValidationReport',
     'enterpriseDeploymentReport',
+    'safeSkipReport',
     'deploymentDiagnostics',
     'checkOnlyDeployment',
     'deploymentExecution',

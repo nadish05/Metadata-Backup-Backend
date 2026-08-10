@@ -21,12 +21,19 @@ function isAutoValidationReentry(autoValidationContext) {
     return attempt >= MAX_VALIDATION_ATTEMPTS;
 }
 
-function shouldRunAutoValidation({ autoFixReport, autoValidationContext }) {
+function shouldRunAutoValidation({
+    autoFixReport,
+    safeSkipReport,
+    autoValidationContext
+}) {
     if (isAutoValidationReentry(autoValidationContext)) {
         return false;
     }
 
-    return autoFixReport?.autoFixApplied === true;
+    return (
+        autoFixReport?.autoFixApplied === true ||
+        safeSkipReport?.safeSkipApplied === true
+    );
 }
 
 function countAutoFixesApplied(autoFixReport) {
@@ -210,10 +217,15 @@ async function completeWithAutoValidationLoop({
         autoFixApplied: false,
         fixes: []
     };
+    const safeSkipReport = initialResponse.safeSkipReport || {
+        safeSkipAvailable: false,
+        safeSkipApplied: false
+    };
 
     if (
         !shouldRunAutoValidation({
             autoFixReport,
+            safeSkipReport,
             autoValidationContext
         })
     ) {
@@ -275,8 +287,9 @@ async function completeWithAutoValidationLoop({
         return initialResponse;
     }
 
-    // Preserve first-pass auto-fix; keep final classification/resolution.
+    // Preserve first-pass auto-fix and SAFE_SKIP; keep final classification/resolution.
     finalResponse.autoFixReport = autoFixReport;
+    finalResponse.safeSkipReport = safeSkipReport;
 
     if (!finalResponse.failureClassification) {
         finalResponse.failureClassification =

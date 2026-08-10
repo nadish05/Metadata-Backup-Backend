@@ -11,11 +11,13 @@ const REPORT_VERSION = 1;
 
 const NEXT_ACTION_PRIORITY = Object.freeze({
     AUTO_FIX_APPLIED: 1,
-    RETRY_VALIDATION: 2,
-    MANUAL_METADATA_CHANGE: 3,
-    ENABLE_PLATFORM_FEATURE: 4,
-    MANUAL_CONFIGURATION: 5,
-    INFORMATIONAL: 6
+    SAFE_SKIP_APPLIED: 2,
+    RETRY_VALIDATION: 3,
+    SAFE_SKIP_AVAILABLE: 4,
+    MANUAL_METADATA_CHANGE: 5,
+    ENABLE_PLATFORM_FEATURE: 6,
+    MANUAL_CONFIGURATION: 7,
+    INFORMATIONAL: 8
 });
 
 function nowIso() {
@@ -279,7 +281,7 @@ function mapResolutionToNextAction(resolution) {
     };
 }
 
-function buildNextActions({ resolutionReport, autoFixReport }) {
+function buildNextActions({ resolutionReport, autoFixReport, safeSkipReport }) {
     const actions = [];
     const seen = new Set();
 
@@ -310,6 +312,47 @@ function buildNextActions({ resolutionReport, autoFixReport }) {
         });
     }
 
+    for (const decision of asArray(safeSkipReport?.decisions)) {
+        if (decision?.applied === true) {
+            const key = `skip-applied:${decision.metadataType}:${decision.metadataName}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                actions.push({
+                    priority: NEXT_ACTION_PRIORITY.SAFE_SKIP_APPLIED,
+                    type: 'SAFE_SKIP_APPLIED',
+                    metadataType: decision.metadataType || null,
+                    metadataName: decision.metadataName || null,
+                    message:
+                        decision.impact ||
+                        'Component was safely excluded from the deployment package.',
+                    completed: true
+                });
+            }
+            continue;
+        }
+
+        if (
+            decision?.safeToSkip === true &&
+            decision?.backendCanApply === true &&
+            decision?.applied !== true
+        ) {
+            const key = `skip-available:${decision.metadataType}:${decision.metadataName}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                actions.push({
+                    priority: NEXT_ACTION_PRIORITY.SAFE_SKIP_AVAILABLE,
+                    type: 'SAFE_SKIP_AVAILABLE',
+                    metadataType: decision.metadataType || null,
+                    metadataName: decision.metadataName || null,
+                    message:
+                        decision.reason ||
+                        'Component can be safely excluded from the deployment package.',
+                    completed: false
+                });
+            }
+        }
+    }
+
     for (const resolution of asArray(resolutionReport?.resolutions)) {
         const mapped = mapResolutionToNextAction(resolution);
         const key = `${mapped.type}:${resolution.metadataType}:${resolution.metadataName}:${mapped.message}`;
@@ -325,6 +368,20 @@ function buildNextActions({ resolutionReport, autoFixReport }) {
                     String(fix.metadataType || '').toLowerCase() ===
                         String(resolution.metadataType || '').toLowerCase() &&
                     String(fix.metadataName || '').toLowerCase() ===
+                        String(resolution.metadataName || '').toLowerCase()
+            )
+        ) {
+            continue;
+        }
+
+        // Skip package/manual actions when SAFE_SKIP already applied for same member.
+        if (
+            asArray(safeSkipReport?.decisions).some(
+                (decision) =>
+                    decision.applied === true &&
+                    String(decision.metadataType || '').toLowerCase() ===
+                        String(resolution.metadataType || '').toLowerCase() &&
+                    String(decision.metadataName || '').toLowerCase() ===
                         String(resolution.metadataName || '').toLowerCase()
             )
         ) {
@@ -360,6 +417,31 @@ function buildNextActions({ resolutionReport, autoFixReport }) {
             String(b.metadataName || '')
         );
     });
+}
+
+function buildSafeSkips(safeSkipReport) {
+    const summary = safeSkipReport?.summary || {};
+    return {
+        available: summary.available ?? 0,
+        applied: summary.applied ?? 0,
+        blocked: summary.blocked ?? 0,
+        unknown: summary.unknown ?? 0,
+        decisions: asArray(safeSkipReport?.decisions).map((decision) => ({
+            metadataType: decision.metadataType || null,
+            metadataName: decision.metadataName || null,
+            safeToSkip:
+                decision.safeToSkip === true
+                    ? true
+                    : decision.safeToSkip === false
+                      ? false
+                      : null,
+            decision: decision.decision || null,
+            reason: decision.reason || null,
+            impact: decision.impact || null,
+            backendCanApply: decision.backendCanApply === true,
+            applied: decision.applied === true
+        }))
+    };
 }
 
 function buildStatistics(context) {
@@ -438,10 +520,12 @@ function buildEnterpriseDeploymentReport(context = {}) {
         failures: buildFailures(context.failureClassification),
         resolutions: buildResolutions(context.resolutionReport),
         autoFixes: buildAutoFixes(context.autoFixReport),
+        safeSkips: buildSafeSkips(context.safeSkipReport),
         aiRecommendations: buildAiRecommendations(context.aiResolutionReport),
         nextActions: buildNextActions({
             resolutionReport: context.resolutionReport,
-            autoFixReport: context.autoFixReport
+            autoFixReport: context.autoFixReport,
+            safeSkipReport: context.safeSkipReport
         }),
         statistics: buildStatistics(context)
     };
