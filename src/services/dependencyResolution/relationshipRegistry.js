@@ -6,12 +6,14 @@
 const customObjectRelationshipDiscoverer = require('./discoverers/customObjectRelationship.discoverer');
 const customObjectActionOverrideDiscoverer = require('./discoverers/customObjectActionOverride.discoverer');
 const permissionSetRelationshipDiscoverer = require('./discoverers/permissionSetRelationship.discoverer');
+const profileRelationshipDiscoverer = require('./discoverers/profileRelationship.discoverer');
 
 function getRegisteredDiscoverers() {
     return [
         customObjectRelationshipDiscoverer,
         customObjectActionOverrideDiscoverer,
-        permissionSetRelationshipDiscoverer
+        permissionSetRelationshipDiscoverer,
+        profileRelationshipDiscoverer
     ];
 }
 

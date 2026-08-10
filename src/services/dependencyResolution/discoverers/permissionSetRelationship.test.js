@@ -1118,7 +1118,7 @@ async function main() {
     );
 
     await runTest(
-        'registry retains existing discoverers and adds PermissionSet',
+        'registry retains existing discoverers and includes Profile',
         async () => {
             assert.deepStrictEqual(
                 getRegisteredDiscoverers().map(
@@ -1127,7 +1127,8 @@ async function main() {
                 [
                     'CustomObjectRelationshipDiscoverer',
                     'CustomObjectActionOverrideDiscoverer',
-                    'PermissionSetRelationshipDiscoverer'
+                    'PermissionSetRelationshipDiscoverer',
+                    'ProfileRelationshipDiscoverer'
                 ]
             );
         }
