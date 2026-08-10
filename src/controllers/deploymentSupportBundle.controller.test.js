@@ -169,9 +169,16 @@ function postJson(port, path, body) {
 }
 
 async function withServer(run) {
+    const {
+        applyJsonBodyParsing,
+        applySupportBundlePayloadTooLargeHandler
+    } = require('../middleware/supportBundleBodyLimit');
+
     const app = express();
-    app.use(express.json());
+    // Mirror production: Support Bundle 1 MB parser before global ~100 KB.
+    applyJsonBodyParsing(app);
     app.use('/api/deployment', deploymentRoutes);
+    applySupportBundlePayloadTooLargeHandler(app);
     const server = http.createServer(app);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address();

@@ -51,6 +51,11 @@ const deploymentHistoryRoutes =
         './routes/deploymentHistory.routes'
     );
 
+const {
+    applyJsonBodyParsing,
+    applySupportBundlePayloadTooLargeHandler
+} = require('./middleware/supportBundleBodyLimit');
+
 
 
 
@@ -58,7 +63,10 @@ const deploymentHistoryRoutes =
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+
+// Phase 18.3.3: Support Bundle gets a route-scoped 1 MB JSON limit BEFORE
+// the global ~100 KB parser. Do not raise the global limit.
+applyJsonBodyParsing(app);
 
 app.use('/api', healthRoutes);
 app.use('/api/oauth', oauthRoutes);
@@ -73,6 +81,8 @@ app.use('/api/deployment', deploymentReviewRoutes);
 app.use('/api/deployment', sourceValidateRoutes);
 app.use('/api/deployment', sourceValidationRoutes);
 app.use('/api/deployments', deploymentHistoryRoutes);
+
+applySupportBundlePayloadTooLargeHandler(app);
 
 const PORT = process.env.PORT || 3000;
 
