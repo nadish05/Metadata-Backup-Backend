@@ -9,6 +9,8 @@ const deploymentController =
         '../controllers/deployment.controller'
     );
 
+const deploymentAiResolutionController = require('../controllers/deploymentAiResolution.controller');
+
 router.post(
     '/analyze',
     deploymentController.analyzeDependencies
@@ -17,6 +19,11 @@ router.post(
 router.post(
     '/validate',
     deploymentController.validateDeployment
+);
+
+router.post(
+    '/ai-resolution',
+    deploymentAiResolutionController.resolveDeploymentWithAi
 );
 
 module.exports =

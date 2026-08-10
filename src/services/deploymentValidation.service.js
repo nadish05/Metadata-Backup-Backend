@@ -73,7 +73,7 @@ const {
     completeWithAutoValidationLoop
 } = require('./deploymentFailureClassification/deploymentAutoValidation.service');
 const {
-    generateAiResolutionReport
+    buildOnDemandAiResolutionStub
 } = require('./aiDeploymentAdvisor/aiDeploymentAdvisor.service');
 const {
     buildEnterpriseDeploymentReport
@@ -2072,37 +2072,10 @@ async function validateDeployment({
         runValidation: (args) => validateDeployment(args)
     });
 
-    // Phase 17.5 — AI Resolution Layer (additive, post-validation only).
-    // Never runs on auto-validation re-entry. Never influences decisions.
+    // Phase 17.7 — AI Resolution is on-demand only (no automatic LLM call).
+    // Keep a stub aiResolutionReport for backward-compatible UI contracts.
     if (!autoValidationContext?.isRevalidation) {
-        try {
-            finalResponse.aiResolutionReport = await generateAiResolutionReport(
-                {
-                    failureClassification: finalResponse.failureClassification,
-                    resolutionReport: finalResponse.resolutionReport,
-                    autoFixReport: finalResponse.autoFixReport,
-                    autoValidationReport: finalResponse.autoValidationReport,
-                    deploymentDiagnostics: finalResponse.deploymentDiagnostics,
-                    deploymentSummary:
-                        finalResponse.checkOnlyDeployment?.deploymentSummary ||
-                        finalResponse.deploymentExecution?.deploymentSummary ||
-                        finalResponse.deploymentSummary ||
-                        null
-                }
-            );
-        } catch (error) {
-            console.error('AI RESOLUTION LAYER ATTACH ERROR');
-            console.error(error);
-            finalResponse.aiResolutionReport = {
-                available: false,
-                provider: null,
-                generated: false,
-                explanations: [],
-                summary: 'AI Resolution Layer failed to generate explanations.',
-                disclaimer:
-                    'AI explanations are advisory only. They do not change deployment decisions, packages, metadata, or validation results.'
-            };
-        }
+        finalResponse.aiResolutionReport = buildOnDemandAiResolutionStub();
 
         // Phase 17.6 — Enterprise Deployment Report (additive aggregation only).
         try {

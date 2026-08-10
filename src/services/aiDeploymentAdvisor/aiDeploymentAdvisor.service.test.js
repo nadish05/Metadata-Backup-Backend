@@ -332,7 +332,7 @@ async function main() {
         );
 
         assert.strictEqual(report.available, true);
-        assert.strictEqual(report.generated, true);
+        assert.strictEqual(report.generated, false);
         assert.deepStrictEqual(report.explanations, []);
         assert.ok(report.summary.includes('No deployment failures'));
         assert.strictEqual(report.disclaimer, DEFAULT_DISCLAIMER);
@@ -364,7 +364,8 @@ async function main() {
         });
 
         // Invented entry rejected → deterministic fallback for known items.
-        assert.strictEqual(report.generated, true);
+        assert.strictEqual(report.generated, false);
+        assert.strictEqual(report.fallbackUsed, true);
         assert.ok(
             report.explanations.every(
                 (entry) => entry.metadataName === 'Account.Score__c'
@@ -373,6 +374,12 @@ async function main() {
         assert.ok(
             !report.explanations.some(
                 (entry) => entry.metadataName === 'InventedClass'
+            )
+        );
+        assert.strictEqual(report.explanations[0].safeToSkip, null);
+        assert.ok(
+            report.explanations[0].skipGuidance.includes(
+                'not marked this component as safe to skip'
             )
         );
     });

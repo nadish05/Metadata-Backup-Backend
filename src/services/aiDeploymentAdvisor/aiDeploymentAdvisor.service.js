@@ -1,17 +1,47 @@
 /**
- * AI Deployment Resolution Layer (Phase 17.5).
+ * AI Deployment Resolution Layer (Phase 17.5 / 17.7).
  *
- * Runs ONLY after deployment validation has fully completed.
- * Generates user-friendly explanations from structured reports.
+ * Phase 17.7: On-demand AI resolution via explicit API.
+ * Validation no longer automatically invokes the LLM.
  *
- * Never influences deployment decisions, package contents, metadata,
- * planner selections, auto-fix, or auto-validation.
+ * Advisory only. Never influences deployment decisions, package contents,
+ * metadata, planner selections, auto-fix, or auto-validation.
  */
 
 const { generateAiText } = require('../aiTextGeneration.service');
 
 const DEFAULT_DISCLAIMER =
     'AI explanations are advisory only. They do not change deployment decisions, packages, metadata, or validation results.';
+
+const ON_DEMAND_STUB_SUMMARY =
+    'AI deployment resolution is available on demand.';
+
+const ON_DEMAND_STUB_DISCLAIMER =
+    'AI guidance is advisory only and is generated only when requested.';
+
+const ALLOWED_CONTEXT_KEYS = Object.freeze([
+    'failureClassification',
+    'resolutionReport',
+    'autoFixReport',
+    'autoValidationReport',
+    'enterpriseDeploymentReport',
+    'deploymentDiagnostics',
+    'deploymentSummary'
+]);
+
+const SUPPORTED_PROVIDERS = Object.freeze(['gemini', 'openai']);
+
+const SKIP_GUIDANCE_DEFAULT =
+    'Backend has not marked this component as safe to skip. Skipping is not recommended.';
+
+class UnsupportedAiProviderError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'UnsupportedAiProviderError';
+        this.code = 'UNSUPPORTED_AI_PROVIDER';
+        this.statusCode = 400;
+    }
+}
 
 function parseEnvBool(value, defaultValue) {
     if (value === undefined || value === null || value === '') {
@@ -29,26 +59,62 @@ function parseEnvBool(value, defaultValue) {
     return defaultValue;
 }
 
-function resolveAdvisorConfig(options = {}) {
-    const enabled =
-        options.enabled !== undefined
-            ? options.enabled === true
-            : parseEnvBool(process.env.AI_ENABLED, false);
+function isAiEnabled(options = {}) {
+    if (options.enabled !== undefined) {
+        return options.enabled === true;
+    }
 
-    const provider = String(
-        options.provider ||
-            options.model ||
-            process.env.AI_DEPLOYMENT_PROVIDER ||
-            process.env.AI_PROVIDER ||
-            'gemini'
-    )
-        .trim()
-        .toLowerCase();
+    return parseEnvBool(process.env.AI_ENABLED, false);
+}
 
-    return {
-        enabled,
-        provider: provider === 'gpt' ? 'openai' : provider
-    };
+/**
+ * Validate and normalize an on-demand provider.
+ * Accepts: gemini | openai | gpt (→ openai).
+ * Rejects all other values (no silent Gemini default).
+ *
+ * @param {unknown} provider
+ * @returns {string} 'gemini' | 'openai'
+ */
+function normalizeOnDemandProvider(provider) {
+    if (provider === undefined || provider === null || provider === '') {
+        throw new UnsupportedAiProviderError(
+            'Unsupported AI provider. Supported providers: gemini, openai.'
+        );
+    }
+
+    const normalized = String(provider).trim().toLowerCase();
+
+    if (normalized === 'gpt') {
+        return 'openai';
+    }
+
+    if (SUPPORTED_PROVIDERS.includes(normalized)) {
+        return normalized;
+    }
+
+    throw new UnsupportedAiProviderError(
+        'Unsupported AI provider. Supported providers: gemini, openai.'
+    );
+}
+
+/**
+ * Allowlist context fields for on-demand AI. Drops credentials, prompts, keys.
+ *
+ * @param {object} rawContext
+ * @returns {object}
+ */
+function sanitizeAiResolutionContext(rawContext) {
+    const source =
+        rawContext && typeof rawContext === 'object' ? rawContext : {};
+    const sanitized = {};
+
+    for (const key of ALLOWED_CONTEXT_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) {
+            sanitized[key] = source[key];
+        }
+    }
+
+    return sanitized;
 }
 
 function emptyReport(overrides = {}) {
@@ -59,8 +125,20 @@ function emptyReport(overrides = {}) {
         explanations: [],
         summary: null,
         disclaimer: DEFAULT_DISCLAIMER,
+        fallbackUsed: false,
         ...overrides
     };
+}
+
+function buildOnDemandAiResolutionStub() {
+    return emptyReport({
+        available: false,
+        provider: null,
+        generated: false,
+        summary: ON_DEMAND_STUB_SUMMARY,
+        disclaimer: ON_DEMAND_STUB_DISCLAIMER,
+        fallbackUsed: false
+    });
 }
 
 function failureKey(type, name) {
@@ -102,7 +180,16 @@ function collectKnownItems(context) {
                 entry.recommendedNextStep ||
                 entry.recommendedAction ||
                 null,
-            autoFixed: entry.autoFixed === true
+            autoFixed: entry.autoFixed === true,
+            autoFixAvailable: entry.autoFixAvailable === true,
+            userActionRequired: entry.userActionRequired,
+            canAutoFix: entry.canAutoFix === true,
+            safeToSkip:
+                entry.safeToSkip === true
+                    ? true
+                    : entry.safeToSkip === false
+                      ? false
+                      : null
         });
     };
 
@@ -127,12 +214,162 @@ function collectKnownItems(context) {
                 reason: fix.action || 'Dependency was automatically included.',
                 recommendation:
                     'Dependency was automatically added during validation.',
-                autoFixed: true
+                autoFixed: true,
+                autoFixAvailable: true,
+                userActionRequired: false,
+                canAutoFix: true,
+                safeToSkip: null
             });
         }
     }
 
+    for (const failure of context.enterpriseDeploymentReport?.failures || []) {
+        add(failure);
+    }
+
+    for (const resolution of context.enterpriseDeploymentReport?.resolutions ||
+        []) {
+        add(resolution);
+    }
+
     return items;
+}
+
+function deriveResolutionCategory(item) {
+    if (!item) {
+        return 'NONE';
+    }
+
+    if (item.autoFixed === true) {
+        return 'DEPENDENCY';
+    }
+
+    const resolutionType = String(item.resolutionType || '').toUpperCase();
+    if (
+        [
+            'DEPENDENCY',
+            'PACKAGE',
+            'WORKSPACE',
+            'RETRY',
+            'ENABLE_FEATURE',
+            'MANUAL_METADATA_CHANGE',
+            'MANUAL_CONFIGURATION',
+            'INFORMATION'
+        ].includes(resolutionType)
+    ) {
+        return resolutionType;
+    }
+
+    if (resolutionType === 'AUTO_FIXED_DEPENDENCY') {
+        return 'DEPENDENCY';
+    }
+
+    const reason = String(item.reason || '').toLowerCase();
+    const category = String(item.category || '').toLowerCase();
+
+    if (reason.includes('person account') || reason.includes('personaccount')) {
+        return 'ENABLE_FEATURE';
+    }
+
+    if (reason.includes('formula') || category.includes('formula')) {
+        return 'MANUAL_METADATA_CHANGE';
+    }
+
+    if (reason.includes('dependency') || reason.includes('not included')) {
+        return 'DEPENDENCY';
+    }
+
+    return 'NONE';
+}
+
+function deriveBackendCanAutoFix(item) {
+    if (!item) {
+        return false;
+    }
+
+    if (item.autoFixed === true || item.canAutoFix === true) {
+        return true;
+    }
+
+    if (item.autoFixAvailable === true) {
+        return true;
+    }
+
+    return false;
+}
+
+function deriveUserActionRequired(item) {
+    if (!item) {
+        return true;
+    }
+
+    if (item.autoFixed === true) {
+        return false;
+    }
+
+    if (typeof item.userActionRequired === 'boolean') {
+        return item.userActionRequired;
+    }
+
+    return !deriveBackendCanAutoFix(item);
+}
+
+function deriveSafeToSkip(item) {
+    // Phase 17.7: never invent safe-skip. Only pass through explicit backend flags.
+    if (item && item.safeToSkip === true) {
+        return true;
+    }
+
+    if (item && item.safeToSkip === false) {
+        return false;
+    }
+
+    return null;
+}
+
+function attachBackendDerivedFields(explanation, knownItems) {
+    const key = failureKey(
+        explanation?.metadataType,
+        explanation?.metadataName
+    );
+    const item =
+        (key &&
+            knownItems.find(
+                (known) =>
+                    failureKey(known.metadataType, known.metadataName) === key
+            )) ||
+        null;
+
+    const safeToSkip = deriveSafeToSkip(item);
+
+    return {
+        ...explanation,
+        resolutionCategory: deriveResolutionCategory(item),
+        backendCanAutoFix: deriveBackendCanAutoFix(item),
+        userActionRequired: deriveUserActionRequired(item),
+        safeToSkip,
+        skipGuidance:
+            safeToSkip === true
+                ? 'Backend marked this component as safe to skip.'
+                : SKIP_GUIDANCE_DEFAULT
+    };
+}
+
+function enrichReportExplanations(report, knownItems) {
+    if (!report || typeof report !== 'object') {
+        return report;
+    }
+
+    const explanations = Array.isArray(report.explanations)
+        ? report.explanations.map((explanation) =>
+              attachBackendDerivedFields(explanation, knownItems)
+          )
+        : [];
+
+    return {
+        ...report,
+        explanations
+    };
 }
 
 function buildDeterministicExplanation(item) {
@@ -140,11 +377,13 @@ function buildDeterministicExplanation(item) {
     const reason = String(item.reason || '').toLowerCase();
     const category = String(item.category || '').toLowerCase();
 
+    let base;
+
     if (
         item.autoFixed === true ||
         resolutionType === 'AUTO_FIXED_DEPENDENCY'
     ) {
-        return {
+        base = {
             metadataType: item.metadataType,
             metadataName: item.metadataName,
             severity: item.severity || 'INFO',
@@ -156,14 +395,12 @@ function buildDeterministicExplanation(item) {
             bestPractice: 'Use dependency discovery before deployment.',
             confidence: 'HIGH'
         };
-    }
-
-    if (
+    } else if (
         resolutionType === 'ENABLE_FEATURE' ||
         reason.includes('person account') ||
         reason.includes('personaccount')
     ) {
-        return {
+        base = {
             metadataType: item.metadataType,
             metadataName: item.metadataName,
             severity: item.severity || 'HIGH',
@@ -176,14 +413,12 @@ function buildDeterministicExplanation(item) {
                 'Validate platform feature dependencies before deployment.',
             confidence: 'HIGH'
         };
-    }
-
-    if (
+    } else if (
         resolutionType === 'MANUAL_METADATA_CHANGE' ||
         reason.includes('formula') ||
         category.includes('formula')
     ) {
-        return {
+        base = {
             metadataType: item.metadataType,
             metadataName: item.metadataName,
             severity: item.severity || 'HIGH',
@@ -197,15 +432,13 @@ function buildDeterministicExplanation(item) {
                 'Perform field type migrations in multiple deployment stages.',
             confidence: 'HIGH'
         };
-    }
-
-    if (
+    } else if (
         resolutionType === 'DEPENDENCY' ||
         resolutionType === 'PACKAGE' ||
         reason.includes('dependency') ||
         reason.includes('not included')
     ) {
-        return {
+        base = {
             metadataType: item.metadataType,
             metadataName: item.metadataName,
             severity: item.severity || 'HIGH',
@@ -218,24 +451,27 @@ function buildDeterministicExplanation(item) {
             bestPractice: 'Use dependency discovery before deployment.',
             confidence: 'HIGH'
         };
+    } else {
+        base = {
+            metadataType: item.metadataType,
+            metadataName: item.metadataName,
+            severity: item.severity || 'MEDIUM',
+            title: item.reason || 'Deployment validation finding',
+            why:
+                item.reason ||
+                'A deployment validation finding was reported for this metadata.',
+            impact:
+                'Deployment validation reported an issue that may block progress.',
+            recommendedAction:
+                item.recommendation ||
+                'Review the resolution report and address the finding manually.',
+            bestPractice:
+                'Resolve deterministic validation findings before deploying to production.',
+            confidence: 'MEDIUM'
+        };
     }
 
-    return {
-        metadataType: item.metadataType,
-        metadataName: item.metadataName,
-        severity: item.severity || 'MEDIUM',
-        title: item.reason || 'Deployment validation finding',
-        why:
-            item.reason ||
-            'A deployment validation finding was reported for this metadata.',
-        impact: 'Deployment validation reported an issue that may block progress.',
-        recommendedAction:
-            item.recommendation ||
-            'Review the resolution report and address the finding manually.',
-        bestPractice:
-            'Resolve deterministic validation findings before deploying to production.',
-        confidence: 'MEDIUM'
-    };
+    return attachBackendDerivedFields(base, [item]);
 }
 
 function buildStructuredContext(context) {
@@ -297,13 +533,39 @@ function buildStructuredContext(context) {
                       context.autoValidationReport.revalidated === true
               }
             : null,
+        enterpriseDeploymentReport: context.enterpriseDeploymentReport
+            ? {
+                  overallStatus:
+                      context.enterpriseDeploymentReport.overallStatus || null,
+                  summary: context.enterpriseDeploymentReport.summary || null,
+                  statistics:
+                      context.enterpriseDeploymentReport.statistics || null,
+                  nextActions: Array.isArray(
+                      context.enterpriseDeploymentReport.nextActions
+                  )
+                      ? context.enterpriseDeploymentReport.nextActions.map(
+                            (action) => ({
+                                priority: action.priority ?? null,
+                                type: action.type || null,
+                                metadataType: action.metadataType || null,
+                                metadataName: action.metadataName || null,
+                                message: action.message || null,
+                                completed: action.completed === true
+                            })
+                        )
+                      : []
+              }
+            : null,
         deploymentDiagnostics: context.deploymentDiagnostics
             ? {
                   componentFailureCount: Array.isArray(
                       context.deploymentDiagnostics.componentFailures
                   )
                       ? context.deploymentDiagnostics.componentFailures.length
-                      : 0,
+                      : typeof context.deploymentDiagnostics
+                              .componentFailureCount === 'number'
+                        ? context.deploymentDiagnostics.componentFailureCount
+                        : 0,
                   warningCount: Array.isArray(
                       context.deploymentDiagnostics.componentWarnings ||
                           context.deploymentDiagnostics.warnings
@@ -312,7 +574,10 @@ function buildStructuredContext(context) {
                             context.deploymentDiagnostics.componentWarnings ||
                             context.deploymentDiagnostics.warnings
                         ).length
-                      : 0
+                      : typeof context.deploymentDiagnostics.warningCount ===
+                          'number'
+                        ? context.deploymentDiagnostics.warningCount
+                        : 0
               }
             : null,
         deploymentSummary: context.deploymentSummary
@@ -334,6 +599,7 @@ Rules:
 - Explain what failed, why it failed, business impact, recommended resolution, and Salesforce best practice.
 - Never invent metadata, package members, or components not present in the context.
 - Never recommend unsafe skips, disabling validations, or automatically modifying the deployment package.
+- Never say a component is safe to skip unless the backend context explicitly marks safeToSkip=true (it normally will not).
 - Never override backend decisions. If autoFixReport shows a successful include, explain that the backend already auto-fixed it.
 - Return JSON only. No markdown.
 
@@ -399,6 +665,7 @@ function normalizeExplanation(raw, knownKeys) {
         return null;
     }
 
+    // Strip any client/model-invented decision fields; backend derives them.
     return {
         metadataType,
         metadataName,
@@ -417,30 +684,44 @@ function normalizeExplanation(raw, knownKeys) {
     };
 }
 
-function buildDeterministicReport(knownItems, provider) {
+function buildDeterministicReport(knownItems, provider, summaryOverride) {
     const explanations = knownItems.map(buildDeterministicExplanation);
 
     return {
         available: true,
         provider: provider || null,
-        generated: true,
+        generated: false,
+        fallbackUsed: true,
         explanations,
-        summary: explanations.length
-            ? `Generated ${explanations.length} deployment resolution explanation(s).`
-            : 'No deployment failures required AI explanation.',
+        summary:
+            summaryOverride ||
+            (explanations.length
+                ? `Deterministic fallback: generated ${explanations.length} deployment resolution explanation(s).`
+                : 'No deployment failures require AI resolution.'),
         disclaimer: DEFAULT_DISCLAIMER
     };
 }
 
 /**
- * Generate an additive AI resolution report from structured validation outputs.
+ * Generate an AI resolution report from structured validation outputs.
+ * Used by on-demand API (and retained for unit tests).
  *
  * @param {object} context
  * @param {object} [options]
  * @returns {Promise<object>}
  */
 async function generateAiResolutionReport(context = {}, options = {}) {
-    const config = resolveAdvisorConfig(options);
+    const enabled = isAiEnabled(options);
+    const providerOption = options.provider;
+    const provider =
+        providerOption !== undefined && providerOption !== null
+            ? normalizeOnDemandProvider(providerOption)
+            : normalizeOnDemandProvider(
+                  process.env.AI_DEPLOYMENT_PROVIDER ||
+                      process.env.AI_PROVIDER ||
+                      'gemini'
+              );
+
     const knownItems = collectKnownItems(context);
     const knownKeys = new Set(
         knownItems
@@ -449,22 +730,24 @@ async function generateAiResolutionReport(context = {}, options = {}) {
             .map((key) => key.toLowerCase())
     );
 
-    if (!config.enabled) {
+    if (!enabled) {
         return emptyReport({
             available: false,
-            provider: config.provider,
+            provider,
             generated: false,
-            summary: 'AI Resolution Layer is disabled.'
+            summary: 'AI deployment resolution is disabled.',
+            fallbackUsed: false
         });
     }
 
     if (!knownItems.length) {
         return {
             available: true,
-            provider: config.provider,
-            generated: true,
+            provider,
+            generated: false,
+            fallbackUsed: false,
             explanations: [],
-            summary: 'No deployment failures required AI explanation.',
+            summary: 'No deployment failures require AI resolution.',
             disclaimer: DEFAULT_DISCLAIMER
         };
     }
@@ -472,11 +755,12 @@ async function generateAiResolutionReport(context = {}, options = {}) {
     const generateText = options.generateText || generateAiText;
     const structuredContext = buildStructuredContext(context);
     const prompt = buildPrompt(structuredContext);
+    const startedAt = Date.now();
 
     try {
-        const { text, provider } = await generateText(prompt, {
-            provider: config.provider,
-            ...options.generateOptions
+        const { text, provider: usedProvider } = await generateText(prompt, {
+            provider
+            // Never forward client apiKey/model/systemPrompt.
         });
 
         const parsed = extractJsonObject(text);
@@ -487,41 +771,108 @@ async function generateAiResolutionReport(context = {}, options = {}) {
             : [];
 
         if (!aiExplanations.length) {
-            const fallback = buildDeterministicReport(knownItems, provider);
-            fallback.summary =
-                parsed?.summary ||
-                fallback.summary ||
-                'Generated deterministic deployment explanations.';
-            return fallback;
+            console.log(
+                '[AI Resolution] fallbackUsed=true reason=empty_or_ungrounded durationMs=' +
+                    (Date.now() - startedAt)
+            );
+            return enrichReportExplanations(
+                buildDeterministicReport(
+                    knownItems,
+                    usedProvider || provider,
+                    parsed?.summary ||
+                        'AI response was incomplete; returned deterministic resolution explanations.'
+                ),
+                knownItems
+            );
         }
 
-        return {
-            available: true,
-            provider: provider || config.provider,
-            generated: true,
-            explanations: aiExplanations,
-            summary:
-                typeof parsed?.summary === 'string' && parsed.summary.trim()
-                    ? parsed.summary.trim()
-                    : `Generated ${aiExplanations.length} deployment resolution explanation(s).`,
-            disclaimer: DEFAULT_DISCLAIMER
-        };
+        console.log(
+            '[AI Resolution] provider=' +
+                (usedProvider || provider) +
+                ' success=true fallbackUsed=false durationMs=' +
+                (Date.now() - startedAt)
+        );
+
+        return enrichReportExplanations(
+            {
+                available: true,
+                provider: usedProvider || provider,
+                generated: true,
+                fallbackUsed: false,
+                explanations: aiExplanations,
+                summary:
+                    typeof parsed?.summary === 'string' && parsed.summary.trim()
+                        ? parsed.summary.trim()
+                        : `Generated ${aiExplanations.length} deployment resolution explanation(s).`,
+                disclaimer: DEFAULT_DISCLAIMER
+            },
+            knownItems
+        );
     } catch (error) {
         console.error('AI RESOLUTION LAYER ERROR');
         console.error(error?.message || error);
+        console.log(
+            '[AI Resolution] provider=' +
+                provider +
+                ' success=false fallbackUsed=true durationMs=' +
+                (Date.now() - startedAt)
+        );
 
-        const fallback = buildDeterministicReport(knownItems, config.provider);
-        fallback.summary =
-            'AI provider unavailable; returned deterministic resolution explanations.';
-        return fallback;
+        return enrichReportExplanations(
+            buildDeterministicReport(
+                knownItems,
+                provider,
+                'AI provider unavailable; returned deterministic resolution explanations.'
+            ),
+            knownItems
+        );
     }
+}
+
+/**
+ * Phase 17.7 on-demand entry point.
+ *
+ * @param {object} rawContext
+ * @param {string} provider
+ * @param {object} [options]
+ * @returns {Promise<object>}
+ */
+async function generateOnDemandAiResolution(
+    rawContext,
+    provider,
+    options = {}
+) {
+    const normalizedProvider = normalizeOnDemandProvider(provider);
+    const context = sanitizeAiResolutionContext(rawContext);
+
+    console.log(
+        '[AI Resolution] on-demand request provider=' + normalizedProvider
+    );
+
+    return generateAiResolutionReport(context, {
+        ...options,
+        provider: normalizedProvider,
+        enabled:
+            options.enabled !== undefined
+                ? options.enabled === true
+                : isAiEnabled()
+    });
 }
 
 module.exports = {
     generateAiResolutionReport,
+    generateOnDemandAiResolution,
+    buildOnDemandAiResolutionStub,
+    sanitizeAiResolutionContext,
+    normalizeOnDemandProvider,
     buildDeterministicExplanation,
     buildPrompt,
     collectKnownItems,
     buildStructuredContext,
-    DEFAULT_DISCLAIMER
+    UnsupportedAiProviderError,
+    SUPPORTED_PROVIDERS,
+    ALLOWED_CONTEXT_KEYS,
+    DEFAULT_DISCLAIMER,
+    ON_DEMAND_STUB_SUMMARY,
+    SKIP_GUIDANCE_DEFAULT
 };
