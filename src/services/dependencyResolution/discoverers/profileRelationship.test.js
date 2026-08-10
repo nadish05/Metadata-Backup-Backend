@@ -1,6 +1,7 @@
 /**
- * Phase 19.2 / 19.3 — ProfileRelationshipDiscoverer tests.
- * objectPermissions + fieldPermissions. Does not change PermissionSet discovery.
+ * Phase 19.2 / 19.3 / 19.4 — ProfileRelationshipDiscoverer tests.
+ * objectPermissions + fieldPermissions + recordTypeVisibilities.
+ * Does not change PermissionSet discovery.
  */
 
 'use strict';
@@ -498,6 +499,219 @@ async function main() {
             result.relationships.every(
                 (item) => item.sourceMetadata === 'Custom_Admin'
             )
+        );
+    });
+
+    // --- Phase 19.4 recordTypeVisibilities ---
+
+    await runTest('RT1 — single RecordType', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Account.Customer</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'Account.Customer',
+                metadataType: 'RecordType',
+                type: 'RecordType',
+                relationship: 'ProfileRecordTypeVisibility',
+                sourceMetadata: 'Custom_Admin',
+                sourceField: 'recordType',
+                discoveredBy: 'ProfileRelationshipDiscoverer',
+                discoveryMethod: 'recordTypeVisibilities',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'Profile record type visibility'
+            }
+        ]);
+    });
+
+    await runTest('RT2 — multiple RecordTypes', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Account.Customer</recordType>
+                </recordTypeVisibilities>
+                <recordTypeVisibilities>
+                    <recordType>Contact.Person</recordType>
+                </recordTypeVisibilities>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'RecordType')
+                .map((item) => item.name)
+                .sort(),
+            ['Account.Customer', 'Contact.Person', 'Invoice__c.Retail']
+        );
+        assert.ok(
+            byType(result, 'RecordType').every(
+                (item) => item.relationship === 'ProfileRecordTypeVisibility'
+            )
+        );
+    });
+
+    await runTest('RT3 — duplicate RecordType', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Account.Customer</recordType>
+                </recordTypeVisibilities>
+                <recordTypeVisibilities>
+                    <recordType>Account.Customer</recordType>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(
+            byType(result, 'RecordType')[0].name,
+            'Account.Customer'
+        );
+    });
+
+    await runTest('RT4 — no parent CustomObject from this section', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(byType(result, 'CustomObject').length, 0);
+        assert.strictEqual(byType(result, 'CustomField').length, 0);
+    });
+
+    await runTest('RT5 — malformed references ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities><recordType></recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType> </recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>ObjectOnly</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>Object__c.</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>.RecordType</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>A.B.C</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>Object Name.RecordType</recordType></recordTypeVisibilities>
+                <recordTypeVisibilities><recordType>Object__c.Record Type</recordType></recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('RT6 — standard object RecordType emitted', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Account.Customer</recordType>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'RecordType').map((item) => item.name),
+            ['Account.Customer']
+        );
+        assert.strictEqual(byType(result, 'CustomObject').length, 0);
+    });
+
+    await runTest('RT7 — visible/default false still discover', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Account.Customer</recordType>
+                    <visible>false</visible>
+                    <default>false</default>
+                    <personAccountDefault>false</personAccountDefault>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(
+            byType(result, 'RecordType')[0].name,
+            'Account.Customer'
+        );
+    });
+
+    await runTest('RT8 — coexistence with objectPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <objectPermissions>
+                    <object>Invoice__c</object>
+                </objectPermissions>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomObject')[0].name, 'Invoice__c');
+        assert.strictEqual(
+            byType(result, 'CustomObject')[0].relationship,
+            'ProfileObjectPermission'
+        );
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(
+            byType(result, 'RecordType')[0].name,
+            'Invoice__c.Retail'
+        );
+    });
+
+    await runTest('RT9 — coexistence with fieldPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <fieldPermissions>
+                    <field>Invoice__c.Amount__c</field>
+                </fieldPermissions>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomField').length, 1);
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(
+            byType(result, 'CustomField')[0].name,
+            'Invoice__c.Amount__c'
+        );
+        assert.strictEqual(
+            byType(result, 'RecordType')[0].name,
+            'Invoice__c.Retail'
+        );
+    });
+
+    await runTest('RT10 — Profile-only RecordType XML', async () => {
+        const result = await discoverProfile(`
+            <Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                </recordTypeVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(result.relationships.length, 1);
+        assert.strictEqual(
+            result.relationships[0].discoveredBy,
+            'ProfileRelationshipDiscoverer'
+        );
+        assert.strictEqual(
+            result.relationships[0].relationship,
+            'ProfileRecordTypeVisibility'
         );
     });
 

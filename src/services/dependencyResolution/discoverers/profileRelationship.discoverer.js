@@ -1,9 +1,10 @@
 /**
- * Profile Relationship Discoverer (Phase 19.2 / 19.3)
+ * Profile Relationship Discoverer (Phase 19.2 / 19.3 / 19.4)
  *
  * Profile-specific. Currently discovers:
- *   objectPermissions → CustomObject (custom __c names)
- *   fieldPermissions  → CustomObject + CustomField (Object__c.Field__c)
+ *   objectPermissions      → CustomObject (custom __c names)
+ *   fieldPermissions       → CustomObject + CustomField (Object__c.Field__c)
+ *   recordTypeVisibilities → RecordType (Obj.Rt; standard + custom objects)
  *
  * Does not process PermissionSet / PermissionSetGroup / MutingPermissionSet.
  * Does not import deployment, package, workspace, AI, or SAFE_SKIP services.
@@ -20,7 +21,8 @@ const CUSTOM_OBJECT_SUFFIX = '__c';
 const RELATIONSHIPS = Object.freeze({
     OBJECT_PERMISSION: 'ProfileObjectPermission',
     FIELD_PERMISSION_OBJECT: 'ProfileFieldPermissionObject',
-    FIELD_PERMISSION: 'ProfileFieldPermission'
+    FIELD_PERMISSION: 'ProfileFieldPermission',
+    RECORD_TYPE_VISIBILITY: 'ProfileRecordTypeVisibility'
 });
 
 function normalizePath(filePath) {
@@ -96,6 +98,28 @@ function parseCustomFieldReference(value) {
     };
 }
 
+/**
+ * Local equivalent of PermissionSet parseRecordTypeReference.
+ * Accepts ObjectApiName.RecordTypeName for standard and custom objects.
+ * Does NOT require __c on the object segment.
+ */
+function parseRecordTypeReference(value) {
+    const parts = String(value || '')
+        .trim()
+        .split('.');
+    const validApiName = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+    if (
+        parts.length !== 2 ||
+        !validApiName.test(parts[0]) ||
+        !validApiName.test(parts[1])
+    ) {
+        return null;
+    }
+
+    return `${parts[0]}.${parts[1]}`;
+}
+
 function extractTagValue(block, tagName) {
     const match = String(block || '').match(
         new RegExp(
@@ -152,7 +176,8 @@ function createRelationshipRecord({
 }
 
 /**
- * Pure XML → relationships for Profile objectPermissions + fieldPermissions.
+ * Pure XML → relationships for Profile objectPermissions, fieldPermissions,
+ * and recordTypeVisibilities.
  * @param {string} xml
  * @param {string} sourceMetadata Profile API name
  * @param {number} [depth=1]
@@ -221,6 +246,31 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 sourceMetadata,
                 discoveryMethod: 'fieldPermissions',
                 reason: 'Profile field permission',
+                depth
+            })
+        );
+    }
+
+    for (const recordTypeValue of extractSectionValues(
+        xml,
+        'recordTypeVisibilities',
+        'recordType'
+    )) {
+        const recordTypeName = parseRecordTypeReference(recordTypeValue);
+
+        if (!recordTypeName) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: recordTypeName,
+                metadataType: 'RecordType',
+                relationship: RELATIONSHIPS.RECORD_TYPE_VISIBILITY,
+                sourceMetadata,
+                sourceField: 'recordType',
+                discoveryMethod: 'recordTypeVisibilities',
+                reason: 'Profile record type visibility',
                 depth
             })
         );
