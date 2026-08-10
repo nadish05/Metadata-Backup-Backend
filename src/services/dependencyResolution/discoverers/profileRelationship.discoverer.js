@@ -1,8 +1,9 @@
 /**
- * Profile Relationship Discoverer (Phase 19.2)
+ * Profile Relationship Discoverer (Phase 19.2 / 19.3)
  *
- * Profile-specific. Currently discovers only:
+ * Profile-specific. Currently discovers:
  *   objectPermissions → CustomObject (custom __c names)
+ *   fieldPermissions  → CustomObject + CustomField (Object__c.Field__c)
  *
  * Does not process PermissionSet / PermissionSetGroup / MutingPermissionSet.
  * Does not import deployment, package, workspace, AI, or SAFE_SKIP services.
@@ -17,7 +18,9 @@ const DISCOVERER_ID = 'ProfileRelationshipDiscoverer';
 const CUSTOM_OBJECT_SUFFIX = '__c';
 
 const RELATIONSHIPS = Object.freeze({
-    OBJECT_PERMISSION: 'ProfileObjectPermission'
+    OBJECT_PERMISSION: 'ProfileObjectPermission',
+    FIELD_PERMISSION_OBJECT: 'ProfileFieldPermissionObject',
+    FIELD_PERMISSION: 'ProfileFieldPermission'
 });
 
 function normalizePath(filePath) {
@@ -67,6 +70,30 @@ function isCustomObjectName(value) {
         name.endsWith(CUSTOM_OBJECT_SUFFIX) &&
         /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
     );
+}
+
+/**
+ * Local equivalent of PermissionSet parseCustomFieldReference.
+ * Accepts only Object__c.Field__c (custom object + custom field).
+ */
+function parseCustomFieldReference(value) {
+    const parts = String(value || '')
+        .trim()
+        .split('.');
+
+    if (
+        parts.length !== 2 ||
+        !isCustomObjectName(parts[0]) ||
+        !/^[A-Za-z_][A-Za-z0-9_]*__c$/.test(parts[1])
+    ) {
+        return null;
+    }
+
+    return {
+        objectName: parts[0],
+        fieldName: parts[1],
+        fullName: `${parts[0]}.${parts[1]}`
+    };
 }
 
 function extractTagValue(block, tagName) {
@@ -125,7 +152,7 @@ function createRelationshipRecord({
 }
 
 /**
- * Pure XML → relationships for Profile.objectPermissions only.
+ * Pure XML → relationships for Profile objectPermissions + fieldPermissions.
  * @param {string} xml
  * @param {string} sourceMetadata Profile API name
  * @param {number} [depth=1]
@@ -159,6 +186,41 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 sourceMetadata,
                 discoveryMethod: 'objectPermissions',
                 reason: 'Profile object permission',
+                depth
+            })
+        );
+    }
+
+    for (const fieldValue of extractSectionValues(
+        xml,
+        'fieldPermissions',
+        'field'
+    )) {
+        const fieldReference = parseCustomFieldReference(fieldValue);
+
+        if (!fieldReference) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: fieldReference.objectName,
+                metadataType: 'CustomObject',
+                relationship: RELATIONSHIPS.FIELD_PERMISSION_OBJECT,
+                sourceMetadata,
+                discoveryMethod: 'fieldPermissions',
+                reason: 'Profile field permission parent object',
+                depth
+            })
+        );
+        addRelationship(
+            createRelationshipRecord({
+                name: fieldReference.fullName,
+                metadataType: 'CustomField',
+                relationship: RELATIONSHIPS.FIELD_PERMISSION,
+                sourceMetadata,
+                discoveryMethod: 'fieldPermissions',
+                reason: 'Profile field permission',
                 depth
             })
         );
