@@ -1,11 +1,12 @@
 /**
- * Profile Relationship Discoverer (Phase 19.2 / 19.3 / 19.4 / 19.5)
+ * Profile Relationship Discoverer (Phase 19.2 / 19.3 / 19.4 / 19.5 / 19.6)
  *
  * Profile-specific. Currently discovers:
  *   objectPermissions      → CustomObject (custom __c names)
  *   fieldPermissions       → CustomObject + CustomField (Object__c.Field__c)
  *   recordTypeVisibilities → RecordType (Obj.Rt; standard + custom objects)
  *   tabVisibilities        → CustomTab (custom tab names only)
+ *   classAccesses          → ApexClass
  *
  * Does not process PermissionSet / PermissionSetGroup / MutingPermissionSet.
  * Does not import deployment, package, workspace, AI, or SAFE_SKIP services.
@@ -24,7 +25,8 @@ const RELATIONSHIPS = Object.freeze({
     FIELD_PERMISSION_OBJECT: 'ProfileFieldPermissionObject',
     FIELD_PERMISSION: 'ProfileFieldPermission',
     RECORD_TYPE_VISIBILITY: 'ProfileRecordTypeVisibility',
-    TAB_VISIBILITY: 'ProfileTabVisibility'
+    TAB_VISIBILITY: 'ProfileTabVisibility',
+    CLASS_ACCESS: 'ProfileClassAccess'
 });
 
 function normalizePath(filePath) {
@@ -88,6 +90,14 @@ function isCustomTabName(value) {
     }
 
     return name.endsWith(CUSTOM_OBJECT_SUFFIX) || name.includes('_');
+}
+
+/**
+ * Local equivalent of PermissionSet isValidMetadataName.
+ * Used for ApexClass (and future page/flow) API names.
+ */
+function isValidMetadataName(value) {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value || '').trim());
 }
 
 /**
@@ -193,7 +203,7 @@ function createRelationshipRecord({
 
 /**
  * Pure XML → relationships for Profile objectPermissions, fieldPermissions,
- * recordTypeVisibilities, and tabVisibilities.
+ * recordTypeVisibilities, tabVisibilities, and classAccesses.
  * @param {string} xml
  * @param {string} sourceMetadata Profile API name
  * @param {number} [depth=1]
@@ -309,6 +319,29 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 sourceMetadata,
                 discoveryMethod: 'tabVisibilities',
                 reason: 'Profile tab visibility',
+                depth
+            })
+        );
+    }
+
+    for (const className of extractSectionValues(
+        xml,
+        'classAccesses',
+        'apexClass'
+    )) {
+        if (!isValidMetadataName(className)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: className,
+                metadataType: 'ApexClass',
+                relationship: RELATIONSHIPS.CLASS_ACCESS,
+                sourceMetadata,
+                sourceField: 'apexClass',
+                discoveryMethod: 'classAccesses',
+                reason: 'Profile Apex class access',
                 depth
             })
         );

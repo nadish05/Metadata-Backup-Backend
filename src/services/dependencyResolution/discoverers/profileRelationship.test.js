@@ -1,6 +1,7 @@
 /**
- * Phase 19.2 / 19.3 / 19.4 / 19.5 — ProfileRelationshipDiscoverer tests.
- * objectPermissions + fieldPermissions + recordTypeVisibilities + tabVisibilities.
+ * Phase 19.2 / 19.3 / 19.4 / 19.5 / 19.6 — ProfileRelationshipDiscoverer tests.
+ * objectPermissions + fieldPermissions + recordTypeVisibilities + tabVisibilities
+ * + classAccesses.
  * Does not change PermissionSet discovery.
  */
 
@@ -275,10 +276,6 @@ async function main() {
         async () => {
             const result = await discoverProfile(`
                 <Profile>
-                    <classAccesses>
-                        <apexClass>SessionController</apexClass>
-                        <enabled>true</enabled>
-                    </classAccesses>
                     <pageAccesses>
                         <apexPage>Weather_Dashboard</apexPage>
                         <enabled>true</enabled>
@@ -1079,6 +1076,319 @@ async function main() {
                 byType(result, 'CustomTab')[0].relationship,
                 'ProfileTabVisibility'
             );
+        }
+    );
+
+    // --- Phase 19.6 classAccesses ---
+
+    await runTest('CA1 — single classAccesses → ApexClass', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'MyClass',
+                metadataType: 'ApexClass',
+                type: 'ApexClass',
+                relationship: 'ProfileClassAccess',
+                sourceMetadata: 'Custom_Admin',
+                sourceField: 'apexClass',
+                discoveredBy: 'ProfileRelationshipDiscoverer',
+                discoveryMethod: 'classAccesses',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'Profile Apex class access'
+            }
+        ]);
+    });
+
+    await runTest('CA2 — multiple classAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+                <classAccesses>
+                    <apexClass>AccountService</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'ApexClass').map((item) => item.name).sort(),
+            ['AccountService', 'MyClass']
+        );
+        assert.strictEqual(result.relationships.length, 2);
+    });
+
+    await runTest('CA3 — duplicate class → one relationship', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                    <enabled>false</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(byType(result, 'ApexClass')[0].name, 'MyClass');
+    });
+
+    await runTest('CA4 — enabled=true → discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>My_Test_Class</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(
+            byType(result, 'ApexClass')[0].name,
+            'My_Test_Class'
+        );
+    });
+
+    await runTest('CA5 — enabled=false → still discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>MyClass123</apexClass>
+                    <enabled>false</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(byType(result, 'ApexClass')[0].name, 'MyClass123');
+    });
+
+    await runTest('CA6 — empty apexClass ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass></apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CA7 — whitespace apexClass ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>   </apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CA8 — malformed class names ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>1BadClass</apexClass>
+                </classAccesses>
+                <classAccesses>
+                    <apexClass>My Class</apexClass>
+                </classAccesses>
+                <classAccesses>
+                    <apexClass>My-Class</apexClass>
+                </classAccesses>
+                <classAccesses>
+                    <apexClass>A.B</apexClass>
+                </classAccesses>
+                <classAccesses>
+                    <apexClass>A/B</apexClass>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CA9 — Profile-only classAccesses XML', async () => {
+        const result = await discoverProfile(`
+            <Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+                <classAccesses>
+                    <apexClass>Namespace__ClassName</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(result.relationships.length, 1);
+        assert.deepStrictEqual(result.relationships[0], {
+            name: 'Namespace__ClassName',
+            metadataType: 'ApexClass',
+            type: 'ApexClass',
+            relationship: 'ProfileClassAccess',
+            sourceMetadata: 'Custom_Admin',
+            sourceField: 'apexClass',
+            discoveredBy: 'ProfileRelationshipDiscoverer',
+            discoveryMethod: 'classAccesses',
+            required: true,
+            selected: true,
+            depth: 1,
+            reason: 'Profile Apex class access'
+        });
+    });
+
+    await runTest('CA10 — multiple classAccesses sections', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                </classAccesses>
+                <classAccesses>
+                    <apexClass>AccountService</apexClass>
+                </classAccesses>
+                <classAccesses>
+                    <apexClass>My_Test_Class</apexClass>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'ApexClass').map((item) => item.name).sort(),
+            ['AccountService', 'MyClass', 'My_Test_Class']
+        );
+    });
+
+    await runTest('CA11 — coexists with objectPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <objectPermissions>
+                    <object>Invoice__c</object>
+                    <allowRead>true</allowRead>
+                </objectPermissions>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(byType(result, 'ApexClass')[0].name, 'MyClass');
+    });
+
+    await runTest('CA12 — coexists with fieldPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <fieldPermissions>
+                    <field>Invoice__c.Amount__c</field>
+                    <readable>true</readable>
+                </fieldPermissions>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomField').length, 1);
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+    });
+
+    await runTest('CA13 — coexists with recordTypeVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+    });
+
+    await runTest('CA14 — coexists with tabVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <classAccesses>
+                    <apexClass>MyClass</apexClass>
+                </classAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(
+            byType(result, 'ApexClass')[0].relationship,
+            'ProfileClassAccess'
+        );
+    });
+
+    await runTest(
+        'CA15/CA16 — all Profile sections coexist; registry unchanged',
+        async () => {
+            const result = await discoverProfile(`
+                <Profile>
+                    <objectPermissions>
+                        <object>Invoice__c</object>
+                        <allowRead>true</allowRead>
+                    </objectPermissions>
+                    <fieldPermissions>
+                        <field>Invoice__c.Amount__c</field>
+                        <readable>true</readable>
+                    </fieldPermissions>
+                    <recordTypeVisibilities>
+                        <recordType>Invoice__c.Retail</recordType>
+                        <visible>true</visible>
+                    </recordTypeVisibilities>
+                    <tabVisibilities>
+                        <tab>My_Custom_Tab</tab>
+                        <visibility>Visible</visibility>
+                    </tabVisibilities>
+                    <classAccesses>
+                        <apexClass>MyClass</apexClass>
+                        <enabled>false</enabled>
+                    </classAccesses>
+                </Profile>
+            `);
+
+            assert.strictEqual(byType(result, 'CustomObject').length, 1);
+            assert.strictEqual(byType(result, 'CustomField').length, 1);
+            assert.strictEqual(byType(result, 'RecordType').length, 1);
+            assert.strictEqual(byType(result, 'CustomTab').length, 1);
+            assert.strictEqual(byType(result, 'ApexClass').length, 1);
+
+            const ids = getRegisteredDiscoverers().map((d) => d.id);
+            assert.ok(ids.includes('ProfileRelationshipDiscoverer'));
+            assert.ok(ids.includes('PermissionSetRelationshipDiscoverer'));
         }
     );
 
