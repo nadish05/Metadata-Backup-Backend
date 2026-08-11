@@ -1,6 +1,6 @@
 /**
- * Phase 19.2 / 19.3 / 19.4 — ProfileRelationshipDiscoverer tests.
- * objectPermissions + fieldPermissions + recordTypeVisibilities.
+ * Phase 19.2 / 19.3 / 19.4 / 19.5 — ProfileRelationshipDiscoverer tests.
+ * objectPermissions + fieldPermissions + recordTypeVisibilities + tabVisibilities.
  * Does not change PermissionSet discovery.
  */
 
@@ -279,10 +279,6 @@ async function main() {
                         <apexClass>SessionController</apexClass>
                         <enabled>true</enabled>
                     </classAccesses>
-                    <tabVisibilities>
-                        <tab>Invoice__c</tab>
-                        <visibility>DefaultOn</visibility>
-                    </tabVisibilities>
                     <pageAccesses>
                         <apexPage>Weather_Dashboard</apexPage>
                         <enabled>true</enabled>
@@ -714,6 +710,377 @@ async function main() {
             'ProfileRecordTypeVisibility'
         );
     });
+
+    // --- Phase 19.5 tabVisibilities ---
+
+    await runTest('TV1 — single valid tab', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'My_Custom_Tab',
+                metadataType: 'CustomTab',
+                type: 'CustomTab',
+                relationship: 'ProfileTabVisibility',
+                sourceMetadata: 'Custom_Admin',
+                sourceField: null,
+                discoveredBy: 'ProfileRelationshipDiscoverer',
+                discoveryMethod: 'tabVisibilities',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'Profile tab visibility'
+            }
+        ]);
+    });
+
+    await runTest('TV2 — multiple valid tabs', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <tabVisibilities>
+                    <tab>Invoice__c</tab>
+                    <visibility>Hidden</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'CustomTab').map((item) => item.name).sort(),
+            ['Invoice__c', 'My_Custom_Tab']
+        );
+        assert.strictEqual(result.relationships.length, 2);
+    });
+
+    await runTest('TV3 — duplicate tab → one CustomTab', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Hidden</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(byType(result, 'CustomTab')[0].name, 'My_Custom_Tab');
+    });
+
+    await runTest('TV4 — visibility Visible → discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+    });
+
+    await runTest('TV5 — visibility Hidden → discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Hidden</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+    });
+
+    await runTest('TV6 — DefaultOn → discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>DefaultOn</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+    });
+
+    await runTest('TV6b — DefaultOff → discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>DefaultOff</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+    });
+
+    await runTest('TV7 — empty tab ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab></tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('TV8 — whitespace tab ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>   </tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('TV9 — tab with spaces ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>Invalid Name</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('TV10 — tab with dots ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>A.B</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <tabVisibilities>
+                    <tab>A.B.C</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('TV11 — tab with hyphens ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>standard-Account</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('TV12 — Account ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>Account</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('TV13 — Contact ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>Contact</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('TV14 — CustomTab without _ or __c ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>CustomTab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('TV15 — My_Custom_Tab accepted', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab')[0].name, 'My_Custom_Tab');
+    });
+
+    await runTest('TV16 — Object__c accepted', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>Object__c</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab')[0].name, 'Object__c');
+    });
+
+    await runTest('TV17 — Profile-only tabVisibilities XML', async () => {
+        const result = await discoverProfile(`
+            <Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(result.relationships.length, 1);
+        assert.strictEqual(
+            result.relationships[0].discoveredBy,
+            'ProfileRelationshipDiscoverer'
+        );
+        assert.strictEqual(
+            result.relationships[0].relationship,
+            'ProfileTabVisibility'
+        );
+    });
+
+    await runTest('TV18 — coexists with objectPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <objectPermissions>
+                    <object>Invoice__c</object>
+                    <allowRead>true</allowRead>
+                </objectPermissions>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(byType(result, 'CustomTab')[0].name, 'My_Custom_Tab');
+    });
+
+    await runTest('TV19 — coexists with fieldPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <fieldPermissions>
+                    <field>Invoice__c.Amount__c</field>
+                    <readable>true</readable>
+                </fieldPermissions>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomField').length, 1);
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+    });
+
+    await runTest('TV20 — coexists with recordTypeVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(
+            byType(result, 'RecordType')[0].name,
+            'Invoice__c.Retail'
+        );
+    });
+
+    await runTest(
+        'TV21 — all Profile sections coexist with tabVisibilities',
+        async () => {
+            const result = await discoverProfile(`
+                <Profile>
+                    <objectPermissions>
+                        <object>Invoice__c</object>
+                        <allowRead>true</allowRead>
+                    </objectPermissions>
+                    <fieldPermissions>
+                        <field>Invoice__c.Amount__c</field>
+                        <readable>true</readable>
+                    </fieldPermissions>
+                    <recordTypeVisibilities>
+                        <recordType>Invoice__c.Retail</recordType>
+                        <visible>true</visible>
+                    </recordTypeVisibilities>
+                    <tabVisibilities>
+                        <tab>My_Custom_Tab</tab>
+                        <visibility>Visible</visibility>
+                    </tabVisibilities>
+                </Profile>
+            `);
+
+            assert.strictEqual(byType(result, 'CustomObject').length, 1);
+            assert.strictEqual(byType(result, 'CustomField').length, 1);
+            assert.strictEqual(byType(result, 'RecordType').length, 1);
+            assert.strictEqual(byType(result, 'CustomTab').length, 1);
+            assert.strictEqual(
+                byType(result, 'CustomTab')[0].relationship,
+                'ProfileTabVisibility'
+            );
+        }
+    );
 
     if (process.exitCode) {
         process.exit(process.exitCode);

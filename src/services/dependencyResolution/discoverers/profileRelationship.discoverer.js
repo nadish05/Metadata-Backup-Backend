@@ -1,10 +1,11 @@
 /**
- * Profile Relationship Discoverer (Phase 19.2 / 19.3 / 19.4)
+ * Profile Relationship Discoverer (Phase 19.2 / 19.3 / 19.4 / 19.5)
  *
  * Profile-specific. Currently discovers:
  *   objectPermissions      → CustomObject (custom __c names)
  *   fieldPermissions       → CustomObject + CustomField (Object__c.Field__c)
  *   recordTypeVisibilities → RecordType (Obj.Rt; standard + custom objects)
+ *   tabVisibilities        → CustomTab (custom tab names only)
  *
  * Does not process PermissionSet / PermissionSetGroup / MutingPermissionSet.
  * Does not import deployment, package, workspace, AI, or SAFE_SKIP services.
@@ -22,7 +23,8 @@ const RELATIONSHIPS = Object.freeze({
     OBJECT_PERMISSION: 'ProfileObjectPermission',
     FIELD_PERMISSION_OBJECT: 'ProfileFieldPermissionObject',
     FIELD_PERMISSION: 'ProfileFieldPermission',
-    RECORD_TYPE_VISIBILITY: 'ProfileRecordTypeVisibility'
+    RECORD_TYPE_VISIBILITY: 'ProfileRecordTypeVisibility',
+    TAB_VISIBILITY: 'ProfileTabVisibility'
 });
 
 function normalizePath(filePath) {
@@ -72,6 +74,20 @@ function isCustomObjectName(value) {
         name.endsWith(CUSTOM_OBJECT_SUFFIX) &&
         /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
     );
+}
+
+/**
+ * Local equivalent of PermissionSet isCustomTabName.
+ * Accepts API names that end with __c or contain an underscore.
+ */
+function isCustomTabName(value) {
+    const name = String(value || '').trim();
+
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        return false;
+    }
+
+    return name.endsWith(CUSTOM_OBJECT_SUFFIX) || name.includes('_');
 }
 
 /**
@@ -177,7 +193,7 @@ function createRelationshipRecord({
 
 /**
  * Pure XML → relationships for Profile objectPermissions, fieldPermissions,
- * and recordTypeVisibilities.
+ * recordTypeVisibilities, and tabVisibilities.
  * @param {string} xml
  * @param {string} sourceMetadata Profile API name
  * @param {number} [depth=1]
@@ -271,6 +287,28 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 sourceField: 'recordType',
                 discoveryMethod: 'recordTypeVisibilities',
                 reason: 'Profile record type visibility',
+                depth
+            })
+        );
+    }
+
+    for (const tabName of extractSectionValues(
+        xml,
+        'tabVisibilities',
+        'tab'
+    )) {
+        if (!isCustomTabName(tabName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: tabName,
+                metadataType: 'CustomTab',
+                relationship: RELATIONSHIPS.TAB_VISIBILITY,
+                sourceMetadata,
+                discoveryMethod: 'tabVisibilities',
+                reason: 'Profile tab visibility',
                 depth
             })
         );
