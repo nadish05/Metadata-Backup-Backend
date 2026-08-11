@@ -1,5 +1,5 @@
 /**
- * Profile Relationship Discoverer (Phase 19.2 / 19.3 / 19.4 / 19.5 / 19.6)
+ * Profile Relationship Discoverer (Phase 19.2 / 19.3 / 19.4 / 19.5 / 19.6 / 19.7B)
  *
  * Profile-specific. Currently discovers:
  *   objectPermissions      → CustomObject (custom __c names)
@@ -7,6 +7,7 @@
  *   recordTypeVisibilities → RecordType (Obj.Rt; standard + custom objects)
  *   tabVisibilities        → CustomTab (custom tab names only)
  *   classAccesses          → ApexClass
+ *   pageAccesses           → ApexPage
  *
  * Does not process PermissionSet / PermissionSetGroup / MutingPermissionSet.
  * Does not import deployment, package, workspace, AI, or SAFE_SKIP services.
@@ -26,7 +27,8 @@ const RELATIONSHIPS = Object.freeze({
     FIELD_PERMISSION: 'ProfileFieldPermission',
     RECORD_TYPE_VISIBILITY: 'ProfileRecordTypeVisibility',
     TAB_VISIBILITY: 'ProfileTabVisibility',
-    CLASS_ACCESS: 'ProfileClassAccess'
+    CLASS_ACCESS: 'ProfileClassAccess',
+    PAGE_ACCESS: 'ProfilePageAccess'
 });
 
 function normalizePath(filePath) {
@@ -203,7 +205,7 @@ function createRelationshipRecord({
 
 /**
  * Pure XML → relationships for Profile objectPermissions, fieldPermissions,
- * recordTypeVisibilities, tabVisibilities, and classAccesses.
+ * recordTypeVisibilities, tabVisibilities, classAccesses, and pageAccesses.
  * @param {string} xml
  * @param {string} sourceMetadata Profile API name
  * @param {number} [depth=1]
@@ -342,6 +344,29 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 sourceField: 'apexClass',
                 discoveryMethod: 'classAccesses',
                 reason: 'Profile Apex class access',
+                depth
+            })
+        );
+    }
+
+    for (const pageName of extractSectionValues(
+        xml,
+        'pageAccesses',
+        'apexPage'
+    )) {
+        if (!isValidMetadataName(pageName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: pageName,
+                metadataType: 'ApexPage',
+                relationship: RELATIONSHIPS.PAGE_ACCESS,
+                sourceMetadata,
+                sourceField: 'apexPage',
+                discoveryMethod: 'pageAccesses',
+                reason: 'Profile Apex page access',
                 depth
             })
         );

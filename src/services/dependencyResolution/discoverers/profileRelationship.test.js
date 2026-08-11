@@ -1,7 +1,7 @@
 /**
- * Phase 19.2 / 19.3 / 19.4 / 19.5 / 19.6 — ProfileRelationshipDiscoverer tests.
+ * Phase 19.2 / 19.3 / 19.4 / 19.5 / 19.6 / 19.7B — ProfileRelationshipDiscoverer tests.
  * objectPermissions + fieldPermissions + recordTypeVisibilities + tabVisibilities
- * + classAccesses.
+ * + classAccesses + pageAccesses.
  * Does not change PermissionSet discovery.
  */
 
@@ -276,10 +276,6 @@ async function main() {
         async () => {
             const result = await discoverProfile(`
                 <Profile>
-                    <pageAccesses>
-                        <apexPage>Weather_Dashboard</apexPage>
-                        <enabled>true</enabled>
-                    </pageAccesses>
                     <flowAccesses>
                         <flow>Weather_Sync_Flow</flow>
                         <enabled>true</enabled>
@@ -1389,6 +1385,368 @@ async function main() {
             const ids = getRegisteredDiscoverers().map((d) => d.id);
             assert.ok(ids.includes('ProfileRelationshipDiscoverer'));
             assert.ok(ids.includes('PermissionSetRelationshipDiscoverer'));
+        }
+    );
+
+    // --- Phase 19.7B pageAccesses ---
+
+    await runTest('PA1 — single valid ApexPage', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>MyPage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'MyPage',
+                metadataType: 'ApexPage',
+                type: 'ApexPage',
+                relationship: 'ProfilePageAccess',
+                sourceMetadata: 'Custom_Admin',
+                sourceField: 'apexPage',
+                discoveredBy: 'ProfileRelationshipDiscoverer',
+                discoveryMethod: 'pageAccesses',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'Profile Apex page access'
+            }
+        ]);
+    });
+
+    await runTest('PA2 — multiple ApexPages', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>MyPage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+                <pageAccesses>
+                    <apexPage>Weather_Dashboard</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'ApexPage').map((item) => item.name).sort(),
+            ['MyPage', 'Weather_Dashboard']
+        );
+        assert.strictEqual(result.relationships.length, 2);
+    });
+
+    await runTest('PA3 — duplicate ApexPage → one relationship', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>MyPage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+                <pageAccesses>
+                    <apexPage>MyPage</apexPage>
+                    <enabled>false</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage')[0].name, 'MyPage');
+    });
+
+    await runTest('PA4 — enabled=true → discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>My_Page</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage')[0].name, 'My_Page');
+    });
+
+    await runTest('PA5 — enabled=false → still discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>MyPage123</apexPage>
+                    <enabled>false</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage')[0].name, 'MyPage123');
+    });
+
+    await runTest('PA6 — empty apexPage ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage></apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('PA7 — whitespace apexPage ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>   </apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('PA8 — invalid page names ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>My Page</apexPage>
+                </pageAccesses>
+                <pageAccesses>
+                    <apexPage>My-Page</apexPage>
+                </pageAccesses>
+                <pageAccesses>
+                    <apexPage>My.Page</apexPage>
+                </pageAccesses>
+                <pageAccesses>
+                    <apexPage>My/Page</apexPage>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('PA9 — invalid starting character ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>1BadPage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('PA10 — Profile-only pageAccesses XML', async () => {
+        const result = await discoverProfile(`
+            <Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+                <pageAccesses>
+                    <apexPage>Namespace__PageName</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(result.relationships.length, 1);
+        assert.deepStrictEqual(result.relationships[0], {
+            name: 'Namespace__PageName',
+            metadataType: 'ApexPage',
+            type: 'ApexPage',
+            relationship: 'ProfilePageAccess',
+            sourceMetadata: 'Custom_Admin',
+            sourceField: 'apexPage',
+            discoveredBy: 'ProfileRelationshipDiscoverer',
+            discoveryMethod: 'pageAccesses',
+            required: true,
+            selected: true,
+            depth: 1,
+            reason: 'Profile Apex page access'
+        });
+    });
+
+    await runTest('PA11 — multiple pageAccesses sections', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>MyPage</apexPage>
+                </pageAccesses>
+                <pageAccesses>
+                    <apexPage>Weather_Dashboard</apexPage>
+                </pageAccesses>
+                <pageAccesses>
+                    <apexPage>My_Page</apexPage>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'ApexPage').map((item) => item.name).sort(),
+            ['MyPage', 'My_Page', 'Weather_Dashboard']
+        );
+    });
+
+    await runTest('PA12 — coexists with objectPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <objectPermissions>
+                    <object>Invoice__c</object>
+                    <allowRead>true</allowRead>
+                </objectPermissions>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage')[0].name, 'InvoicePage');
+    });
+
+    await runTest('PA13 — coexists with fieldPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <fieldPermissions>
+                    <field>Invoice__c.Amount__c</field>
+                    <readable>true</readable>
+                </fieldPermissions>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomField').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+    });
+
+    await runTest('PA14 — coexists with recordTypeVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+    });
+
+    await runTest('PA15 — coexists with tabVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+    });
+
+    await runTest('PA16 — coexists with classAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>InvoiceController</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                    <enabled>false</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(
+            byType(result, 'ApexPage')[0].relationship,
+            'ProfilePageAccess'
+        );
+    });
+
+    await runTest('PA17 — all Profile sections coexist with pageAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <objectPermissions>
+                    <object>Invoice__c</object>
+                    <allowRead>true</allowRead>
+                </objectPermissions>
+                <fieldPermissions>
+                    <field>Invoice__c.Amount__c</field>
+                    <readable>true</readable>
+                </fieldPermissions>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <classAccesses>
+                    <apexClass>InvoiceController</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomField').length, 1);
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(
+            byType(result, 'ApexPage')[0].relationship,
+            'ProfilePageAccess'
+        );
+    });
+
+    await runTest(
+        'PA18 — flowAccesses remains unsupported; pageAccesses supported',
+        async () => {
+            const result = await discoverProfile(`
+                <Profile>
+                    <pageAccesses>
+                        <apexPage>InvoicePage</apexPage>
+                        <enabled>true</enabled>
+                    </pageAccesses>
+                    <flowAccesses>
+                        <flow>Weather_Sync_Flow</flow>
+                        <enabled>true</enabled>
+                    </flowAccesses>
+                </Profile>
+            `);
+
+            assert.strictEqual(byType(result, 'ApexPage').length, 1);
+            assert.strictEqual(byType(result, 'Flow').length, 0);
+            assert.strictEqual(result.relationships.length, 1);
         }
     );
 
