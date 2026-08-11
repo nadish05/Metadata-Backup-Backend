@@ -1,4 +1,5 @@
 const assert = require('assert');
+const axios = require('axios');
 
 const {
     DESTINATION_STATE,
@@ -6,6 +7,8 @@ const {
     getState,
     toDestinationStateMap
 } = require('./destinationInventoryBuilder.service');
+
+const API_VERSIONS = [{ version: '64.0' }, { version: '65.0' }];
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -18,6 +21,35 @@ function runTest(name, fn) {
             console.error(error);
             process.exitCode = 1;
         });
+}
+
+function stubSalesforce({ totalSize, records = [], fail = false }) {
+    const originalGet = axios.get;
+    const requestedUrls = [];
+
+    axios.get = async (url) => {
+        if (url.endsWith('/services/data/')) {
+            return { status: 200, data: API_VERSIONS };
+        }
+
+        requestedUrls.push(url);
+
+        if (fail) {
+            throw new Error('Simulated ApexPage query failure');
+        }
+
+        return {
+            status: 200,
+            data: { totalSize, done: true, records }
+        };
+    };
+
+    return {
+        requestedUrls,
+        restore() {
+            axios.get = originalGet;
+        }
+    };
 }
 
 async function main() {
@@ -99,6 +131,106 @@ async function main() {
             DESTINATION_STATE.UNKNOWN
         );
     });
+
+    await runTest(
+        'ApexPage Tooling query → EXISTS when a row is returned',
+        async () => {
+            const stub = stubSalesforce({
+                totalSize: 1,
+                records: [{ Id: '066000000000001AAA' }]
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'ApexPage',
+                            metadataName: 'Weather_Dashboard'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(result.inventory, 'ApexPage', 'Weather_Dashboard'),
+                    DESTINATION_STATE.EXISTS
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        url.includes('/tooling/query')
+                    )
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        decodeURIComponent(url).includes(
+                            'SELECT Id FROM ApexPage WHERE Name ='
+                        )
+                    )
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'ApexPage Tooling query → MISSING when zero rows returned',
+        async () => {
+            const stub = stubSalesforce({ totalSize: 0, records: [] });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'ApexPage',
+                            metadataName: 'Missing_Page'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(result.inventory, 'ApexPage', 'Missing_Page'),
+                    DESTINATION_STATE.MISSING
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'ApexPage Tooling query → UNKNOWN when the query fails',
+        async () => {
+            const stub = stubSalesforce({
+                totalSize: 0,
+                records: [],
+                fail: true
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'ApexPage',
+                            metadataName: 'Weather_Dashboard'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(result.inventory, 'ApexPage', 'Weather_Dashboard'),
+                    DESTINATION_STATE.UNKNOWN
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
 
     await runTest(
         'only orchestration consumes the builder; no legacy existence helpers remain',

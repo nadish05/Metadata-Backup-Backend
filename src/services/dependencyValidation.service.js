@@ -1,6 +1,7 @@
 const SUPPORTED_DEPENDENCY_TYPES = new Set([
     'ApexClass',
     'ApexTrigger',
+    'ApexPage',
     'CustomObject',
     'CustomField',
     'CustomTab',
@@ -17,6 +18,7 @@ const SUPPORTED_DEPENDENCY_TYPES = new Set([
 const BLOCKED_MESSAGES = {
     ApexClass: 'Apex Class not found in destination org.',
     ApexTrigger: 'Apex Trigger not found in destination org.',
+    ApexPage: 'Apex Page not found in destination org.',
     CustomObject: 'Custom Object not found in destination org.',
     CustomField: 'Custom Field not found in destination org.',
     CustomTab: 'Custom Tab not found in destination org.',

@@ -16,6 +16,7 @@ function usesToolingApi(type) {
     return (
         type === 'ApexClass' ||
         type === 'ApexTrigger' ||
+        type === 'ApexPage' ||
         type === 'CustomField' ||
         type === 'FlexiPage' ||
         type === 'LightningComponentBundle' ||
@@ -196,6 +197,9 @@ function buildExistenceQuery(type, name) {
 
         case 'ApexTrigger':
             return `SELECT Id FROM ApexTrigger WHERE Name = '${escapedName}' LIMIT 1`;
+
+        case 'ApexPage':
+            return `SELECT Id FROM ApexPage WHERE Name = '${escapedName}' LIMIT 1`;
 
         case 'CustomObject':
             return (
