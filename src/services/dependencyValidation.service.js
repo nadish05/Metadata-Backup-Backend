@@ -12,7 +12,8 @@ const SUPPORTED_DEPENDENCY_TYPES = new Set([
     'FlexiPage',
     'LightningComponentBundle',
     'PermissionSet',
-    'RecordType'
+    'RecordType',
+    'Flow'
 ]);
 
 const BLOCKED_MESSAGES = {
@@ -30,7 +31,8 @@ const BLOCKED_MESSAGES = {
     LightningComponentBundle:
         'Lightning Component Bundle not found in destination org.',
     PermissionSet: 'Permission Set not found in destination org.',
-    RecordType: 'Record Type not found in destination org.'
+    RecordType: 'Record Type not found in destination org.',
+    Flow: 'Flow not found in destination org.'
 };
 
 function logSection(title) {
