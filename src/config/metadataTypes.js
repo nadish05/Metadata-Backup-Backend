@@ -53,6 +53,13 @@ const METADATA_TYPE_RULES = {
         memberNamePattern: /^[A-Za-z_][A-Za-z0-9_]*$/,
         requiresMetaXml: false
     },
+    CustomPermission: {
+        kind: METADATA_KINDS.FILE,
+        folder: 'customPermissions',
+        extension: '.customPermission-meta.xml',
+        memberNamePattern: /^[A-Za-z_][A-Za-z0-9_]*$/,
+        requiresMetaXml: false
+    },
     Flow: {
         kind: METADATA_KINDS.FILE,
         extension: '.flow-meta.xml',

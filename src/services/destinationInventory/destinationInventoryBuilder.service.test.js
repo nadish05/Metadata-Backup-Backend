@@ -386,6 +386,207 @@ async function main() {
     );
 
     await runTest(
+        'CustomPermission REST query → EXISTS when a row is returned',
+        async () => {
+            const stub = stubSalesforce({
+                totalSize: 1,
+                records: [{ Id: '0Cp000000000001AAA' }]
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomPermission',
+                            metadataName: 'MyPermission'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomPermission',
+                        'MyPermission'
+                    ),
+                    DESTINATION_STATE.EXISTS
+                );
+                assert.ok(
+                    stub.requestedUrls.some(
+                        (url) =>
+                            url.includes('/query') &&
+                            !url.includes('/tooling/query')
+                    )
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        decodeURIComponent(url).includes(
+                            'SELECT Id FROM CustomPermission WHERE DeveloperName ='
+                        )
+                    )
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        decodeURIComponent(url).includes(
+                            'NamespacePrefix = null'
+                        )
+                    )
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomPermission namespaced REST query → EXISTS',
+        async () => {
+            const stub = stubSalesforce({
+                totalSize: 1,
+                records: [{ Id: '0Cp000000000002AAA' }]
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomPermission',
+                            metadataName: 'Namespace__MyPermission'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomPermission',
+                        'Namespace__MyPermission'
+                    ),
+                    DESTINATION_STATE.EXISTS
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        decodeURIComponent(url).includes(
+                            "DeveloperName = 'MyPermission'"
+                        )
+                    )
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        decodeURIComponent(url).includes(
+                            "NamespacePrefix = 'Namespace'"
+                        )
+                    )
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomPermission REST query → MISSING when zero rows returned',
+        async () => {
+            const stub = stubSalesforce({ totalSize: 0, records: [] });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomPermission',
+                            metadataName: 'Missing_Permission'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomPermission',
+                        'Missing_Permission'
+                    ),
+                    DESTINATION_STATE.MISSING
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomPermission REST query → UNKNOWN when the query fails',
+        async () => {
+            const stub = stubSalesforce({
+                totalSize: 0,
+                records: [],
+                fail: true
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomPermission',
+                            metadataName: 'MyPermission'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomPermission',
+                        'MyPermission'
+                    ),
+                    DESTINATION_STATE.UNKNOWN
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomPermission unsafe name → UNKNOWN without querying',
+        async () => {
+            const stub = stubSalesforce({ totalSize: 0, records: [] });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomPermission',
+                            metadataName: 'Bad Permission'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomPermission',
+                        'Bad Permission'
+                    ),
+                    DESTINATION_STATE.UNKNOWN
+                );
+                assert.strictEqual(stub.requestedUrls.length, 0);
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
         'only orchestration consumes the builder; no legacy existence helpers remain',
         async () => {
             const fs = require('fs');

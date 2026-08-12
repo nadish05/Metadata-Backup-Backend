@@ -30,6 +30,81 @@ function isSafeSalesforceApiName(value) {
 }
 
 /**
+ * Parse CustomPermission MDAPI member names for destination existence SOQL.
+ *
+ * Unqualified: My_Permission → DeveloperName + NamespacePrefix null
+ * Qualified:   Ns__My_Permission → NamespacePrefix Ns + DeveloperName My_Permission
+ *
+ * DeveloperName cannot contain `__` (Salesforce rule), so first-`__` split is safe.
+ *
+ * @param {string} name
+ * @returns {{ developerName: string, namespacePrefix: string|null }|null}
+ */
+function parseCustomPermissionMember(name) {
+    if (!name || typeof name !== 'string') {
+        return null;
+    }
+
+    const trimmed = name.trim();
+
+    if (!trimmed) {
+        return null;
+    }
+
+    const separatorIndex = trimmed.indexOf('__');
+
+    if (separatorIndex === -1) {
+        if (!isSafeSalesforceApiName(trimmed)) {
+            return null;
+        }
+
+        return {
+            developerName: trimmed,
+            namespacePrefix: null
+        };
+    }
+
+    const namespacePrefix = trimmed.slice(0, separatorIndex);
+    const developerName = trimmed.slice(separatorIndex + 2);
+
+    if (
+        !namespacePrefix ||
+        !developerName ||
+        namespacePrefix.includes('__') ||
+        developerName.includes('__') ||
+        !isSafeSalesforceApiName(namespacePrefix) ||
+        !isSafeSalesforceApiName(developerName)
+    ) {
+        return null;
+    }
+
+    return {
+        developerName,
+        namespacePrefix
+    };
+}
+
+function buildCustomPermissionSoql(name) {
+    const parsed = parseCustomPermissionMember(name);
+
+    if (!parsed) {
+        return null;
+    }
+
+    const developerClause =
+        `DeveloperName = '${escapeSoql(parsed.developerName)}'`;
+    const namespaceClause =
+        parsed.namespacePrefix === null
+            ? 'NamespacePrefix = null'
+            : `NamespacePrefix = '${escapeSoql(parsed.namespacePrefix)}'`;
+
+    return (
+        'SELECT Id FROM CustomPermission ' +
+        `WHERE ${developerClause} AND ${namespaceClause} LIMIT 1`
+    );
+}
+
+/**
  * Parse and normalize a CustomMetadata member name to MDAPI Type.Record.
  *
  * Accepts:
@@ -210,6 +285,10 @@ function buildExistenceQuery(type, name) {
                 `WHERE FullName = '${escapedName}' LIMIT 1`
             );
 
+        case 'CustomPermission':
+            // REST SObject CustomPermission — DeveloperName (+ NamespacePrefix).
+            return buildCustomPermissionSoql(name);
+
         case 'CustomObject':
             return (
                 'SELECT QualifiedApiName FROM EntityDefinition ' +
@@ -289,7 +368,9 @@ module.exports = {
     isSafeSalesforceApiName,
     parseCustomMetadataMember,
     normalizeCustomMetadataMember,
+    parseCustomPermissionMember,
     buildCustomMetadataSoql,
+    buildCustomPermissionSoql,
     buildCustomFieldSoql,
     buildListViewSoql,
     buildRecordTypeSoql,
