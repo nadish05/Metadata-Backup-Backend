@@ -1740,14 +1740,14 @@ async function validateDeployment({
         generatedWorkspace =
             deploymentCompatibilityGateService.buildCompatibilitySkippedWorkspace();
     } else if (artifactCompatibilityBlocked) {
-        const missingArtifacts = (compatibilityFindings || [])
-            .filter(
-                (finding) =>
-                    finding.ruleId === 'artifact.exists' &&
-                    (finding.status === 'FAIL' ||
-                        finding.status === 'BLOCK' ||
-                        finding.blocking === true)
-            )
+        const blockingFindings = (compatibilityFindings || []).filter(
+            (finding) =>
+                finding.ruleId === 'artifact.exists' &&
+                (finding.status === 'FAIL' ||
+                    finding.status === 'BLOCK' ||
+                    finding.blocking === true)
+        );
+        const missingArtifacts = blockingFindings
             .map((finding) => finding.metadataName)
             .filter(Boolean);
 
@@ -1769,6 +1769,34 @@ async function validateDeployment({
             'Workspace Builder skipped due to missing source artifacts:',
             missingArtifacts
         );
+
+        // TEMP DIAGNOSTIC — WORKSPACE BLOCK DEBUG (logging only).
+        console.log('========================================');
+        console.log('WORKSPACE BLOCK DEBUG');
+        console.log('========================================');
+        for (const finding of blockingFindings) {
+            console.log(
+                JSON.stringify({
+                    metadataName: finding.metadataName,
+                    metadataType: finding.metadataType,
+                    classification: finding.classification || null,
+                    action: finding.action || null,
+                    artifactRequired:
+                        typeof finding.artifactRequired === 'boolean'
+                            ? finding.artifactRequired
+                            : null,
+                    artifactResolved:
+                        finding.artifactResolved != null
+                            ? finding.artifactResolved
+                            : null,
+                    filePath: finding.filePath || null,
+                    ruleId: finding.ruleId,
+                    blocking: finding.blocking === true,
+                    reason: finding.reason || null
+                })
+            );
+        }
+        console.log('========================================');
     } else {
         // TEMP (Phase 13.5) — adoption trace stage 6.
         metadataApiAdoptionTrace.logWorkspaceStage({

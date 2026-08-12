@@ -152,6 +152,39 @@ const artifactExistsRule = {
                     blocking: true
                 })
             );
+
+            // TEMP DIAGNOSTIC — ARTIFACT.EXISTS DEBUG (logging only).
+            // Extra fields are logged and attached for workspace-block correlation;
+            // status/blocking/ruleId semantics are unchanged.
+            {
+                const failFinding = findings[findings.length - 1];
+                failFinding.classification = item.classification || null;
+                failFinding.action = item.action || null;
+                failFinding.artifactRequired =
+                    item.artifactRequired === true;
+                failFinding.artifactResolved = item.artifactResolved;
+                failFinding.filePath = item.filePath || null;
+
+                console.log('========================================');
+                console.log('ARTIFACT.EXISTS DEBUG');
+                console.log('========================================');
+                console.log(
+                    JSON.stringify({
+                        ruleId: RULE_ID,
+                        metadataType: item.metadataType,
+                        metadataName: item.name,
+                        classification: item.classification || null,
+                        action: item.action || null,
+                        artifactRequired: item.artifactRequired === true,
+                        artifactResolved: item.artifactResolved,
+                        filePath: item.filePath || null,
+                        blocking: true,
+                        reason:
+                            'Source artifact does not exist inside the selected source branch.'
+                    })
+                );
+                console.log('========================================');
+            }
         }
 
         return findings;

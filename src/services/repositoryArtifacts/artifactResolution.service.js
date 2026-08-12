@@ -308,45 +308,60 @@ async function resolveRepositoryArtifacts({
             const enriched = enrichNode(node, files);
             const key = getNodeKey(enriched);
 
-            // TEMPORARY DIAGNOSTIC — workspace-missing artifact investigation.
+            // TEMP DIAGNOSTIC — ARTIFACT RESOLUTION DEBUG (logging only).
             {
                 const diagnosticNames = new Set([
-                    'Connected_Org__c.Instance_Url__c',
-                    'Connected_Org__c.Org_Id__c',
-                    'AuraHandledException',
-                    'URL'
+                    'Account',
+                    'Case',
+                    'Contact',
+                    'User',
+                    'Page',
+                    'SObjectType',
+                    'Severity',
+                    'NoAccessException',
+                    'Date_Due__c',
+                    'End_Time__c',
+                    'Start_Time__c',
+                    'Maintenance_Request__c',
+                    'Vehicle__c',
+                    'ClonedWPs',
+                    'ChangePassword',
+                    'Account.Busines',
+                    'Opportunity.Enterprise_Deal',
+                    'Opportunity.New_Business',
+                    'Opportunity.Renewal',
+                    'Opportunity.Small_Business_Deal',
+                    'Training_Program__c.Soft_Skills_Training',
+                    'Training_Program__c.Technical_Training',
+                    'Equipment__c.Maintenance_Cycle__c',
+                    'Equipment_Maintenance_Item__c.Maintenance_Request__c',
+                    'Equipment_Maintenance_Item__c'
                 ]);
                 const nodeName = enriched?.name || node?.name;
 
                 if (diagnosticNames.has(nodeName)) {
-                    console.log('========================================');
-                    console.log('MISSING ARTIFACT DIAGNOSTIC');
-                    console.log('========================================');
-                    console.log('Name:');
-                    console.log(nodeName);
-                    console.log('Type:');
-                    console.log(
-                        enriched?.metadataType || node?.metadataType || null
+                    const resolver = getArtifactResolver(
+                        enriched?.metadataType || node?.metadataType
                     );
-                    console.log('Incoming filePath:');
-                    console.log(node?.filePath || null);
-                    console.log('Resolved filePath:');
-                    console.log(enriched?.filePath || null);
-                    console.log('sourceExists:');
-                    console.log(enriched?.sourceExists);
-                    console.log('artifactResolved:');
-                    console.log(enriched?.artifactResolved);
-                    console.log('Expected CustomField path pattern:');
+
+                    console.log('========================================');
+                    console.log('ARTIFACT RESOLUTION DEBUG');
+                    console.log('========================================');
                     console.log(
-                        nodeName && String(nodeName).includes('.')
-                            ? `.../objects/${String(nodeName).split('.')[0]}/fields/${String(nodeName).split('.')[1]}.field-meta.xml`
-                            : '(n/a — not Object.Field)'
-                    );
-                    console.log('Expected ApexClass path pattern:');
-                    console.log(
-                        nodeName && !String(nodeName).includes('.')
-                            ? `.../classes/${nodeName}.cls`
-                            : '(n/a)'
+                        JSON.stringify({
+                            metadataType:
+                                enriched?.metadataType ||
+                                node?.metadataType ||
+                                null,
+                            metadataName: nodeName,
+                            artifactRequired:
+                                typeof node?.artifactRequired === 'boolean'
+                                    ? node.artifactRequired
+                                    : null,
+                            artifactResolved: enriched?.artifactResolved,
+                            filePath: enriched?.filePath || null,
+                            resolver: resolver?.id || null
+                        })
                     );
                     console.log('========================================');
                 }

@@ -59,6 +59,59 @@ function buildDependencySelection(rawAnalysis, testValidation) {
         return a.name.localeCompare(b.name);
     });
 
+    // TEMP DIAGNOSTIC — APEX DEPENDENCY DEBUG (logging only).
+    try {
+        const {
+            classifyDependency
+        } = require('./dependencyResolution/dependencyClassification.service');
+        const requiredKeys = new Set(
+            requiredDependencies.map((dep) => `${dep.type}:${dep.name}`)
+        );
+        const debugRows = Array.isArray(rawAnalysis?.apexDependencyDebug)
+            ? rawAnalysis.apexDependencyDebug
+            : [];
+
+        console.log('========================================');
+        console.log('APEX DEPENDENCY DEBUG');
+        console.log('========================================');
+
+        for (const row of debugRows) {
+            const key = `${row.metadataType}:${row.name}`;
+
+            if (!requiredKeys.has(key)) {
+                continue;
+            }
+
+            const classification = classifyDependency({
+                metadataType: row.metadataType,
+                type: row.metadataType,
+                metadataName: row.name,
+                name: row.name
+            });
+
+            console.log(
+                JSON.stringify({
+                    name: row.name,
+                    detectedBy: row.detectedBy,
+                    metadataType: row.metadataType,
+                    source: row.source || 'ApexAnalyzer',
+                    sourceSnippetOrMatch: row.sourceSnippetOrMatch || null,
+                    sourceClass: row.sourceClass || null,
+                    classification: classification.classification,
+                    artifactRequired: classification.artifactRequired
+                })
+            );
+        }
+
+        console.log('========================================');
+    } catch (error) {
+        console.log('========================================');
+        console.log('APEX DEPENDENCY DEBUG');
+        console.log('========================================');
+        console.log('APEX DEPENDENCY DEBUG logging failed:', error?.message);
+        console.log('========================================');
+    }
+
     const recommendedTestClasses = (testValidation?.testClasses || []).map(
         createRecommendedTestClass
     );

@@ -309,6 +309,25 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 depth
             })
         );
+
+        // TEMP DIAGNOSTIC — PROFILE RECORDTYPE DEBUG (logging only).
+        {
+            const [sourceObject, sourceRecordType] = recordTypeName.split('.');
+            console.log('========================================');
+            console.log('PROFILE RECORDTYPE DEBUG');
+            console.log('========================================');
+            console.log(
+                JSON.stringify({
+                    profileName: sourceMetadata,
+                    metadataType: 'RecordType',
+                    metadataName: recordTypeName,
+                    sourceSection: 'recordTypeVisibilities',
+                    sourceObject: sourceObject || null,
+                    sourceRecordType: sourceRecordType || null
+                })
+            );
+            console.log('========================================');
+        }
     }
 
     for (const tabName of extractSectionValues(

@@ -486,17 +486,99 @@ function analyzeApexContent(content, currentClassName) {
         ...(normalizedOuterClassName ? [normalizedOuterClassName] : [])
     ]);
 
-    const apexClasses = uniqueSorted([
-        ...classRefs.map((ref) => ref.replace(/\.$/, '')),
-        ...constructorMatches.map((match) =>
-            match.replace(/^new\s+/, '')
-        )
-    ].filter(
-        (name) =>
+    function isEmittedApexClass(name) {
+        return (
             !excludedClasses.has(normalizeApexIdentifier(name)) &&
             !isSalesforceMetadataToken(name) &&
             !isRelationshipReferenceToken(name)
-    ));
+        );
+    }
+
+    // TEMP DIAGNOSTIC — provenance for APEX DEPENDENCY DEBUG (no behavior change).
+    const dottedApexByName = new Map();
+    for (const ref of classRefs) {
+        const name = ref.replace(/\.$/, '');
+        if (!isEmittedApexClass(name)) {
+            continue;
+        }
+        if (!dottedApexByName.has(name)) {
+            dottedApexByName.set(name, ref);
+        }
+    }
+
+    const newTypeApexByName = new Map();
+    for (const match of constructorMatches) {
+        const name = match.replace(/^new\s+/, '');
+        if (!isEmittedApexClass(name)) {
+            continue;
+        }
+        if (!newTypeApexByName.has(name)) {
+            newTypeApexByName.set(name, match);
+        }
+    }
+
+    const apexClasses = uniqueSorted([
+        ...dottedApexByName.keys(),
+        ...newTypeApexByName.keys()
+    ]);
+
+    const customMetadataTypeSet = new Set(customMetadataTypes);
+    const objectTokenSet = new Set(objectTokens);
+
+    const apexDependencyDebug = [];
+
+    for (const name of apexClasses) {
+        const fromDotted = dottedApexByName.has(name);
+        const fromNew = newTypeApexByName.has(name);
+        let detectedBy = 'other';
+        let sourceSnippetOrMatch = null;
+
+        if (fromDotted) {
+            detectedBy = 'dotted_reference';
+            sourceSnippetOrMatch = dottedApexByName.get(name);
+        } else if (fromNew) {
+            detectedBy = 'new_type';
+            sourceSnippetOrMatch = newTypeApexByName.get(name);
+        }
+
+        apexDependencyDebug.push({
+            name,
+            detectedBy,
+            metadataType: 'ApexClass',
+            source: 'ApexAnalyzer',
+            sourceSnippetOrMatch,
+            sourceClass: outerClassName || null
+        });
+    }
+
+    for (const name of customFields) {
+        apexDependencyDebug.push({
+            name,
+            detectedBy: 'qualified_field',
+            metadataType: 'CustomField',
+            source: 'ApexAnalyzer',
+            sourceSnippetOrMatch: name,
+            sourceClass: outerClassName || null
+        });
+    }
+
+    for (const name of customObjects) {
+        let detectedBy = 'other';
+        if (customMetadataTypeSet.has(name)) {
+            detectedBy = 'other';
+        } else if (objectTokenSet.has(name)) {
+            detectedBy = 'bare_custom_token';
+        }
+
+        apexDependencyDebug.push({
+            name,
+            detectedBy,
+            metadataType: 'CustomObject',
+            source: 'ApexAnalyzer',
+            sourceSnippetOrMatch: name,
+            sourceClass: outerClassName || null
+        });
+    }
 
     return {
         customObjects,
@@ -519,7 +601,9 @@ function analyzeApexContent(content, currentClassName) {
             labelRefs.map((ref) =>
                 ref.replace(/^(?:System\.)?Label\./, '')
             )
-        )
+        ),
+        // TEMP DIAGNOSTIC only — ignored by decision logic.
+        apexDependencyDebug
     };
 }
 
