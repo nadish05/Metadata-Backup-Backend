@@ -446,6 +446,105 @@ function extractSoqlSelectFieldTokens(cleanedContent) {
     return fieldTokens;
 }
 
+/**
+ * Bare __c field tokens in SOQL WHERE / GROUP BY / HAVING / ORDER BY clauses.
+ * These are field references on the FROM object, not CustomObject type usage.
+ * Example: WHERE Maintenance_Request__c IN :ids
+ */
+function extractSoqlFilterFieldTokens(cleanedContent) {
+    const fieldTokens = new Set();
+    const soqlBlocks = cleanedContent.matchAll(/\[([\s\S]*?)\]/g);
+
+    for (const block of soqlBlocks) {
+        const query = block[1];
+
+        if (!/\bSELECT\b/i.test(query) || !/\bFROM\b/i.test(query)) {
+            continue;
+        }
+
+        const fromMatch = query.match(/\bFROM\s+([A-Za-z0-9_]+(?:__c|__mdt)?)\b/i);
+        const fromObjectName = fromMatch ? fromMatch[1] : null;
+
+        const clauseMatchers = [
+            /\bWHERE\b([\s\S]*?)(?=\b(?:GROUP\s+BY|HAVING|ORDER\s+BY|LIMIT|OFFSET|FOR\s+UPDATE|WITH)\b|$)/i,
+            /\bGROUP\s+BY\b([\s\S]*?)(?=\b(?:HAVING|ORDER\s+BY|LIMIT|OFFSET|FOR\s+UPDATE|WITH)\b|$)/i,
+            /\bHAVING\b([\s\S]*?)(?=\b(?:ORDER\s+BY|LIMIT|OFFSET|FOR\s+UPDATE|WITH)\b|$)/i,
+            /\bORDER\s+BY\b([\s\S]*?)(?=\b(?:LIMIT|OFFSET|FOR\s+UPDATE|WITH)\b|$)/i
+        ];
+
+        for (const matcher of clauseMatchers) {
+            const clauseMatch = query.match(matcher);
+            if (!clauseMatch) {
+                continue;
+            }
+
+            const clause = clauseMatch[1] || '';
+            const tokens = clause.match(/\b[A-Za-z0-9_]+__c\b/g) || [];
+
+            for (const token of tokens) {
+                if (fromObjectName && token === fromObjectName) {
+                    continue;
+                }
+                fieldTokens.add(token);
+            }
+        }
+    }
+
+    return fieldTokens;
+}
+
+/**
+ * Named field assignments inside `new Object__c(Field__c = value, ...)`.
+ * Returns qualified CustomField identities Object__c.Field__c.
+ */
+function extractSObjectConstructorNamedFields(cleanedContent) {
+    const qualifiedFields = new Set();
+
+    for (const match of cleanedContent.matchAll(
+        /\bnew\s+([A-Za-z0-9_]+__c)\s*\(([^;]*?)\)/g
+    )) {
+        const objectApiName = match[1];
+        const args = match[2] || '';
+
+        for (const fieldMatch of args.matchAll(
+            /\b([A-Za-z0-9_]+__c)\s*=/g
+        )) {
+            qualifiedFields.add(`${objectApiName}.${fieldMatch[1]}`);
+        }
+    }
+
+    return qualifiedFields;
+}
+
+/**
+ * Local Apex variable names (case-insensitive keys) for suppressing false
+ * ApexClass dotted references like ClonedWPs.add(...) when clonedWPs is local.
+ */
+function extractLocalVariableNames(cleanedContent) {
+    const variableNames = new Set();
+
+    const patterns = [
+        /\b(?:List|Set)\s*<[^>;]+?>\s+([A-Za-z_][A-Za-z0-9_]*)\b/g,
+        /\bMap\s*<[^>;]+?>\s+([A-Za-z_][A-Za-z0-9_]*)\b/g,
+        /\b(?:String|Integer|Boolean|Decimal|Double|Long|Date|Datetime|Id|Object|SObject|Blob|Time)\s+([A-Za-z_][A-Za-z0-9_]*)\b/g,
+        /\b([A-Za-z][A-Za-z0-9_]*__c)\s+([A-Za-z_][A-Za-z0-9_]*)\b/g,
+        /\bfor\s*\(\s*(?:List|Set)\s*<[^>;]+?>\s+([A-Za-z_][A-Za-z0-9_]*)\s*:/gi,
+        /\bfor\s*\(\s*([A-Za-z][A-Za-z0-9_]*(?:__c)?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:/gi
+    ];
+
+    for (const pattern of patterns) {
+        for (const match of cleanedContent.matchAll(pattern)) {
+            const variableName = match[2] || match[1];
+            if (!variableName || /__c$/i.test(variableName)) {
+                continue;
+            }
+            variableNames.add(normalizeApexIdentifier(variableName));
+        }
+    }
+
+    return variableNames;
+}
+
 function classifyCustomObjectsAndFields(cleanedContent) {
     const { objectNames, strongObjectNames } =
         extractObjectContextNames(cleanedContent);
@@ -494,6 +593,12 @@ function classifyCustomObjectsAndFields(cleanedContent) {
         customFields.add(qualifiedField);
     }
 
+    for (const qualifiedField of extractSObjectConstructorNamedFields(
+        cleanedContent
+    )) {
+        customFields.add(qualifiedField);
+    }
+
     const customFieldSegments = new Set(
         [...customFields]
             .map((qualified) => {
@@ -503,6 +608,7 @@ function classifyCustomObjectsAndFields(cleanedContent) {
             .filter(Boolean)
     );
     const soqlSelectFieldTokens = extractSoqlSelectFieldTokens(cleanedContent);
+    const soqlFilterFieldTokens = extractSoqlFilterFieldTokens(cleanedContent);
 
     // 4) Remaining __c tokens with object context are CustomObjects.
     //    Unqualified __c tokens are NOT CustomFields (invalid identity).
@@ -520,7 +626,8 @@ function classifyCustomObjectsAndFields(cleanedContent) {
 
         if (
             customFieldSegments.has(token) ||
-            soqlSelectFieldTokens.has(token)
+            soqlSelectFieldTokens.has(token) ||
+            soqlFilterFieldTokens.has(token)
         ) {
             return;
         }
@@ -620,6 +727,8 @@ function analyzeApexContent(content, currentClassName) {
         visualforcePageNames.add(match[1]);
     }
 
+    const localVariableNames = extractLocalVariableNames(cleanedContent);
+
     // Same dotted / new_type regex shapes as before; structural emission
     // guards (Page / SObjectType / standard sObjects / __c members) applied below.
     const constructorMatches =
@@ -674,6 +783,11 @@ function analyzeApexContent(content, currentClassName) {
 
         // VF Page.X and Schema.SObjectType.X middle token
         if (DOTTED_REFERENCE_LEFT_EXCLUSIONS.has(name)) {
+            return false;
+        }
+
+        // Local variable.member (e.g. ClonedWPs.add) is not an ApexClass.
+        if (localVariableNames.has(normalizeApexIdentifier(name))) {
             return false;
         }
 

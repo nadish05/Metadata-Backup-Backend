@@ -669,3 +669,124 @@ runTest(
         );
     }
 );
+
+runTest(
+    'SELECT Maintenance_Request__c from Equipment_Maintenance_Item__c is field not object',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceService {
+                public void load() {
+                    List<Equipment_Maintenance_Item__c> items = [
+                        SELECT Id, Maintenance_Request__c
+                        FROM Equipment_Maintenance_Item__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceService'
+        );
+
+        assert.ok(
+            result.customObjects.includes('Equipment_Maintenance_Item__c')
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Maintenance_Request__c'
+            )
+        );
+        assert.ok(
+            !result.customObjects.includes('Maintenance_Request__c'),
+            'Maintenance_Request__c must not be CustomObject when only a field'
+        );
+    }
+);
+
+runTest(
+    'Constructor named field and WHERE Maintenance_Request__c do not emit CustomObject',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceRequestHelperTest {
+                private static Equipment_Maintenance_Item__c createWorkPart(
+                    Id equipmentId,
+                    Id requestId
+                ) {
+                    Equipment_Maintenance_Item__c wp =
+                        new Equipment_Maintenance_Item__c(
+                            Equipment__c = equipmentId,
+                            Maintenance_Request__c = requestId
+                        );
+                    return wp;
+                }
+
+                private static void assertLinked(Id newReqId) {
+                    Equipment_Maintenance_Item__c workPart = [
+                        SELECT Id
+                        FROM Equipment_Maintenance_Item__c
+                        WHERE Maintenance_Request__c = :newReqId
+                    ];
+                    Equipment_Maintenance_Item__c other = [
+                        SELECT Id
+                        FROM Equipment_Maintenance_Item__c
+                        WHERE Maintenance_Request__c IN :new Set<Id>{ newReqId }
+                    ];
+                }
+            }
+            `,
+            'MaintenanceRequestHelperTest'
+        );
+
+        assert.ok(
+            result.customObjects.includes('Equipment_Maintenance_Item__c')
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Maintenance_Request__c'
+            )
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Equipment__c'
+            )
+        );
+        assert.ok(
+            !result.customObjects.includes('Maintenance_Request__c'),
+            `Maintenance_Request__c must be absent as CustomObject, got: ${result.customObjects.join(', ')}`
+        );
+    }
+);
+
+runTest(
+    'Local collection variable ClonedWPs.add does not produce ApexClass ClonedWPs',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceRequestHelper {
+                public void cloneParts(List<Equipment_Maintenance_Item__c> source) {
+                    List<Equipment_Maintenance_Item__c> clonedWPs =
+                        new List<Equipment_Maintenance_Item__c>();
+                    for (Equipment_Maintenance_Item__c wp : source) {
+                        Equipment_Maintenance_Item__c wpClone = wp.clone();
+                        ClonedWPs.add(wpClone);
+                    }
+                    insert ClonedWPs;
+                    HelperService.doWork();
+                    new AccountHelper();
+                }
+            }
+            `,
+            'MaintenanceRequestHelper'
+        );
+
+        assert.ok(
+            !result.apexClasses.includes('ClonedWPs'),
+            `ClonedWPs must not be ApexClass, got: ${result.apexClasses.join(', ')}`
+        );
+        assert.ok(result.apexClasses.includes('HelperService'));
+        assert.ok(result.apexClasses.includes('AccountHelper'));
+        assert.ok(
+            result.customObjects.includes('Equipment_Maintenance_Item__c')
+        );
+    }
+);
