@@ -790,3 +790,203 @@ runTest(
         );
     }
 );
+
+runTest(
+    'Standard-object CustomField Account.Total_Revenue__c is discovered',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class AccountService1 {
+                public static void run() {
+                    for (AggregateResult ar : [
+                        SELECT AccountId accId
+                        FROM Opportunity
+                        WHERE Account.Total_Revenue__c > 50000
+                        GROUP BY AccountId
+                    ]) {
+                    }
+                }
+            }
+            `,
+            'AccountService1'
+        );
+
+        assert.ok(
+            result.customFields.includes('Account.Total_Revenue__c'),
+            `expected Account.Total_Revenue__c, got: ${result.customFields.join(', ')}`
+        );
+        assert.ok(!result.customObjects.includes('Account'));
+        assert.ok(!result.customObjects.includes('Total_Revenue__c'));
+    }
+);
+
+runTest(
+    'SOQL FROM Account qualifies Total_Revenue__c as Account.Total_Revenue__c',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class AccountQuery {
+                public List<Account> run() {
+                    return [
+                        SELECT Id, Total_Revenue__c
+                        FROM Account
+                    ];
+                }
+            }
+            `,
+            'AccountQuery'
+        );
+
+        assert.ok(result.customFields.includes('Account.Total_Revenue__c'));
+        assert.ok(!result.customObjects.includes('Total_Revenue__c'));
+    }
+);
+
+runTest(
+    'SOQL FROM Case qualifies Vehicle__c, Equipment__c, Date_Reported__c',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class CaseQuery {
+                public List<Case> run() {
+                    return [
+                        SELECT Id, Vehicle__c, Equipment__c, Date_Reported__c
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'CaseQuery'
+        );
+
+        assert.ok(result.customFields.includes('Case.Vehicle__c'));
+        assert.ok(result.customFields.includes('Case.Equipment__c'));
+        assert.ok(result.customFields.includes('Case.Date_Reported__c'));
+        assert.ok(!result.customObjects.includes('Vehicle__c'));
+        assert.ok(!result.customObjects.includes('Equipment__c'));
+        assert.ok(!result.customObjects.includes('Date_Reported__c'));
+    }
+);
+
+runTest(
+    'SOQL FROM Product2 qualifies Replacement_Part__c, lifespan_months__c, maintenance_cycle__c',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class ProductQuery {
+                public List<Product2> run() {
+                    return [
+                        SELECT Id, Replacement_Part__c, lifespan_months__c, maintenance_cycle__c
+                        FROM Product2
+                    ];
+                }
+            }
+            `,
+            'ProductQuery'
+        );
+
+        assert.ok(result.customFields.includes('Product2.Replacement_Part__c'));
+        assert.ok(result.customFields.includes('Product2.lifespan_months__c'));
+        assert.ok(result.customFields.includes('Product2.maintenance_cycle__c'));
+    }
+);
+
+runTest(
+    'Product2 constructor named fields become Product2 CustomFields',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class ProductFactory {
+                public Product2 create() {
+                    return new Product2(
+                        Replacement_Part__c = true,
+                        lifespan_months__c = 10,
+                        maintenance_cycle__c = 10
+                    );
+                }
+            }
+            `,
+            'ProductFactory'
+        );
+
+        assert.ok(result.customFields.includes('Product2.Replacement_Part__c'));
+        assert.ok(result.customFields.includes('Product2.lifespan_months__c'));
+        assert.ok(result.customFields.includes('Product2.maintenance_cycle__c'));
+        assert.ok(!result.customObjects.includes('Product2'));
+    }
+);
+
+runTest(
+    'lowercase new product2 with mixed-case __C fields still emits Product2 CustomFields',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class ProductFactory {
+                public product2 createEq() {
+                    product2 equipment = new product2(
+                        name = 'SuperEquipment',
+                        lifespan_months__C = 10,
+                        maintenance_cycle__C = 10,
+                        replacement_part__c = true
+                    );
+                    return equipment;
+                }
+            }
+            `,
+            'ProductFactory'
+        );
+
+        const lowerFields = result.customFields.map((name) =>
+            name.toLowerCase()
+        );
+
+        assert.ok(lowerFields.includes('product2.lifespan_months__c'));
+        assert.ok(lowerFields.includes('product2.maintenance_cycle__c'));
+        assert.ok(lowerFields.includes('product2.replacement_part__c'));
+        assert.ok(
+            result.customFields.some((name) => name.startsWith('Product2.'))
+        );
+    }
+);
+
+runTest(
+    'Case constructor and typed variable fields become Case CustomFields',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class CaseFactory {
+                public void cloneCase(Case cc) {
+                    Case nc = new Case(
+                        Vehicle__c = cc.Vehicle__c,
+                        Equipment__c = cc.Equipment__c,
+                        Date_Reported__c = Date.today()
+                    );
+                }
+            }
+            `,
+            'CaseFactory'
+        );
+
+        assert.ok(result.customFields.includes('Case.Vehicle__c'));
+        assert.ok(result.customFields.includes('Case.Equipment__c'));
+        assert.ok(result.customFields.includes('Case.Date_Reported__c'));
+    }
+);
+
+runTest(
+    'new Maintenance_Request__c remains CustomObject when used as object type',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class RequestFactory {
+                public Maintenance_Request__c create() {
+                    return new Maintenance_Request__c();
+                }
+            }
+            `,
+            'RequestFactory'
+        );
+
+        assert.ok(result.customObjects.includes('Maintenance_Request__c'));
+    }
+);

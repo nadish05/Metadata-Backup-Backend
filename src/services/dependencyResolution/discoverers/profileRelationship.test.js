@@ -438,7 +438,7 @@ async function main() {
         assert.deepStrictEqual(result.relationships, []);
     });
 
-    await runTest('FP6 — standard object field ignored', async () => {
+    await runTest('FP6 — standard object custom fields emitted; standard fields ignored', async () => {
         const result = await discoverProfile(`
             <Profile>
                 <fieldPermissions>
@@ -450,10 +450,27 @@ async function main() {
                 <fieldPermissions>
                     <field>Contact.CustomField__c</field>
                 </fieldPermissions>
+                <fieldPermissions>
+                    <field>Case.Vehicle__c</field>
+                </fieldPermissions>
+                <fieldPermissions>
+                    <field>Product2.Replacement_Part__c</field>
+                </fieldPermissions>
             </Profile>
         `);
 
-        assert.deepStrictEqual(result.relationships, []);
+        assert.deepStrictEqual(byType(result, 'CustomObject'), []);
+        assert.deepStrictEqual(
+            byType(result, 'CustomField')
+                .map((item) => item.name)
+                .sort(),
+            [
+                'Account.CustomField__c',
+                'Case.Vehicle__c',
+                'Contact.CustomField__c',
+                'Product2.Replacement_Part__c'
+            ]
+        );
     });
 
     await runTest(

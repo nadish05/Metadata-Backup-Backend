@@ -3,7 +3,9 @@
  *
  * Profile-specific. Currently discovers:
  *   objectPermissions      → CustomObject (custom __c names)
- *   fieldPermissions       → CustomObject + CustomField (Object__c.Field__c)
+ *   fieldPermissions       → CustomField (Object.Field__c; standard + custom
+ *                            object parents). CustomObject parent only when
+ *                            object ends with __c.
  *   recordTypeVisibilities → RecordType (Obj.Rt; standard + custom objects)
  *   tabVisibilities        → CustomTab (custom tab names only)
  *   classAccesses          → ApexClass
@@ -109,8 +111,27 @@ function isValidMetadataName(value) {
 }
 
 /**
+ * Valid Salesforce object API name (standard or custom).
+ * Rejects relationship / non-object suffixes (__r, __mdt, …).
+ */
+function isValidObjectApiName(value) {
+    const name = String(value || '').trim();
+
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name)) {
+        return false;
+    }
+
+    return !/__(?:r|mdt|e|b|x|kav)$/i.test(name);
+}
+
+function isCustomFieldApiName(value) {
+    return /^[A-Za-z_][A-Za-z0-9_]*__c$/.test(String(value || '').trim());
+}
+
+/**
  * Local equivalent of PermissionSet parseCustomFieldReference.
- * Accepts only Object__c.Field__c (custom object + custom field).
+ * Accepts ObjectApiName.Field__c for custom and standard object parents.
+ * Field segment must be a custom field (__c). Standard fields (Name, Id) rejected.
  */
 function parseCustomFieldReference(value) {
     const parts = String(value || '')
@@ -119,8 +140,8 @@ function parseCustomFieldReference(value) {
 
     if (
         parts.length !== 2 ||
-        !isCustomObjectName(parts[0]) ||
-        !/^[A-Za-z_][A-Za-z0-9_]*__c$/.test(parts[1])
+        !isValidObjectApiName(parts[0]) ||
+        !isCustomFieldApiName(parts[1])
     ) {
         return null;
     }
@@ -262,17 +283,22 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
             continue;
         }
 
-        addRelationship(
-            createRelationshipRecord({
-                name: fieldReference.objectName,
-                metadataType: 'CustomObject',
-                relationship: RELATIONSHIPS.FIELD_PERMISSION_OBJECT,
-                sourceMetadata,
-                discoveryMethod: 'fieldPermissions',
-                reason: 'Profile field permission parent object',
-                depth
-            })
-        );
+        // Only custom-object parents are CustomObject dependencies.
+        // Standard-object parents (Account, Case, Product2, …) emit CustomField only.
+        if (isCustomObjectName(fieldReference.objectName)) {
+            addRelationship(
+                createRelationshipRecord({
+                    name: fieldReference.objectName,
+                    metadataType: 'CustomObject',
+                    relationship: RELATIONSHIPS.FIELD_PERMISSION_OBJECT,
+                    sourceMetadata,
+                    discoveryMethod: 'fieldPermissions',
+                    reason: 'Profile field permission parent object',
+                    depth
+                })
+            );
+        }
+
         addRelationship(
             createRelationshipRecord({
                 name: fieldReference.fullName,

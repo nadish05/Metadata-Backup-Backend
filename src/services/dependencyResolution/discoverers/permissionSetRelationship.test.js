@@ -150,7 +150,7 @@ async function main() {
         }
     );
 
-    await runTest('standard object permissions emit nothing', async () => {
+    await runTest('standard object permissions emit nothing for objects; custom fields emit CustomField only', async () => {
         const result = await discover(`
             <PermissionSet>
                 <objectPermissions>
@@ -159,10 +159,26 @@ async function main() {
                 <fieldPermissions>
                     <field>Account.Custom_Field__c</field>
                 </fieldPermissions>
+                <fieldPermissions>
+                    <field>Case.Equipment__c</field>
+                </fieldPermissions>
+                <fieldPermissions>
+                    <field>Product2.lifespan_months__c</field>
+                </fieldPermissions>
             </PermissionSet>
         `);
 
-        assert.deepStrictEqual(result.relationships, []);
+        assert.deepStrictEqual(byType(result, 'CustomObject'), []);
+        assert.deepStrictEqual(
+            byType(result, 'CustomField')
+                .map((item) => item.name)
+                .sort(),
+            [
+                'Account.Custom_Field__c',
+                'Case.Equipment__c',
+                'Product2.lifespan_months__c'
+            ]
+        );
     });
 
     await runTest('malformed fields are ignored', async () => {

@@ -238,6 +238,132 @@ const DOTTED_REFERENCE_LEFT_EXCLUSIONS = new Set([
     'Severity'
 ]);
 
+/**
+ * True when name can parent a CustomField (ObjectApiName.Field__c).
+ * Accepts custom objects (__c) and PascalCase standard/platform sObjects.
+ * Rejects relationship suffixes, Apex system types, and camelCase locals
+ * (locals are resolved via extractVariableObjectTypes instead).
+ * Generic — no per-object allowlist.
+ */
+function isApexSystemTypeName(name) {
+    const raw = String(name || '').trim();
+
+    if (!raw) {
+        return false;
+    }
+
+    if (
+        raw === 'Id' ||
+        raw === 'Object' ||
+        raw === 'SObject' ||
+        raw === 'Enum' ||
+        raw === 'Void'
+    ) {
+        return true;
+    }
+
+    const lower = raw.toLowerCase();
+
+    if (
+        lower === 'id' ||
+        lower === 'object' ||
+        lower === 'sobject' ||
+        lower === 'enum' ||
+        lower === 'void'
+    ) {
+        return true;
+    }
+
+    for (const systemClass of SYSTEM_CLASSES) {
+        if (systemClass.toLowerCase() === lower) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function isFieldParentObjectName(name) {
+    const objectApiName = String(name || '').trim();
+
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(objectApiName)) {
+        return false;
+    }
+
+    if (/__(?:r|mdt|e|b|x|kav)$/i.test(objectApiName)) {
+        return false;
+    }
+
+    if (/__c$/i.test(objectApiName)) {
+        return true;
+    }
+
+    // Standard / built-in sObject API names are PascalCase in metadata.
+    // Dotted refs like Account.Total_Revenue__c use this form.
+    if (!/^[A-Z]/.test(objectApiName)) {
+        return false;
+    }
+
+    if (isApexSystemTypeName(objectApiName)) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Strong SOQL / constructor context may use any casing (Apex is
+ * case-insensitive): `FROM case`, `new product2(...)`.
+ */
+function isStrongContextObjectName(name) {
+    const objectApiName = String(name || '').trim();
+
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(objectApiName)) {
+        return false;
+    }
+
+    if (/__(?:r|mdt|e|b|x|kav)$/i.test(objectApiName)) {
+        return false;
+    }
+
+    if (isApexSystemTypeName(objectApiName)) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Emit stable CustomField parent identities for standard sObjects.
+ * Custom __c names keep source casing. Standard names get leading capital
+ * so `product2` / `case` align with DX folders Product2 / Case.
+ */
+function normalizeFieldParentObjectApiName(name) {
+    const objectApiName = String(name || '').trim();
+
+    if (/__c$/i.test(objectApiName)) {
+        return objectApiName;
+    }
+
+    if (!objectApiName) {
+        return objectApiName;
+    }
+
+    return objectApiName.charAt(0).toUpperCase() + objectApiName.slice(1);
+}
+
+function extractCustomFieldAssignmentNames(args) {
+    const names = [];
+
+    for (const fieldMatch of String(args || '').matchAll(
+        /\b([A-Za-z0-9_]+__c)\s*=/gi
+    )) {
+        names.push(fieldMatch[1]);
+    }
+
+    return names;
+}
+
 function extractObjectContextNames(cleanedContent) {
     const objectNames = new Set();
     const strongObjectNames = new Set();
@@ -298,15 +424,20 @@ function extractObjectContextNames(cleanedContent) {
 }
 
 /**
- * Map local Apex variable names to their CustomObject types.
+ * Map local Apex variable names to their sObject types (custom or standard).
  * Example: "Comparison_Result__c row" → row => Comparison_Result__c
+ * Example: "Case cc" / "for (Case cc :" → cc => Case
+ * Example: "product2 equipment" → equipment => Product2
  */
 function extractVariableObjectTypes(cleanedContent) {
     const variableTypes = new Map();
 
     const patterns = [
         /\b([A-Za-z0-9_]+__c)\s+([a-zA-Z][A-Za-z0-9_]*)\b/g,
-        /\bfor\s*\(\s*([A-Za-z0-9_]+__c)\s+([a-zA-Z][A-Za-z0-9_]*)\s*:/gi
+        /\bfor\s*\(\s*([A-Za-z0-9_]+__c)\s+([a-zA-Z][A-Za-z0-9_]*)\s*:/gi,
+        // Standard / platform sObject typed variables (any Apex casing).
+        /\b([A-Za-z][A-Za-z0-9_]*)\s+([a-z][A-Za-z0-9_]*)\b/g,
+        /\bfor\s*\(\s*([A-Za-z][A-Za-z0-9_]*)\s+([a-zA-Z][A-Za-z0-9_]*)\s*:/gi
     ];
 
     for (const pattern of patterns) {
@@ -314,8 +445,14 @@ function extractVariableObjectTypes(cleanedContent) {
             const objectType = match[1];
             const variableName = match[2];
 
+            if (!isStrongContextObjectName(objectType)) {
+                continue;
+            }
+
+            const normalizedType = normalizeFieldParentObjectApiName(objectType);
+
             if (!variableTypes.has(variableName)) {
-                variableTypes.set(variableName, objectType);
+                variableTypes.set(variableName, normalizedType);
             }
         }
     }
@@ -351,13 +488,21 @@ function extractSoqlQualifiedFields(cleanedContent, strongObjectNames = new Set(
             continue;
         }
 
-        const fromMatch = query.match(/\bFROM\s+([A-Za-z0-9_]+__c)\b/i);
+        // Custom (__c) and standard sObjects (any Apex casing: Account / case).
+        const fromMatch = query.match(/\bFROM\s+([A-Za-z][A-Za-z0-9_]*)\b/i);
 
         if (!fromMatch) {
             continue;
         }
 
-        const objectName = fromMatch[1];
+        const rawObjectName = fromMatch[1];
+
+        if (!isStrongContextObjectName(rawObjectName)) {
+            continue;
+        }
+
+        const objectName = normalizeFieldParentObjectApiName(rawObjectName);
+
         const selectMatch = query.match(/\bSELECT\s+([\s\S]*?)\s+FROM\b/i);
 
         if (!selectMatch) {
@@ -396,10 +541,10 @@ function extractSoqlQualifiedFields(cleanedContent, strongObjectNames = new Set(
             ' '
         );
         const fieldTokens =
-            selectWithoutRelationships.match(/\b[A-Za-z0-9_]+__c\b/g) || [];
+            selectWithoutRelationships.match(/\b[A-Za-z0-9_]+__c\b/gi) || [];
 
         for (const fieldName of fieldTokens) {
-            if (fieldName !== objectName) {
+            if (fieldName.toLowerCase() !== objectName.toLowerCase()) {
                 const qualified = `${objectName}.${fieldName}`;
                 qualifiedFields.add(qualified);
             }
@@ -494,22 +639,29 @@ function extractSoqlFilterFieldTokens(cleanedContent) {
 }
 
 /**
- * Named field assignments inside `new Object__c(Field__c = value, ...)`.
- * Returns qualified CustomField identities Object__c.Field__c.
+ * Named field assignments inside `new SObject(Field__c = value, ...)`.
+ * Supports custom objects (__c) and standard sObjects (Product2, Case, …),
+ * including Apex case variants (`new product2(...)`, `lifespan_months__C`).
+ * Returns qualified CustomField identities ObjectApiName.Field__c.
  */
 function extractSObjectConstructorNamedFields(cleanedContent) {
     const qualifiedFields = new Set();
 
     for (const match of cleanedContent.matchAll(
-        /\bnew\s+([A-Za-z0-9_]+__c)\s*\(([^;]*?)\)/g
+        /\bnew\s+([A-Za-z][A-Za-z0-9_]*)\s*\(([^;]*?)\)/g
     )) {
-        const objectApiName = match[1];
+        const rawObjectApiName = match[1];
         const args = match[2] || '';
 
-        for (const fieldMatch of args.matchAll(
-            /\b([A-Za-z0-9_]+__c)\s*=/g
-        )) {
-            qualifiedFields.add(`${objectApiName}.${fieldMatch[1]}`);
+        if (!isStrongContextObjectName(rawObjectApiName)) {
+            continue;
+        }
+
+        const objectApiName =
+            normalizeFieldParentObjectApiName(rawObjectApiName);
+
+        for (const fieldName of extractCustomFieldAssignmentNames(args)) {
+            qualifiedFields.add(`${objectApiName}.${fieldName}`);
         }
     }
 
@@ -553,14 +705,19 @@ function classifyCustomObjectsAndFields(cleanedContent) {
     // Never emit bare __c field tokens — that loses parent context.
     const customFields = new Set();
 
-    // 1) Preserve Object__c.Field__c references as fully qualified identities.
+    // 1) Qualified ObjectApiName.Field__c — custom (__c) and standard sObjects.
+    //    Relationship parents (__r) are excluded (handled by SOQL __r rewrite).
     for (const match of cleanedContent.matchAll(
-        /\b([A-Za-z0-9_]+__c)\.([A-Za-z0-9_]+__c)\b/g
+        /\b([A-Za-z][A-Za-z0-9_]*)\.([A-Za-z0-9_]+__c)\b/g
     )) {
         const objectApiName = match[1];
         const fieldApiName = match[2];
-        const qualified = `${objectApiName}.${fieldApiName}`;
-        customFields.add(qualified);
+
+        if (!isFieldParentObjectName(objectApiName)) {
+            continue;
+        }
+
+        customFields.add(`${objectApiName}.${fieldApiName}`);
     }
 
     // 2) Qualify variable.Field__c using declared variable object types.
@@ -572,8 +729,9 @@ function classifyCustomObjectsAndFields(cleanedContent) {
         const receiver = match[1];
         const fieldName = match[2];
 
-        // Object__c.Field__c already handled above.
-        if (/__c$/i.test(receiver)) {
+        // ObjectApiName.Field__c already handled above when receiver is an
+        // sObject API name (custom or standard).
+        if (isFieldParentObjectName(receiver)) {
             continue;
         }
 
