@@ -1,5 +1,6 @@
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
 const { exec } = require('child_process');
 const util = require('util');
 
@@ -211,11 +212,157 @@ function logRetrieveResultDebug(stdout) {
     return summary;
 }
 
+function toPosixRelative(projectPath, absolutePath) {
+    return path
+        .relative(projectPath, absolutePath)
+        .split(path.sep)
+        .join('/');
+}
+
+function collectFilesUnderDirectory(rootDir, projectPath) {
+    const files = [];
+
+    function walk(currentDir) {
+        let entries;
+        try {
+            entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        } catch (error) {
+            return;
+        }
+
+        for (const entry of entries) {
+            const absolutePath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                walk(absolutePath);
+            } else if (entry.isFile()) {
+                files.push(toPosixRelative(projectPath, absolutePath));
+            }
+        }
+    }
+
+    walk(rootDir);
+    return files;
+}
+
+function collectPathMatches(rootDir, projectPath, needle) {
+    const matches = [];
+
+    function walk(currentDir) {
+        let entries;
+        try {
+            entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        } catch (error) {
+            return;
+        }
+
+        for (const entry of entries) {
+            const absolutePath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                walk(absolutePath);
+                continue;
+            }
+            if (!entry.isFile()) {
+                continue;
+            }
+
+            const relativePath = toPosixRelative(projectPath, absolutePath);
+            if (relativePath.includes(needle) || entry.name.includes(needle)) {
+                matches.push(relativePath);
+            }
+        }
+    }
+
+    walk(rootDir);
+    return matches;
+}
+
+/**
+ * TEMP DIAGNOSTIC — filesystem probe only. Does not retrieve, copy, delete,
+ * or filter metadata. Must run after CLI retrieve and before Git.
+ */
+function collectEmiPostRetrieveDebug(projectPath) {
+    const resolvedProjectPath = path.resolve(projectPath);
+    const emiObjectDirectory = path.join(
+        resolvedProjectPath,
+        'force-app',
+        'main',
+        'default',
+        'objects',
+        'Equipment_Maintenance_Item__c'
+    );
+    const forceAppRoot = path.join(
+        resolvedProjectPath,
+        'force-app'
+    );
+
+    let emiObjectDirectoryExists = false;
+    try {
+        emiObjectDirectoryExists = fs.existsSync(emiObjectDirectory)
+            && fs.statSync(emiObjectDirectory).isDirectory();
+    } catch (error) {
+        emiObjectDirectoryExists = false;
+    }
+
+    return {
+        projectPath: resolvedProjectPath,
+        emiObjectDirectoryExists,
+        emiObjectDirectory,
+        emiFiles: emiObjectDirectoryExists
+            ? collectFilesUnderDirectory(emiObjectDirectory, resolvedProjectPath)
+            : [],
+        maintenanceRequestMatches: fs.existsSync(forceAppRoot)
+            ? collectPathMatches(
+                forceAppRoot,
+                resolvedProjectPath,
+                'Maintenance_Request__c'
+            )
+            : []
+    };
+}
+
+function logEmiPostRetrieveDebug(projectPath) {
+    let debug;
+
+    try {
+        debug = collectEmiPostRetrieveDebug(projectPath);
+    } catch (error) {
+        console.log('====================================================');
+        console.log('EMI POST-RETRIEVE DEBUG');
+        console.log('====================================================');
+        console.log('diagnostic failed:', error.message || String(error));
+        console.log('====================================================');
+        return null;
+    }
+
+    console.log('====================================================');
+    console.log('EMI POST-RETRIEVE DEBUG');
+    console.log('====================================================');
+    console.log(
+        'EMI object directory:',
+        debug.emiObjectDirectoryExists ? 'FOUND' : 'NOT FOUND'
+    );
+    console.log('Expected path:');
+    console.log(debug.emiObjectDirectory);
+    console.log('emiFileCount:', debug.emiFiles.length);
+    console.log('maintenanceRequestMatchCount:', debug.maintenanceRequestMatches.length);
+    console.log(JSON.stringify({
+        projectPath: debug.projectPath,
+        emiObjectDirectoryExists: debug.emiObjectDirectoryExists,
+        emiObjectDirectory: debug.emiObjectDirectory,
+        emiFiles: debug.emiFiles,
+        maintenanceRequestMatches: debug.maintenanceRequestMatches
+    }, null, 2));
+    console.log('====================================================');
+
+    return debug;
+}
+
 exports.RETRIEVAL_METADATA_TYPES = RETRIEVAL_METADATA_TYPES;
 exports.RETRIEVAL_STANDARD_OBJECT_MEMBERS = RETRIEVAL_STANDARD_OBJECT_MEMBERS;
 exports.buildRetrieveMetadataMembers = buildRetrieveMetadataMembers;
 exports.buildRetrieveMetadataArgs = buildRetrieveMetadataArgs;
 exports.summarizeRetrieveResultJson = summarizeRetrieveResultJson;
+exports.collectEmiPostRetrieveDebug = collectEmiPostRetrieveDebug;
 
 function resolveSourceOrgId(identityUrl) {
     try {
@@ -465,6 +612,10 @@ console.log(
 );
 setStatus('Full Metadata Retrieval Complete');
 
+        // TEMP DIAGNOSTIC — log-only filesystem probe after CLI retrieve
+        // and before Git (git add runs later in runMigration).
+        logEmiPostRetrieveDebug(`${workspace}/backup-project`);
+
         console.log('STEP 5 COMPLETE');
 
         deferCleanup = true;
@@ -556,8 +707,6 @@ exports.testSfAuth = async (req, res) => {
     }
 
 };
-
-const path = require('path');
 
 exports.retrieveMetadata = async (req, res) => {
 

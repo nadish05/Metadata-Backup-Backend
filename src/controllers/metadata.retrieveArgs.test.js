@@ -1,11 +1,15 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
     RETRIEVAL_METADATA_TYPES,
     RETRIEVAL_STANDARD_OBJECT_MEMBERS,
     buildRetrieveMetadataMembers,
     buildRetrieveMetadataArgs,
-    summarizeRetrieveResultJson
+    summarizeRetrieveResultJson,
+    collectEmiPostRetrieveDebug
 } = require('./metadata.controller');
 
 function runTest(name, fn) {
@@ -137,6 +141,91 @@ async function main() {
             summary.probes.Equipment_Maintenance_Item__c,
             false
         );
+    });
+
+    await runTest('does not add explicit EMI CustomObject member to retrieve args', () => {
+        const members = buildRetrieveMetadataMembers();
+        const args = buildRetrieveMetadataArgs();
+
+        assert.ok(members.includes('CustomObject'));
+        assert.ok(!members.includes('CustomObject:Equipment_Maintenance_Item__c'));
+        assert.ok(!args.includes('CustomObject:Equipment_Maintenance_Item__c'));
+        assert.ok(!args.includes('CustomObject:Maintenance_Request__c'));
+    });
+
+    await runTest('collectEmiPostRetrieveDebug reports missing EMI directory', () => {
+        const projectPath = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'emi-post-retrieve-missing-')
+        );
+
+        try {
+            const debug = collectEmiPostRetrieveDebug(projectPath);
+
+            assert.strictEqual(debug.emiObjectDirectoryExists, false);
+            assert.deepStrictEqual(debug.emiFiles, []);
+            assert.deepStrictEqual(debug.maintenanceRequestMatches, []);
+            assert.ok(
+                debug.emiObjectDirectory.endsWith(
+                    path.join(
+                        'objects',
+                        'Equipment_Maintenance_Item__c'
+                    )
+                )
+            );
+        } finally {
+            fs.rmSync(projectPath, { recursive: true, force: true });
+        }
+    });
+
+    await runTest('collectEmiPostRetrieveDebug lists EMI files and Maintenance_Request field path', () => {
+        const projectPath = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'emi-post-retrieve-found-')
+        );
+
+        try {
+            const emiDir = path.join(
+                projectPath,
+                'force-app',
+                'main',
+                'default',
+                'objects',
+                'Equipment_Maintenance_Item__c'
+            );
+            const fieldsDir = path.join(emiDir, 'fields');
+            fs.mkdirSync(fieldsDir, { recursive: true });
+            fs.writeFileSync(
+                path.join(emiDir, 'Equipment_Maintenance_Item__c.object-meta.xml'),
+                '<CustomObject/>'
+            );
+            fs.writeFileSync(
+                path.join(fieldsDir, 'Maintenance_Request__c.field-meta.xml'),
+                '<CustomField/>'
+            );
+
+            const debug = collectEmiPostRetrieveDebug(projectPath);
+
+            assert.strictEqual(debug.emiObjectDirectoryExists, true);
+            assert.ok(
+                debug.emiFiles.includes(
+                    'force-app/main/default/objects/Equipment_Maintenance_Item__c/Equipment_Maintenance_Item__c.object-meta.xml'
+                )
+            );
+            assert.ok(
+                debug.emiFiles.includes(
+                    'force-app/main/default/objects/Equipment_Maintenance_Item__c/fields/Maintenance_Request__c.field-meta.xml'
+                )
+            );
+            assert.ok(
+                debug.maintenanceRequestMatches.includes(
+                    'force-app/main/default/objects/Equipment_Maintenance_Item__c/fields/Maintenance_Request__c.field-meta.xml'
+                )
+            );
+            assert.ok(
+                !debug.emiFiles.some((file) => file.includes('Equipment__c'))
+            );
+        } finally {
+            fs.rmSync(projectPath, { recursive: true, force: true });
+        }
     });
 }
 
