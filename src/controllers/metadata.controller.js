@@ -79,6 +79,198 @@ function buildRetrieveMetadataArgs(members = buildRetrieveMetadataMembers()) {
     return members.map((member) => `-m ${member}`).join(' ');
 }
 
+function normalizeDiscoveredCustomObjectName(entry) {
+    if (typeof entry === 'string') {
+        return entry.trim();
+    }
+
+    if (!entry || typeof entry !== 'object') {
+        return '';
+    }
+
+    const raw = entry.fullName
+        || entry.full_name
+        || entry.member
+        || entry.fileName
+        || '';
+
+    return String(raw).trim();
+}
+
+/**
+ * Convert Metadata API / CLI list-metadata entries into bare CustomObject
+ * API names (e.g. Equipment_Maintenance_Item__c). Does not invent members.
+ */
+function parseDiscoveredCustomObjectNames(stdout) {
+    const payload = extractJsonPayload(stdout);
+    if (!payload) {
+        return {
+            names: [],
+            status: null,
+            parsed: false,
+            reason: 'invalid_json'
+        };
+    }
+
+    const rows = Array.isArray(payload.result)
+        ? payload.result
+        : Array.isArray(payload.result?.metadata)
+          ? payload.result.metadata
+          : [];
+
+    const names = [];
+    const seen = new Set();
+
+    for (const entry of rows) {
+        let name = normalizeDiscoveredCustomObjectName(entry);
+        if (!name) {
+            continue;
+        }
+
+        if (name.startsWith('CustomObject:')) {
+            name = name.slice('CustomObject:'.length).trim();
+        }
+
+        if (!name || seen.has(name)) {
+            continue;
+        }
+
+        seen.add(name);
+        names.push(name);
+    }
+
+    return {
+        names,
+        status: payload.status,
+        parsed: true,
+        reason: null
+    };
+}
+
+function toExplicitCustomObjectMembers(names = []) {
+    return (Array.isArray(names) ? names : [])
+        .map((name) => String(name || '').trim())
+        .filter(Boolean)
+        .map((name) => (
+            name.startsWith('CustomObject:')
+                ? name
+                : `CustomObject:${name}`
+        ));
+}
+
+/**
+ * Merge base retrieve members with discovered CustomObject members.
+ * Preserves order, removes duplicates, never invents Maintenance_Request__c
+ * unless discovery returned it as a CustomObject name.
+ */
+function mergeRetrieveMetadataMembers({
+    baseMembers = buildRetrieveMetadataMembers(),
+    discoveredCustomObjectNames = []
+} = {}) {
+    const explicitDiscovered = toExplicitCustomObjectMembers(
+        discoveredCustomObjectNames
+    );
+    const merged = [];
+    const seen = new Set();
+
+    for (const member of [...baseMembers, ...explicitDiscovered]) {
+        if (!member || seen.has(member)) {
+            continue;
+        }
+        seen.add(member);
+        merged.push(member);
+    }
+
+    return merged;
+}
+
+function buildRetrieveMetadataMembersWithDiscovery(
+    discoveredCustomObjectNames = []
+) {
+    return mergeRetrieveMetadataMembers({
+        baseMembers: buildRetrieveMetadataMembers(),
+        discoveredCustomObjectNames
+    });
+}
+
+function logCustomObjectDiscoveryDebug({
+    strategy,
+    discoveredCount = 0,
+    explicitMembersAdded = 0,
+    discoveredIncludesEmi = false,
+    discoveredIncludesMaintenanceRequestObject = false,
+    errorMessage = null
+} = {}) {
+    console.log('====================================================');
+    console.log('CUSTOM OBJECT DISCOVERY DEBUG');
+    console.log('====================================================');
+    console.log(JSON.stringify({
+        strategy,
+        discoveredCount,
+        explicitMembersAdded,
+        discoveredIncludesEmi,
+        discoveredIncludesMaintenanceRequestObject,
+        errorMessage
+    }, null, 2));
+    console.log('====================================================');
+}
+
+/**
+ * Discover CustomObject members from the already-authenticated temporg
+ * session. On failure, returns empty names so callers can fall back to the
+ * existing wildcard CustomObject retrieve behavior.
+ */
+async function discoverCustomObjectNames(alias = RETRIEVAL_CLI_ALIAS) {
+    try {
+        const listResult = await execAsync(
+            `sf org list metadata -m CustomObject -o ${alias} --json`,
+            {
+                maxBuffer: 50 * 1024 * 1024
+            }
+        );
+
+        const parsed = parseDiscoveredCustomObjectNames(listResult.stdout || '');
+        if (!parsed.parsed) {
+            return {
+                names: [],
+                strategy: 'discovery_failed_fallback',
+                errorMessage: parsed.reason || 'invalid_json'
+            };
+        }
+
+        if (
+            typeof parsed.status === 'number'
+            && parsed.status !== 0
+        ) {
+            return {
+                names: [],
+                strategy: 'discovery_failed_fallback',
+                errorMessage: `list metadata status ${parsed.status}`
+            };
+        }
+
+        if (parsed.names.length === 0) {
+            return {
+                names: [],
+                strategy: 'discovery_empty_fallback',
+                errorMessage: null
+            };
+        }
+
+        return {
+            names: parsed.names,
+            strategy: 'explicit_discovered_custom_objects',
+            errorMessage: null
+        };
+    } catch (error) {
+        return {
+            names: [],
+            strategy: 'discovery_failed_fallback',
+            errorMessage: error.message || String(error)
+        };
+    }
+}
+
 function extractJsonPayload(stdout) {
     const text = String(stdout || '').trim();
     if (!text) {
@@ -556,6 +748,11 @@ exports.RETRIEVAL_METADATA_TYPES = RETRIEVAL_METADATA_TYPES;
 exports.RETRIEVAL_STANDARD_OBJECT_MEMBERS = RETRIEVAL_STANDARD_OBJECT_MEMBERS;
 exports.buildRetrieveMetadataMembers = buildRetrieveMetadataMembers;
 exports.buildRetrieveMetadataArgs = buildRetrieveMetadataArgs;
+exports.parseDiscoveredCustomObjectNames = parseDiscoveredCustomObjectNames;
+exports.toExplicitCustomObjectMembers = toExplicitCustomObjectMembers;
+exports.mergeRetrieveMetadataMembers = mergeRetrieveMetadataMembers;
+exports.buildRetrieveMetadataMembersWithDiscovery =
+    buildRetrieveMetadataMembersWithDiscovery;
 exports.summarizeRetrieveResultJson = summarizeRetrieveResultJson;
 exports.collectEmiPostRetrieveDebug = collectEmiPostRetrieveDebug;
 exports.EXPLICIT_EMI_RETRIEVE_MEMBER = EXPLICIT_EMI_RETRIEVE_MEMBER;
@@ -750,12 +947,41 @@ console.log('STEP 4 COMPLETE');
         console.log('STEP 5 - Retrieving ApexClass');
         setStatus('Retrieving ApexClass');
 
-const metadataArgs = buildRetrieveMetadataArgs();
+const discovery = await discoverCustomObjectNames(RETRIEVAL_CLI_ALIAS);
+const discoveredCustomObjectNames = discovery.names || [];
+const retrieveMembers = buildRetrieveMetadataMembersWithDiscovery(
+    discoveredCustomObjectNames
+);
+const explicitDiscoveredMembers = toExplicitCustomObjectMembers(
+    discoveredCustomObjectNames
+);
+const baseMemberSet = new Set(buildRetrieveMetadataMembers());
+const explicitMembersAdded = explicitDiscoveredMembers.filter(
+    (member) => !baseMemberSet.has(member)
+).length;
+
+logCustomObjectDiscoveryDebug({
+    strategy: discovery.strategy,
+    discoveredCount: discoveredCustomObjectNames.length,
+    explicitMembersAdded,
+    discoveredIncludesEmi: discoveredCustomObjectNames.includes(
+        'Equipment_Maintenance_Item__c'
+    ),
+    discoveredIncludesMaintenanceRequestObject:
+        discoveredCustomObjectNames.includes('Maintenance_Request__c'),
+    errorMessage: discovery.errorMessage || null
+});
+
+const metadataArgs = buildRetrieveMetadataArgs(retrieveMembers);
 
 console.log(
  'Retrieving Full Metadata...'
 );
 console.log('Retrieve metadata args:', metadataArgs);
+console.log(
+    'Retrieve strategy:',
+    discovery.strategy
+);
 setStatus('Retrieving Full Metadata');
 
 let retrieveStdout = '';

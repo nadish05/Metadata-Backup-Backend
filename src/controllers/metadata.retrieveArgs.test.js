@@ -13,7 +13,11 @@ const {
     EXPLICIT_EMI_RETRIEVE_MEMBER,
     extractOrgIdFromOrgDisplayJson,
     inspectExplicitEmiRetrieveFilesystem,
-    buildExplicitEmiRetrieveDebugPayload
+    buildExplicitEmiRetrieveDebugPayload,
+    parseDiscoveredCustomObjectNames,
+    toExplicitCustomObjectMembers,
+    mergeRetrieveMetadataMembers,
+    buildRetrieveMetadataMembersWithDiscovery
 } = require('./metadata.controller');
 
 function runTest(name, fn) {
@@ -147,7 +151,7 @@ async function main() {
         );
     });
 
-    await runTest('does not add explicit EMI CustomObject member to retrieve args', () => {
+    await runTest('does not hardcode EMI CustomObject member without discovery', () => {
         const members = buildRetrieveMetadataMembers();
         const args = buildRetrieveMetadataArgs();
 
@@ -155,6 +159,121 @@ async function main() {
         assert.ok(!members.includes('CustomObject:Equipment_Maintenance_Item__c'));
         assert.ok(!args.includes('CustomObject:Equipment_Maintenance_Item__c'));
         assert.ok(!args.includes('CustomObject:Maintenance_Request__c'));
+    });
+
+    await runTest('parseDiscoveredCustomObjectNames extracts unique fullNames', () => {
+        const parsed = parseDiscoveredCustomObjectNames(JSON.stringify({
+            status: 0,
+            result: [
+                { fullName: 'Account', type: 'CustomObject' },
+                { fullName: 'Opportunity', type: 'CustomObject' },
+                { fullName: 'Equipment_Maintenance_Item__c', type: 'CustomObject' },
+                { fullName: 'Vehicle__c', type: 'CustomObject' },
+                { fullName: 'Vehicle__c', type: 'CustomObject' }
+            ]
+        }));
+
+        assert.deepStrictEqual(parsed.names, [
+            'Account',
+            'Opportunity',
+            'Equipment_Maintenance_Item__c',
+            'Vehicle__c'
+        ]);
+        assert.ok(!parsed.names.includes('Maintenance_Request__c'));
+    });
+
+    await runTest('discovered CustomObject names become explicit CustomObject members', () => {
+        assert.deepStrictEqual(
+            toExplicitCustomObjectMembers([
+                'Equipment_Maintenance_Item__c',
+                'Vehicle__c'
+            ]),
+            [
+                'CustomObject:Equipment_Maintenance_Item__c',
+                'CustomObject:Vehicle__c'
+            ]
+        );
+    });
+
+    await runTest('EMI is included only when discovered, not hardcoded', () => {
+        const withoutDiscovery = buildRetrieveMetadataMembersWithDiscovery([]);
+        const withDiscovery = buildRetrieveMetadataMembersWithDiscovery([
+            'Equipment_Maintenance_Item__c',
+            'Vehicle__c'
+        ]);
+
+        assert.ok(
+            !withoutDiscovery.includes('CustomObject:Equipment_Maintenance_Item__c')
+        );
+        assert.ok(
+            withDiscovery.includes('CustomObject:Equipment_Maintenance_Item__c')
+        );
+        assert.ok(withDiscovery.includes('CustomObject:Vehicle__c'));
+        assert.ok(
+            !withDiscovery.includes('CustomObject:Maintenance_Request__c')
+        );
+    });
+
+    await runTest('Maintenance_Request__c is not treated as CustomObject unless discovered', () => {
+        const members = buildRetrieveMetadataMembersWithDiscovery([
+            'Equipment_Maintenance_Item__c'
+        ]);
+
+        assert.ok(
+            members.includes('CustomObject:Equipment_Maintenance_Item__c')
+        );
+        assert.ok(!members.includes('CustomObject:Maintenance_Request__c'));
+        assert.ok(!members.includes('Maintenance_Request__c'));
+    });
+
+    await runTest('merge removes duplicate Account and Opportunity members', () => {
+        const merged = mergeRetrieveMetadataMembers({
+            baseMembers: buildRetrieveMetadataMembers(),
+            discoveredCustomObjectNames: [
+                'Account',
+                'Opportunity',
+                'Equipment_Maintenance_Item__c',
+                'Vehicle__c'
+            ]
+        });
+
+        const accountMatches = merged.filter(
+            (member) => member === 'CustomObject:Account'
+        );
+        const opportunityMatches = merged.filter(
+            (member) => member === 'CustomObject:Opportunity'
+        );
+
+        assert.strictEqual(accountMatches.length, 1);
+        assert.strictEqual(opportunityMatches.length, 1);
+        assert.ok(merged.includes('CustomObject'));
+        assert.ok(merged.includes('CustomObject:Account'));
+        assert.ok(merged.includes('CustomObject:Opportunity'));
+        assert.ok(merged.includes('CustomObject:Equipment_Maintenance_Item__c'));
+        assert.ok(merged.includes('CustomObject:Vehicle__c'));
+        assert.ok(merged.includes('ApexClass'));
+        assert.ok(merged.includes('Profile'));
+        assert.ok(merged.includes('CustomField'));
+        assert.ok(merged.includes('RecordType'));
+    });
+
+    await runTest('discovery-backed args keep existing metadata types', () => {
+        const args = buildRetrieveMetadataArgs(
+            buildRetrieveMetadataMembersWithDiscovery([
+                'Equipment_Maintenance_Item__c'
+            ])
+        );
+
+        assert.ok(args.includes('-m ApexClass'));
+        assert.ok(args.includes('-m CustomObject'));
+        assert.ok(args.includes('-m CustomField'));
+        assert.ok(args.includes('-m RecordType'));
+        assert.ok(args.includes('-m Profile'));
+        assert.ok(args.includes('-m CustomObject:Account'));
+        assert.ok(args.includes('-m CustomObject:Opportunity'));
+        assert.ok(
+            args.includes('-m CustomObject:Equipment_Maintenance_Item__c')
+        );
     });
 
     await runTest('collectEmiPostRetrieveDebug reports missing EMI directory', () => {
@@ -232,7 +351,7 @@ async function main() {
         }
     });
 
-    await runTest('explicit EMI diagnostic member is isolated from production retrieve args', () => {
+    await runTest('explicit EMI diagnostic member is isolated from default production retrieve args', () => {
         const args = buildRetrieveMetadataArgs();
 
         assert.strictEqual(
