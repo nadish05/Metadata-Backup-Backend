@@ -1,7 +1,8 @@
 /**
- * Phase 19.2–19.9B — ProfileRelationshipDiscoverer tests.
+ * Phase 19.2–19.10B — ProfileRelationshipDiscoverer tests.
  * objectPermissions + fieldPermissions + recordTypeVisibilities + tabVisibilities
- * + classAccesses + pageAccesses + flowAccesses + applicationVisibilities.
+ * + classAccesses + pageAccesses + flowAccesses + applicationVisibilities
+ * + customPermissions.
  * Does not change PermissionSet discovery.
  */
 
@@ -276,10 +277,13 @@ async function main() {
         async () => {
             const result = await discoverProfile(`
                 <Profile>
-                    <customPermissions>
-                        <name>Can_Manage_Invoices</name>
+                    <userPermissions>
+                        <name>ApiEnabled</name>
                         <enabled>true</enabled>
-                    </customPermissions>
+                    </userPermissions>
+                    <layoutAssignments>
+                        <layout>Account-Account Layout</layout>
+                    </layoutAssignments>
                 </Profile>
             `);
 
@@ -2627,6 +2631,514 @@ async function main() {
             assert.ok(
                 apps.every(
                     (a) => a.relationship === 'ProfileApplicationVisibility'
+                )
+            );
+        }
+    );
+
+    // --- Phase 19.10B customPermissions ---
+
+    await runTest('CP1 — single CustomPermission', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'MyPermission',
+                metadataType: 'CustomPermission',
+                type: 'CustomPermission',
+                relationship: 'ProfileCustomPermission',
+                sourceMetadata: 'Custom_Admin',
+                sourceField: 'name',
+                discoveredBy: 'ProfileRelationshipDiscoverer',
+                discoveryMethod: 'customPermissions',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'Profile custom permission'
+            }
+        ]);
+    });
+
+    await runTest('CP2 — multiple CustomPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>PermissionA</name>
+                </customPermissions>
+                <customPermissions>
+                    <name>PermissionB</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        const perms = byType(result, 'CustomPermission');
+        assert.strictEqual(perms.length, 2);
+        assert.deepStrictEqual(
+            perms.map((p) => p.name).sort(),
+            ['PermissionA', 'PermissionB']
+        );
+    });
+
+    await runTest('CP3 — duplicate CustomPermission → one relationship', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+        assert.strictEqual(
+            byType(result, 'CustomPermission')[0].name,
+            'MyPermission'
+        );
+    });
+
+    await runTest('CP4 — enabled=true → discovers', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>MyPermission</name>
+                    <enabled>true</enabled>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP5 — enabled=false → still discovers', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>MyPermission</name>
+                    <enabled>false</enabled>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP6 — missing name → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <enabled>true</enabled>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CP7 — empty name → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name></name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CP8 — whitespace name → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>   </name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CP9 — invalid name with space → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>My Permission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CP10 — invalid name with hyphen → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>My-Permission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CP11 — invalid name with dot → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>My.Permission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CP12 — invalid name with slash → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>My/Permission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('CP13 — name beginning with digit → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>1MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest(
+        'CP14 — Namespace__MyPermission → CustomPermission:Namespace__MyPermission',
+        async () => {
+            const result = await discoverProfile(`
+                <Profile>
+                    <customPermissions>
+                        <name>Namespace__MyPermission</name>
+                    </customPermissions>
+                </Profile>
+            `);
+
+            const perms = byType(result, 'CustomPermission');
+            assert.strictEqual(perms.length, 1);
+            assert.strictEqual(perms[0].name, 'Namespace__MyPermission');
+            assert.strictEqual(perms[0].metadataType, 'CustomPermission');
+            assert.strictEqual(
+                perms[0].relationship,
+                'ProfileCustomPermission'
+            );
+        }
+    );
+
+    await runTest('CP15 — Profile-only customPermissions XML', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>MyPermission</name>
+                    <enabled>true</enabled>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(result.relationships.length, 1);
+        assert.strictEqual(
+            result.relationships[0].metadataType,
+            'CustomPermission'
+        );
+        assert.strictEqual(result.relationships[0].name, 'MyPermission');
+    });
+
+    await runTest('CP16 — coexists with objectPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <objectPermissions>
+                    <object>Invoice__c</object>
+                    <allowRead>true</allowRead>
+                </objectPermissions>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP17 — coexists with fieldPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <fieldPermissions>
+                    <field>Invoice__c.Amount__c</field>
+                    <readable>true</readable>
+                </fieldPermissions>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.ok(byType(result, 'CustomField').length >= 1);
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP18 — coexists with recordTypeVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP19 — coexists with tabVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP20 — coexists with classAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>InvoiceController</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP21 — coexists with pageAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP22 — coexists with flowAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                    <enabled>true</enabled>
+                </flowAccesses>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP23 — coexists with applicationVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                    <visible>true</visible>
+                </applicationVisibilities>
+                <customPermissions>
+                    <name>MyPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+        assert.strictEqual(byType(result, 'CustomPermission').length, 1);
+    });
+
+    await runTest('CP24 — cross-section deduplication', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <customPermissions>
+                    <name>MyPermission</name>
+                    <enabled>true</enabled>
+                </customPermissions>
+                <customPermissions>
+                    <name>MyPermission</name>
+                    <enabled>false</enabled>
+                </customPermissions>
+                <customPermissions>
+                    <name>OtherPermission</name>
+                </customPermissions>
+            </Profile>
+        `);
+
+        const perms = byType(result, 'CustomPermission');
+        assert.strictEqual(perms.length, 2);
+        assert.deepStrictEqual(
+            perms.map((p) => p.name).sort(),
+            ['MyPermission', 'OtherPermission']
+        );
+    });
+
+    await runTest('CP25 — PermissionSet regression remains passing', async () => {
+        const result = await permissionSetRelationshipDiscoverer.discover({
+            selectedMetadata: [
+                {
+                    metadataType: 'PermissionSet',
+                    metadataName: 'Subscription_Access',
+                    filePath: PERMISSION_SET_PATH
+                }
+            ],
+            repoFiles: [PERMISSION_SET_PATH],
+            readRepoFile: async () => `
+                <PermissionSet>
+                    <customPermissions>
+                        <name>Can_Approve_Refund</name>
+                        <enabled>false</enabled>
+                    </customPermissions>
+                </PermissionSet>
+            `,
+            depth: 1
+        });
+
+        const perms = result.relationships.filter(
+            (r) => r.metadataType === 'CustomPermission'
+        );
+        assert.strictEqual(perms.length, 1);
+        assert.strictEqual(perms[0].name, 'Can_Approve_Refund');
+        assert.strictEqual(
+            perms[0].relationship,
+            'PermissionSetCustomPermission'
+        );
+        assert.strictEqual(
+            perms[0].discoveredBy,
+            'PermissionSetRelationshipDiscoverer'
+        );
+    });
+
+    await runTest('CP26 — registry still contains ProfileRelationshipDiscoverer', () => {
+        const ids = getRegisteredDiscoverers().map((d) => d.id);
+        assert.ok(ids.includes('ProfileRelationshipDiscoverer'));
+        assert.ok(ids.includes('PermissionSetRelationshipDiscoverer'));
+    });
+
+    await runTest(
+        'CP — all Profile sections coexist with customPermissions',
+        async () => {
+            const result = await discoverProfile(`
+                <Profile>
+                    <objectPermissions>
+                        <object>Invoice__c</object>
+                        <allowRead>true</allowRead>
+                    </objectPermissions>
+                    <fieldPermissions>
+                        <field>Invoice__c.Amount__c</field>
+                        <readable>true</readable>
+                    </fieldPermissions>
+                    <recordTypeVisibilities>
+                        <recordType>Invoice__c.Retail</recordType>
+                        <visible>true</visible>
+                    </recordTypeVisibilities>
+                    <tabVisibilities>
+                        <tab>My_Custom_Tab</tab>
+                        <visibility>Visible</visibility>
+                    </tabVisibilities>
+                    <classAccesses>
+                        <apexClass>InvoiceController</apexClass>
+                        <enabled>true</enabled>
+                    </classAccesses>
+                    <pageAccesses>
+                        <apexPage>InvoicePage</apexPage>
+                        <enabled>true</enabled>
+                    </pageAccesses>
+                    <flowAccesses>
+                        <flow>MyFlow</flow>
+                        <enabled>false</enabled>
+                    </flowAccesses>
+                    <applicationVisibilities>
+                        <application>My_App</application>
+                        <visible>false</visible>
+                    </applicationVisibilities>
+                    <customPermissions>
+                        <name>MyPermission</name>
+                        <enabled>false</enabled>
+                    </customPermissions>
+                    <customPermissions>
+                        <name>My Permission</name>
+                    </customPermissions>
+                    <customPermissions>
+                        <name>Can_Manage_Invoices</name>
+                    </customPermissions>
+                </Profile>
+            `);
+
+            assert.strictEqual(byType(result, 'CustomObject').length, 1);
+            assert.strictEqual(byType(result, 'CustomField').length, 1);
+            assert.strictEqual(byType(result, 'RecordType').length, 1);
+            assert.strictEqual(byType(result, 'CustomTab').length, 1);
+            assert.strictEqual(byType(result, 'ApexClass').length, 1);
+            assert.strictEqual(byType(result, 'ApexPage').length, 1);
+            assert.strictEqual(byType(result, 'Flow').length, 1);
+            assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+            const perms = byType(result, 'CustomPermission');
+            assert.strictEqual(perms.length, 2);
+            assert.deepStrictEqual(
+                perms.map((p) => p.name).sort(),
+                ['Can_Manage_Invoices', 'MyPermission']
+            );
+            assert.ok(
+                perms.every(
+                    (p) => p.relationship === 'ProfileCustomPermission'
                 )
             );
         }

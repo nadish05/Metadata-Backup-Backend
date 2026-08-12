@@ -1,5 +1,5 @@
 /**
- * Profile Relationship Discoverer (Phase 19.2–19.9B)
+ * Profile Relationship Discoverer (Phase 19.2–19.10B)
  *
  * Profile-specific. Currently discovers:
  *   objectPermissions      → CustomObject (custom __c names)
@@ -10,6 +10,7 @@
  *   pageAccesses           → ApexPage
  *   flowAccesses           → Flow
  *   applicationVisibilities → CustomApplication
+ *   customPermissions      → CustomPermission
  *
  * Does not process PermissionSet / PermissionSetGroup / MutingPermissionSet.
  * Does not import deployment, package, workspace, AI, or SAFE_SKIP services.
@@ -32,7 +33,8 @@ const RELATIONSHIPS = Object.freeze({
     CLASS_ACCESS: 'ProfileClassAccess',
     PAGE_ACCESS: 'ProfilePageAccess',
     FLOW_ACCESS: 'ProfileFlowAccess',
-    APPLICATION_VISIBILITY: 'ProfileApplicationVisibility'
+    APPLICATION_VISIBILITY: 'ProfileApplicationVisibility',
+    CUSTOM_PERMISSION: 'ProfileCustomPermission'
 });
 
 function normalizePath(filePath) {
@@ -210,7 +212,7 @@ function createRelationshipRecord({
 /**
  * Pure XML → relationships for Profile objectPermissions, fieldPermissions,
  * recordTypeVisibilities, tabVisibilities, classAccesses, pageAccesses,
- * flowAccesses, and applicationVisibilities.
+ * flowAccesses, applicationVisibilities, and customPermissions.
  * @param {string} xml
  * @param {string} sourceMetadata Profile API name
  * @param {number} [depth=1]
@@ -414,6 +416,29 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 sourceField: 'application',
                 discoveryMethod: 'applicationVisibilities',
                 reason: 'Profile application visibility',
+                depth
+            })
+        );
+    }
+
+    for (const customPermissionName of extractSectionValues(
+        xml,
+        'customPermissions',
+        'name'
+    )) {
+        if (!isValidMetadataName(customPermissionName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: customPermissionName,
+                metadataType: 'CustomPermission',
+                relationship: RELATIONSHIPS.CUSTOM_PERMISSION,
+                sourceMetadata,
+                sourceField: 'name',
+                discoveryMethod: 'customPermissions',
+                reason: 'Profile custom permission',
                 depth
             })
         );
