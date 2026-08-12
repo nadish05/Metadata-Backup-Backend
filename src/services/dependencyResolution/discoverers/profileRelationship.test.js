@@ -1,7 +1,7 @@
 /**
- * Phase 19.2 / 19.3 / 19.4 / 19.5 / 19.6 / 19.7B — ProfileRelationshipDiscoverer tests.
+ * Phase 19.2–19.8B — ProfileRelationshipDiscoverer tests.
  * objectPermissions + fieldPermissions + recordTypeVisibilities + tabVisibilities
- * + classAccesses + pageAccesses.
+ * + classAccesses + pageAccesses + flowAccesses.
  * Does not change PermissionSet discovery.
  */
 
@@ -276,10 +276,14 @@ async function main() {
         async () => {
             const result = await discoverProfile(`
                 <Profile>
-                    <flowAccesses>
-                        <flow>Weather_Sync_Flow</flow>
+                    <applicationVisibilities>
+                        <application>My_Custom_App</application>
+                        <visible>true</visible>
+                    </applicationVisibilities>
+                    <customPermissions>
+                        <name>Can_Manage_Invoices</name>
                         <enabled>true</enabled>
-                    </flowAccesses>
+                    </customPermissions>
                 </Profile>
             `);
 
@@ -1729,7 +1733,7 @@ async function main() {
     });
 
     await runTest(
-        'PA18 — flowAccesses remains unsupported; pageAccesses supported',
+        'PA18 — pageAccesses coexists with flowAccesses',
         async () => {
             const result = await discoverProfile(`
                 <Profile>
@@ -1745,8 +1749,404 @@ async function main() {
             `);
 
             assert.strictEqual(byType(result, 'ApexPage').length, 1);
-            assert.strictEqual(byType(result, 'Flow').length, 0);
-            assert.strictEqual(result.relationships.length, 1);
+            assert.strictEqual(byType(result, 'Flow').length, 1);
+            assert.strictEqual(result.relationships.length, 2);
+            assert.strictEqual(
+                byType(result, 'Flow')[0].relationship,
+                'ProfileFlowAccess'
+            );
+            assert.notStrictEqual(
+                byType(result, 'Flow')[0].metadataType,
+                'FlowDefinition'
+            );
+        }
+    );
+
+    // --- Phase 19.8B flowAccesses ---
+
+    await runTest('FA1 — single Flow', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                    <enabled>true</enabled>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'MyFlow',
+                metadataType: 'Flow',
+                type: 'Flow',
+                relationship: 'ProfileFlowAccess',
+                sourceMetadata: 'Custom_Admin',
+                sourceField: 'flow',
+                discoveredBy: 'ProfileRelationshipDiscoverer',
+                discoveryMethod: 'flowAccesses',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'Profile flow access'
+            }
+        ]);
+    });
+
+    await runTest('FA2 — multiple Flows', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>Weather_Sync_Flow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'Flow').map((item) => item.name).sort(),
+            ['MyFlow', 'Weather_Sync_Flow']
+        );
+        assert.strictEqual(result.relationships.length, 2);
+    });
+
+    await runTest('FA3 — duplicate Flow → one relationship', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                    <enabled>true</enabled>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                    <enabled>false</enabled>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+        assert.strictEqual(byType(result, 'Flow')[0].name, 'MyFlow');
+    });
+
+    await runTest('FA4 — enabled=true → discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>My_Flow</flow>
+                    <enabled>true</enabled>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+        assert.strictEqual(byType(result, 'Flow')[0].name, 'My_Flow');
+    });
+
+    await runTest('FA5 — enabled=false → still discovered', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow123</flow>
+                    <enabled>false</enabled>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+        assert.strictEqual(byType(result, 'Flow')[0].name, 'MyFlow123');
+    });
+
+    await runTest('FA6 — empty Flow ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow></flow>
+                    <enabled>true</enabled>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('FA7 — whitespace Flow ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>   </flow>
+                    <enabled>true</enabled>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('FA8 — invalid Flow names ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>My Flow</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>My-Flow</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>My.Flow</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>A/B</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>1BadFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('FA9 — valid API names accepted', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>My_Flow</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>MyFlow123</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>Namespace__MyFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(
+            byType(result, 'Flow').map((item) => item.name).sort(),
+            ['MyFlow', 'MyFlow123', 'My_Flow', 'Namespace__MyFlow']
+        );
+    });
+
+    await runTest('FA10 — Profile-only flowAccesses XML', async () => {
+        const result = await discoverProfile(`
+            <Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+                <fullName>TestProfile</fullName>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(result.relationships.length, 1);
+        assert.strictEqual(result.relationships[0].metadataType, 'Flow');
+        assert.strictEqual(
+            result.relationships[0].relationship,
+            'ProfileFlowAccess'
+        );
+    });
+
+    await runTest('FA11 — coexists with objectPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <objectPermissions>
+                    <object>Invoice__c</object>
+                    <allowRead>true</allowRead>
+                </objectPermissions>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+    });
+
+    await runTest('FA12 — coexists with fieldPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <fieldPermissions>
+                    <field>Invoice__c.Amount__c</field>
+                    <readable>true</readable>
+                </fieldPermissions>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomField').length, 1);
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+    });
+
+    await runTest('FA13 — coexists with recordTypeVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+    });
+
+    await runTest('FA14 — coexists with tabVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+    });
+
+    await runTest('FA15 — coexists with classAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>InvoiceController</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+    });
+
+    await runTest('FA16 — coexists with pageAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                    <enabled>false</enabled>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+    });
+
+    await runTest('FA17 — Flow dedupe across repeated sections', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>Weather_Sync_Flow</flow>
+                </flowAccesses>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'Flow').length, 2);
+        assert.deepStrictEqual(
+            byType(result, 'Flow').map((item) => item.name).sort(),
+            ['MyFlow', 'Weather_Sync_Flow']
+        );
+    });
+
+    await runTest('FA18 — relationship metadata + not FlowDefinition', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                    <enabled>true</enabled>
+                </flowAccesses>
+            </Profile>
+        `);
+
+        const flow = result.relationships[0];
+
+        assert.strictEqual(flow.metadataType, 'Flow');
+        assert.strictEqual(flow.type, 'Flow');
+        assert.strictEqual(flow.relationship, 'ProfileFlowAccess');
+        assert.strictEqual(flow.sourceField, 'flow');
+        assert.strictEqual(flow.discoveryMethod, 'flowAccesses');
+        assert.strictEqual(flow.discoveredBy, 'ProfileRelationshipDiscoverer');
+        assert.notStrictEqual(flow.metadataType, 'FlowDefinition');
+    });
+
+    await runTest(
+        'FA19/FA20 — all Profile sections coexist; registry unchanged',
+        async () => {
+            const result = await discoverProfile(`
+                <Profile>
+                    <objectPermissions>
+                        <object>Invoice__c</object>
+                        <allowRead>true</allowRead>
+                    </objectPermissions>
+                    <fieldPermissions>
+                        <field>Invoice__c.Amount__c</field>
+                        <readable>true</readable>
+                    </fieldPermissions>
+                    <recordTypeVisibilities>
+                        <recordType>Invoice__c.Retail</recordType>
+                        <visible>true</visible>
+                    </recordTypeVisibilities>
+                    <tabVisibilities>
+                        <tab>My_Custom_Tab</tab>
+                        <visibility>Visible</visibility>
+                    </tabVisibilities>
+                    <classAccesses>
+                        <apexClass>InvoiceController</apexClass>
+                        <enabled>true</enabled>
+                    </classAccesses>
+                    <pageAccesses>
+                        <apexPage>InvoicePage</apexPage>
+                        <enabled>true</enabled>
+                    </pageAccesses>
+                    <flowAccesses>
+                        <flow>MyFlow</flow>
+                        <enabled>false</enabled>
+                    </flowAccesses>
+                </Profile>
+            `);
+
+            assert.strictEqual(byType(result, 'CustomObject').length, 1);
+            assert.strictEqual(byType(result, 'CustomField').length, 1);
+            assert.strictEqual(byType(result, 'RecordType').length, 1);
+            assert.strictEqual(byType(result, 'CustomTab').length, 1);
+            assert.strictEqual(byType(result, 'ApexClass').length, 1);
+            assert.strictEqual(byType(result, 'ApexPage').length, 1);
+            assert.strictEqual(byType(result, 'Flow').length, 1);
+            assert.strictEqual(
+                byType(result, 'Flow')[0].relationship,
+                'ProfileFlowAccess'
+            );
+
+            const ids = getRegisteredDiscoverers().map((d) => d.id);
+            assert.ok(ids.includes('ProfileRelationshipDiscoverer'));
+            assert.ok(ids.includes('PermissionSetRelationshipDiscoverer'));
         }
     );
 

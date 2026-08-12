@@ -1,5 +1,5 @@
 /**
- * Profile Relationship Discoverer (Phase 19.2 / 19.3 / 19.4 / 19.5 / 19.6 / 19.7B)
+ * Profile Relationship Discoverer (Phase 19.2–19.8B)
  *
  * Profile-specific. Currently discovers:
  *   objectPermissions      → CustomObject (custom __c names)
@@ -8,6 +8,7 @@
  *   tabVisibilities        → CustomTab (custom tab names only)
  *   classAccesses          → ApexClass
  *   pageAccesses           → ApexPage
+ *   flowAccesses           → Flow
  *
  * Does not process PermissionSet / PermissionSetGroup / MutingPermissionSet.
  * Does not import deployment, package, workspace, AI, or SAFE_SKIP services.
@@ -28,7 +29,8 @@ const RELATIONSHIPS = Object.freeze({
     RECORD_TYPE_VISIBILITY: 'ProfileRecordTypeVisibility',
     TAB_VISIBILITY: 'ProfileTabVisibility',
     CLASS_ACCESS: 'ProfileClassAccess',
-    PAGE_ACCESS: 'ProfilePageAccess'
+    PAGE_ACCESS: 'ProfilePageAccess',
+    FLOW_ACCESS: 'ProfileFlowAccess'
 });
 
 function normalizePath(filePath) {
@@ -205,7 +207,8 @@ function createRelationshipRecord({
 
 /**
  * Pure XML → relationships for Profile objectPermissions, fieldPermissions,
- * recordTypeVisibilities, tabVisibilities, classAccesses, and pageAccesses.
+ * recordTypeVisibilities, tabVisibilities, classAccesses, pageAccesses,
+ * and flowAccesses.
  * @param {string} xml
  * @param {string} sourceMetadata Profile API name
  * @param {number} [depth=1]
@@ -367,6 +370,25 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 sourceField: 'apexPage',
                 discoveryMethod: 'pageAccesses',
                 reason: 'Profile Apex page access',
+                depth
+            })
+        );
+    }
+
+    for (const flowName of extractSectionValues(xml, 'flowAccesses', 'flow')) {
+        if (!isValidMetadataName(flowName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: flowName,
+                metadataType: 'Flow',
+                relationship: RELATIONSHIPS.FLOW_ACCESS,
+                sourceMetadata,
+                sourceField: 'flow',
+                discoveryMethod: 'flowAccesses',
+                reason: 'Profile flow access',
                 depth
             })
         );
