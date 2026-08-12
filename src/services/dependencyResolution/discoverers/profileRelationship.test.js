@@ -1,7 +1,7 @@
 /**
- * Phase 19.2–19.8B — ProfileRelationshipDiscoverer tests.
+ * Phase 19.2–19.9B — ProfileRelationshipDiscoverer tests.
  * objectPermissions + fieldPermissions + recordTypeVisibilities + tabVisibilities
- * + classAccesses + pageAccesses + flowAccesses.
+ * + classAccesses + pageAccesses + flowAccesses + applicationVisibilities.
  * Does not change PermissionSet discovery.
  */
 
@@ -276,10 +276,6 @@ async function main() {
         async () => {
             const result = await discoverProfile(`
                 <Profile>
-                    <applicationVisibilities>
-                        <application>My_Custom_App</application>
-                        <visible>true</visible>
-                    </applicationVisibilities>
                     <customPermissions>
                         <name>Can_Manage_Invoices</name>
                         <enabled>true</enabled>
@@ -2147,6 +2143,492 @@ async function main() {
             const ids = getRegisteredDiscoverers().map((d) => d.id);
             assert.ok(ids.includes('ProfileRelationshipDiscoverer'));
             assert.ok(ids.includes('PermissionSetRelationshipDiscoverer'));
+        }
+    );
+
+    // --- Phase 19.9B applicationVisibilities ---
+
+    await runTest('AV1 — single valid custom application → CustomApplication', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                    <visible>true</visible>
+                    <default>true</default>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, [
+            {
+                name: 'My_App',
+                metadataType: 'CustomApplication',
+                type: 'CustomApplication',
+                relationship: 'ProfileApplicationVisibility',
+                sourceMetadata: 'Custom_Admin',
+                sourceField: 'application',
+                discoveredBy: 'ProfileRelationshipDiscoverer',
+                discoveryMethod: 'applicationVisibilities',
+                required: true,
+                selected: true,
+                depth: 1,
+                reason: 'Profile application visibility'
+            }
+        ]);
+    });
+
+    await runTest('AV2 — multiple valid applications → unique relationships', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+                <applicationVisibilities>
+                    <application>Salesforce_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        const apps = byType(result, 'CustomApplication');
+        assert.strictEqual(apps.length, 2);
+        assert.deepStrictEqual(
+            apps.map((a) => a.name).sort(),
+            ['My_App', 'Salesforce_App']
+        );
+    });
+
+    await runTest('AV3 — duplicate application → one relationship', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+        assert.strictEqual(byType(result, 'CustomApplication')[0].name, 'My_App');
+    });
+
+    await runTest('AV4 — visible=true → discovers', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                    <visible>true</visible>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV5 — visible=false → discovers', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                    <visible>false</visible>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV6 — default=true → discovers', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                    <default>true</default>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV7 — default=false → discovers', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                    <default>false</default>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV8 — empty application → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application></application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('AV9 — whitespace application → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>   </application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('AV10 — invalid spaces → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('AV11 — invalid hyphen → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My-App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('AV12 — invalid dot → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>A.B</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('AV13 — invalid slash → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>A/B</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('AV14 — invalid first digit → ignored', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>1BadApp</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.deepStrictEqual(result.relationships, []);
+    });
+
+    await runTest('AV15 — standard__Sales → CustomApplication', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>standard__Sales</application>
+                    <visible>true</visible>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        const apps = byType(result, 'CustomApplication');
+        assert.strictEqual(apps.length, 1);
+        assert.strictEqual(apps[0].name, 'standard__Sales');
+        assert.strictEqual(apps[0].metadataType, 'CustomApplication');
+        assert.strictEqual(
+            apps[0].relationship,
+            'ProfileApplicationVisibility'
+        );
+    });
+
+    await runTest('AV16 — Namespace__App → CustomApplication', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>Namespace__App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        const apps = byType(result, 'CustomApplication');
+        assert.strictEqual(apps.length, 1);
+        assert.strictEqual(apps[0].name, 'Namespace__App');
+        assert.strictEqual(apps[0].metadataType, 'CustomApplication');
+    });
+
+    await runTest('AV17 — Profile-only XML → works', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(result.relationships.length, 1);
+        assert.strictEqual(
+            result.relationships[0].metadataType,
+            'CustomApplication'
+        );
+    });
+
+    await runTest('AV18 — coexists with objectPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <objectPermissions>
+                    <object>Invoice__c</object>
+                    <allowRead>true</allowRead>
+                </objectPermissions>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomObject').length, 1);
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV19 — coexists with fieldPermissions', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <fieldPermissions>
+                    <field>Invoice__c.Amount__c</field>
+                    <readable>true</readable>
+                </fieldPermissions>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.ok(byType(result, 'CustomField').length >= 1);
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV20 — coexists with recordTypeVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <recordTypeVisibilities>
+                    <recordType>Invoice__c.Retail</recordType>
+                    <visible>true</visible>
+                </recordTypeVisibilities>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'RecordType').length, 1);
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV21 — coexists with tabVisibilities', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <tabVisibilities>
+                    <tab>My_Custom_Tab</tab>
+                    <visibility>Visible</visibility>
+                </tabVisibilities>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'CustomTab').length, 1);
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV22 — coexists with classAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <classAccesses>
+                    <apexClass>InvoiceController</apexClass>
+                    <enabled>true</enabled>
+                </classAccesses>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexClass').length, 1);
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV23 — coexists with pageAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <pageAccesses>
+                    <apexPage>InvoicePage</apexPage>
+                    <enabled>true</enabled>
+                </pageAccesses>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'ApexPage').length, 1);
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV24 — coexists with flowAccesses', async () => {
+        const result = await discoverProfile(`
+            <Profile>
+                <flowAccesses>
+                    <flow>MyFlow</flow>
+                    <enabled>true</enabled>
+                </flowAccesses>
+                <applicationVisibilities>
+                    <application>My_App</application>
+                </applicationVisibilities>
+            </Profile>
+        `);
+
+        assert.strictEqual(byType(result, 'Flow').length, 1);
+        assert.strictEqual(byType(result, 'CustomApplication').length, 1);
+    });
+
+    await runTest('AV25 — PermissionSet regression remains passing', async () => {
+        const result = await permissionSetRelationshipDiscoverer.discover({
+            selectedMetadata: [
+                {
+                    metadataType: 'PermissionSet',
+                    metadataName: 'Subscription_Access',
+                    filePath: PERMISSION_SET_PATH
+                }
+            ],
+            repoFiles: [PERMISSION_SET_PATH],
+            readRepoFile: async () => `
+                <PermissionSet>
+                    <applicationVisibilities>
+                        <application>My_App</application>
+                        <visible>true</visible>
+                    </applicationVisibilities>
+                </PermissionSet>
+            `,
+            depth: 1
+        });
+
+        const apps = result.relationships.filter(
+            (r) => r.metadataType === 'CustomApplication'
+        );
+        assert.strictEqual(apps.length, 1);
+        assert.strictEqual(apps[0].name, 'My_App');
+        assert.strictEqual(
+            apps[0].relationship,
+            'PermissionSetApplicationVisibility'
+        );
+        assert.strictEqual(
+            apps[0].discoveredBy,
+            'PermissionSetRelationshipDiscoverer'
+        );
+    });
+
+    await runTest('AV26 — registry still contains ProfileRelationshipDiscoverer', () => {
+        const ids = getRegisteredDiscoverers().map((d) => d.id);
+        assert.ok(ids.includes('ProfileRelationshipDiscoverer'));
+        assert.ok(ids.includes('PermissionSetRelationshipDiscoverer'));
+    });
+
+    await runTest(
+        'AV — all Profile sections coexist with applicationVisibilities',
+        async () => {
+            const result = await discoverProfile(`
+                <Profile>
+                    <objectPermissions>
+                        <object>Invoice__c</object>
+                        <allowRead>true</allowRead>
+                    </objectPermissions>
+                    <fieldPermissions>
+                        <field>Invoice__c.Amount__c</field>
+                        <readable>true</readable>
+                    </fieldPermissions>
+                    <recordTypeVisibilities>
+                        <recordType>Invoice__c.Retail</recordType>
+                        <visible>true</visible>
+                    </recordTypeVisibilities>
+                    <tabVisibilities>
+                        <tab>My_Custom_Tab</tab>
+                        <visibility>Visible</visibility>
+                    </tabVisibilities>
+                    <classAccesses>
+                        <apexClass>InvoiceController</apexClass>
+                        <enabled>true</enabled>
+                    </classAccesses>
+                    <pageAccesses>
+                        <apexPage>InvoicePage</apexPage>
+                        <enabled>true</enabled>
+                    </pageAccesses>
+                    <flowAccesses>
+                        <flow>MyFlow</flow>
+                        <enabled>false</enabled>
+                    </flowAccesses>
+                    <applicationVisibilities>
+                        <application>My_App</application>
+                        <visible>false</visible>
+                        <default>false</default>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application>My App</application>
+                    </applicationVisibilities>
+                    <applicationVisibilities>
+                        <application>Salesforce_App</application>
+                    </applicationVisibilities>
+                </Profile>
+            `);
+
+            assert.strictEqual(byType(result, 'CustomObject').length, 1);
+            assert.strictEqual(byType(result, 'CustomField').length, 1);
+            assert.strictEqual(byType(result, 'RecordType').length, 1);
+            assert.strictEqual(byType(result, 'CustomTab').length, 1);
+            assert.strictEqual(byType(result, 'ApexClass').length, 1);
+            assert.strictEqual(byType(result, 'ApexPage').length, 1);
+            assert.strictEqual(byType(result, 'Flow').length, 1);
+            const apps = byType(result, 'CustomApplication');
+            assert.strictEqual(apps.length, 2);
+            assert.deepStrictEqual(
+                apps.map((a) => a.name).sort(),
+                ['My_App', 'Salesforce_App']
+            );
+            assert.ok(
+                apps.every(
+                    (a) => a.relationship === 'ProfileApplicationVisibility'
+                )
+            );
         }
     );
 

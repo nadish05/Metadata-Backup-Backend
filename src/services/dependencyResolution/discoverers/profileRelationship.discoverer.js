@@ -1,5 +1,5 @@
 /**
- * Profile Relationship Discoverer (Phase 19.2–19.8B)
+ * Profile Relationship Discoverer (Phase 19.2–19.9B)
  *
  * Profile-specific. Currently discovers:
  *   objectPermissions      → CustomObject (custom __c names)
@@ -9,6 +9,7 @@
  *   classAccesses          → ApexClass
  *   pageAccesses           → ApexPage
  *   flowAccesses           → Flow
+ *   applicationVisibilities → CustomApplication
  *
  * Does not process PermissionSet / PermissionSetGroup / MutingPermissionSet.
  * Does not import deployment, package, workspace, AI, or SAFE_SKIP services.
@@ -30,7 +31,8 @@ const RELATIONSHIPS = Object.freeze({
     TAB_VISIBILITY: 'ProfileTabVisibility',
     CLASS_ACCESS: 'ProfileClassAccess',
     PAGE_ACCESS: 'ProfilePageAccess',
-    FLOW_ACCESS: 'ProfileFlowAccess'
+    FLOW_ACCESS: 'ProfileFlowAccess',
+    APPLICATION_VISIBILITY: 'ProfileApplicationVisibility'
 });
 
 function normalizePath(filePath) {
@@ -208,7 +210,7 @@ function createRelationshipRecord({
 /**
  * Pure XML → relationships for Profile objectPermissions, fieldPermissions,
  * recordTypeVisibilities, tabVisibilities, classAccesses, pageAccesses,
- * and flowAccesses.
+ * flowAccesses, and applicationVisibilities.
  * @param {string} xml
  * @param {string} sourceMetadata Profile API name
  * @param {number} [depth=1]
@@ -389,6 +391,29 @@ function discoverProfileRelationships(xml, sourceMetadata, depth = 1) {
                 sourceField: 'flow',
                 discoveryMethod: 'flowAccesses',
                 reason: 'Profile flow access',
+                depth
+            })
+        );
+    }
+
+    for (const applicationName of extractSectionValues(
+        xml,
+        'applicationVisibilities',
+        'application'
+    )) {
+        if (!isValidMetadataName(applicationName)) {
+            continue;
+        }
+
+        addRelationship(
+            createRelationshipRecord({
+                name: applicationName,
+                metadataType: 'CustomApplication',
+                relationship: RELATIONSHIPS.APPLICATION_VISIBILITY,
+                sourceMetadata,
+                sourceField: 'application',
+                discoveryMethod: 'applicationVisibilities',
+                reason: 'Profile application visibility',
                 depth
             })
         );
