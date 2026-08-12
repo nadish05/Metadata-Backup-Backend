@@ -1,5 +1,6 @@
 const axios = require('axios');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { exec } = require('child_process');
 const util = require('util');
@@ -357,12 +358,210 @@ function logEmiPostRetrieveDebug(projectPath) {
     return debug;
 }
 
+const EXPLICIT_EMI_RETRIEVE_MEMBER =
+    'CustomObject:Equipment_Maintenance_Item__c';
+
+function extractOrgIdFromOrgDisplayJson(stdout) {
+    const payload = extractJsonPayload(stdout);
+    if (!payload) {
+        return null;
+    }
+
+    const result = payload.result && typeof payload.result === 'object'
+        ? payload.result
+        : payload;
+
+    return result.id || result.orgId || null;
+}
+
+function inspectExplicitEmiRetrieveFilesystem(projectPath) {
+    const resolvedProjectPath = path.resolve(projectPath);
+    const objectDirectory = path.join(
+        resolvedProjectPath,
+        'force-app',
+        'main',
+        'default',
+        'objects',
+        'Equipment_Maintenance_Item__c'
+    );
+    const objectFile = path.join(
+        objectDirectory,
+        'Equipment_Maintenance_Item__c.object-meta.xml'
+    );
+    const objectDirectoryExists = (() => {
+        try {
+            return fs.existsSync(objectDirectory)
+                && fs.statSync(objectDirectory).isDirectory();
+        } catch (error) {
+            return false;
+        }
+    })();
+    const objectFileExists = (() => {
+        try {
+            return fs.existsSync(objectFile)
+                && fs.statSync(objectFile).isFile();
+        } catch (error) {
+            return false;
+        }
+    })();
+    const retrievedFiles = objectDirectoryExists
+        ? collectFilesUnderDirectory(objectDirectory, resolvedProjectPath)
+        : [];
+
+    return {
+        objectDirectory,
+        objectDirectoryExists,
+        objectFileExists,
+        retrievedFiles,
+        fieldFileCount: retrievedFiles.filter((file) =>
+            file.includes('/fields/')
+        ).length
+    };
+}
+
+function buildExplicitEmiRetrieveDebugPayload({
+    orgId = null,
+    exitCode = null,
+    stdout = '',
+    projectPath
+} = {}) {
+    const summary = summarizeRetrieveResultJson(stdout);
+    const filesystem = inspectExplicitEmiRetrieveFilesystem(
+        projectPath || process.cwd()
+    );
+    const succeeded = filesystem.objectDirectoryExists
+        || filesystem.objectFileExists
+        || filesystem.retrievedFiles.length > 0;
+
+    return {
+        orgId: orgId || null,
+        alias: RETRIEVAL_CLI_ALIAS,
+        metadataType: 'CustomObject',
+        metadataMember: 'Equipment_Maintenance_Item__c',
+        exitCode,
+        status: summary.parsed ? summary.status : null,
+        fileCount: summary.parsed
+            ? summary.fileCount
+            : filesystem.retrievedFiles.length,
+        failureCount: summary.parsed ? summary.failureCount : null,
+        failures: summary.parsed ? summary.failures : [],
+        objectDirectoryExists: filesystem.objectDirectoryExists,
+        objectFileExists: filesystem.objectFileExists,
+        objectDirectory: filesystem.objectDirectory,
+        retrievedFiles: filesystem.retrievedFiles,
+        fieldFileCount: filesystem.fieldFileCount,
+        conclusion: succeeded
+            ? 'Explicit member retrieval succeeds.'
+            : 'Explicit member retrieval does not succeed.'
+    };
+}
+
+function logExplicitEmiRetrieveDebug(payload) {
+    console.log('====================================================');
+    console.log('EXPLICIT EMI RETRIEVAL DEBUG');
+    console.log('====================================================');
+    console.log(JSON.stringify({
+        orgId: payload.orgId,
+        alias: payload.alias,
+        metadataType: payload.metadataType,
+        metadataMember: payload.metadataMember,
+        exitCode: payload.exitCode,
+        status: payload.status,
+        fileCount: payload.fileCount,
+        failureCount: payload.failureCount,
+        objectDirectoryExists: payload.objectDirectoryExists,
+        objectFileExists: payload.objectFileExists,
+        objectDirectory: payload.objectDirectory,
+        retrievedFiles: payload.retrievedFiles
+    }, null, 2));
+    if (payload.failureCount > 0) {
+        console.log('failures (truncated):');
+        console.log(JSON.stringify(payload.failures, null, 2));
+    }
+    console.log('fieldFileCount:', payload.fieldFileCount);
+    console.log(payload.conclusion);
+    console.log('====================================================');
+}
+
+/**
+ * TEMP DIAGNOSTIC — isolated explicit EMI retrieve using the same temporg
+ * session. Must not change production retrieve args, files, or Git.
+ */
+async function runExplicitEmiRetrieveDiagnostic() {
+    const diagRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'emi-explicit-diag-')
+    );
+
+    try {
+        await execAsync(
+            `cd ${diagRoot} && sf project generate --name emi-diag-project`
+        );
+
+        const projectPath = path.join(diagRoot, 'emi-diag-project');
+        let orgId = null;
+
+        try {
+            const displayResult = await execAsync(
+                `sf org display -o ${RETRIEVAL_CLI_ALIAS} --json`
+            );
+            orgId = extractOrgIdFromOrgDisplayJson(displayResult.stdout);
+        } catch (error) {
+            orgId = extractOrgIdFromOrgDisplayJson(error.stdout);
+        }
+
+        let exitCode = 0;
+        let stdout = '';
+
+        try {
+            const retrieveResult = await execAsync(
+                `cd ${projectPath} && ` +
+                `sf project retrieve start ` +
+                `-o ${RETRIEVAL_CLI_ALIAS} ` +
+                `-m ${EXPLICIT_EMI_RETRIEVE_MEMBER} ` +
+                `--json`,
+                {
+                    maxBuffer: 50 * 1024 * 1024
+                }
+            );
+            stdout = retrieveResult.stdout || '';
+        } catch (error) {
+            exitCode = typeof error.code === 'number' ? error.code : 1;
+            stdout = error.stdout || '';
+        }
+
+        logExplicitEmiRetrieveDebug(
+            buildExplicitEmiRetrieveDebugPayload({
+                orgId,
+                exitCode,
+                stdout,
+                projectPath
+            })
+        );
+    } catch (error) {
+        console.log('====================================================');
+        console.log('EXPLICIT EMI RETRIEVAL DEBUG');
+        console.log('====================================================');
+        console.log('diagnostic failed:', error.message || String(error));
+        console.log('====================================================');
+    } finally {
+        try {
+            fs.rmSync(diagRoot, { recursive: true, force: true });
+        } catch (error) {
+            // Diagnostic cleanup must not affect production retrieval.
+        }
+    }
+}
+
 exports.RETRIEVAL_METADATA_TYPES = RETRIEVAL_METADATA_TYPES;
 exports.RETRIEVAL_STANDARD_OBJECT_MEMBERS = RETRIEVAL_STANDARD_OBJECT_MEMBERS;
 exports.buildRetrieveMetadataMembers = buildRetrieveMetadataMembers;
 exports.buildRetrieveMetadataArgs = buildRetrieveMetadataArgs;
 exports.summarizeRetrieveResultJson = summarizeRetrieveResultJson;
 exports.collectEmiPostRetrieveDebug = collectEmiPostRetrieveDebug;
+exports.EXPLICIT_EMI_RETRIEVE_MEMBER = EXPLICIT_EMI_RETRIEVE_MEMBER;
+exports.extractOrgIdFromOrgDisplayJson = extractOrgIdFromOrgDisplayJson;
+exports.inspectExplicitEmiRetrieveFilesystem = inspectExplicitEmiRetrieveFilesystem;
+exports.buildExplicitEmiRetrieveDebugPayload = buildExplicitEmiRetrieveDebugPayload;
 
 function resolveSourceOrgId(identityUrl) {
     try {
@@ -543,6 +742,10 @@ catch(error) {
 }
 
 console.log('STEP 4 COMPLETE');
+
+        // TEMP DIAGNOSTIC — explicit EMI retrieve in an isolated DX project
+        // using the same temporg session. Does not change production retrieve.
+        await runExplicitEmiRetrieveDiagnostic();
  
         console.log('STEP 5 - Retrieving ApexClass');
         setStatus('Retrieving ApexClass');

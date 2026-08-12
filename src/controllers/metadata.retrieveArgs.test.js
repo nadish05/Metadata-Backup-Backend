@@ -9,7 +9,11 @@ const {
     buildRetrieveMetadataMembers,
     buildRetrieveMetadataArgs,
     summarizeRetrieveResultJson,
-    collectEmiPostRetrieveDebug
+    collectEmiPostRetrieveDebug,
+    EXPLICIT_EMI_RETRIEVE_MEMBER,
+    extractOrgIdFromOrgDisplayJson,
+    inspectExplicitEmiRetrieveFilesystem,
+    buildExplicitEmiRetrieveDebugPayload
 } = require('./metadata.controller');
 
 function runTest(name, fn) {
@@ -222,6 +226,94 @@ async function main() {
             );
             assert.ok(
                 !debug.emiFiles.some((file) => file.includes('Equipment__c'))
+            );
+        } finally {
+            fs.rmSync(projectPath, { recursive: true, force: true });
+        }
+    });
+
+    await runTest('explicit EMI diagnostic member is isolated from production retrieve args', () => {
+        const args = buildRetrieveMetadataArgs();
+
+        assert.strictEqual(
+            EXPLICIT_EMI_RETRIEVE_MEMBER,
+            'CustomObject:Equipment_Maintenance_Item__c'
+        );
+        assert.ok(args.includes('-m CustomObject'));
+        assert.ok(!args.includes(EXPLICIT_EMI_RETRIEVE_MEMBER));
+        assert.ok(!args.includes('CustomObject:Equipment_Maintenance_Item__c'));
+    });
+
+    await runTest('extractOrgIdFromOrgDisplayJson returns org id without exposing tokens', () => {
+        const orgId = extractOrgIdFromOrgDisplayJson(JSON.stringify({
+            status: 0,
+            result: {
+                id: '00Dd200000OVtFoEAL',
+                accessToken: 'SECRET_ACCESS_TOKEN',
+                refreshToken: 'SECRET_REFRESH_TOKEN',
+                alias: 'temporg'
+            }
+        }));
+
+        assert.strictEqual(orgId, '00Dd200000OVtFoEAL');
+    });
+
+    await runTest('inspectExplicitEmiRetrieveFilesystem reports object xml and fields', () => {
+        const projectPath = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'emi-explicit-found-')
+        );
+
+        try {
+            const emiDir = path.join(
+                projectPath,
+                'force-app',
+                'main',
+                'default',
+                'objects',
+                'Equipment_Maintenance_Item__c'
+            );
+            const fieldsDir = path.join(emiDir, 'fields');
+            fs.mkdirSync(fieldsDir, { recursive: true });
+            fs.writeFileSync(
+                path.join(emiDir, 'Equipment_Maintenance_Item__c.object-meta.xml'),
+                '<CustomObject/>'
+            );
+            fs.writeFileSync(
+                path.join(fieldsDir, 'Maintenance_Request__c.field-meta.xml'),
+                '<CustomField/>'
+            );
+
+            const inspected = inspectExplicitEmiRetrieveFilesystem(projectPath);
+            const payload = buildExplicitEmiRetrieveDebugPayload({
+                orgId: '00Dd200000OVtFoEAL',
+                exitCode: 0,
+                stdout: JSON.stringify({
+                    status: 0,
+                    result: {
+                        files: [
+                            {
+                                fullName: 'Equipment_Maintenance_Item__c',
+                                type: 'CustomObject',
+                                filePath:
+                                    'force-app/main/default/objects/Equipment_Maintenance_Item__c/Equipment_Maintenance_Item__c.object-meta.xml'
+                            }
+                        ],
+                        failures: []
+                    }
+                }),
+                projectPath
+            });
+
+            assert.strictEqual(inspected.objectDirectoryExists, true);
+            assert.strictEqual(inspected.objectFileExists, true);
+            assert.strictEqual(inspected.fieldFileCount, 1);
+            assert.strictEqual(payload.alias, 'temporg');
+            assert.strictEqual(
+                payload.conclusion,
+                'Explicit member retrieval succeeds.'
+            );
+            assert.ok(
+                !JSON.stringify(payload).includes('SECRET')
             );
         } finally {
             fs.rmSync(projectPath, { recursive: true, force: true });
