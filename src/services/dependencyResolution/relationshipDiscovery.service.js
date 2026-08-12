@@ -319,16 +319,20 @@ function relationshipToScanTarget(relationship) {
         return null;
     }
 
-    // Only CustomObject nodes expand further in this phase.
-    // FlexiPage and other types become leaf nodes until future discoverers exist.
-    if (relationship.metadataType !== 'CustomObject') {
+    // Expand types that relationship discoverers can scan further
+    // (CustomObject + CustomField). CustomField expansion is required so
+    // Summary/Lookup/MasterDetail targets (e.g. roll-up summaryForeignKey)
+    // are discovered when a CustomField enters the graph indirectly
+    // (Profile / PermissionSet / Apex), not only when it is user-selected.
+    // Other types (FlexiPage, etc.) remain leaf nodes until dedicated discoverers exist.
+    if (!EXPANDABLE_DEPENDENCY_TYPES.includes(relationship.metadataType)) {
         return null;
     }
 
     return {
-        metadataType: 'CustomObject',
+        metadataType: relationship.metadataType,
         metadataName: relationship.name,
-        filePath: null
+        filePath: relationship.filePath || null
     };
 }
 
@@ -476,15 +480,16 @@ async function reviewNewlyDiscoveredMetadata({
                     allRelationships.push(graphItem);
                 }
 
-                // CustomObjects found via review (e.g. Apex analysis) can enter
-                // the existing Relationship Discovery frontier.
+                // Expandable dependency types found via review (CustomObject /
+                // CustomField) can enter the Relationship Discovery frontier.
                 if (
-                    dependency.type === 'CustomObject' &&
+                    EXPANDABLE_DEPENDENCY_TYPES.includes(dependency.type) &&
                     !reviewedMetadata.has(dependencyKey)
                 ) {
                     const scanTarget = relationshipToScanTarget({
                         name: dependency.name,
-                        metadataType: 'CustomObject'
+                        metadataType: dependency.type,
+                        filePath: dependency.filePath || null
                     });
 
                     if (scanTarget) {

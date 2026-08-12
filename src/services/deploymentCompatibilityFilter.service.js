@@ -119,6 +119,7 @@ function filter({
         deploymentCompatibilityPlan
     );
     const excludedComponents = [];
+    const excludedKeys = new Set();
     const excludedByCategory = {};
 
     const originalMetadata = Array.isArray(generatedDeploymentPackage.metadata)
@@ -142,10 +143,15 @@ function filter({
             return false;
         }
 
-        const exclusion = exclusionTargets.get(key);
-        excludedComponents.push({ ...exclusion });
-        excludedByCategory[exclusion.category] =
-            (excludedByCategory[exclusion.category] || 0) + 1;
+        // Same member can appear in both metadata and dependencies; exclude
+        // once from the package but report a single excludedComponents entry.
+        if (!excludedKeys.has(key)) {
+            excludedKeys.add(key);
+            const exclusion = exclusionTargets.get(key);
+            excludedComponents.push({ ...exclusion });
+            excludedByCategory[exclusion.category] =
+                (excludedByCategory[exclusion.category] || 0) + 1;
+        }
 
         return true;
     }
