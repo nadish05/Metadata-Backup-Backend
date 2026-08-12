@@ -110,6 +110,7 @@ runTest(
             `
             public class ExperienceController {
                 public void load() {
+                    List<Experience__c> experiences;
                     List<Session__c> sessions = [
                         SELECT Experience__r.Price__c
                         FROM Session__c
@@ -138,6 +139,7 @@ runTest(
             `
             public class ExperienceController {
                 public void load() {
+                    List<Experience__c> experiences;
                     List<Session__c> sessions = [
                         SELECT Booked_Slots__c,
                                Capacity__c,
@@ -161,6 +163,89 @@ runTest(
             !result.customFields.includes('Session__c.Price__c'),
             'Relationship field must not be qualified with FROM object'
         );
+    }
+);
+
+runTest(
+    'Equipment__r.Maintenance_Cycle__c does not invent Equipment__c.Maintenance_Cycle__c',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceRequestHelper {
+                public void load() {
+                    List<Equipment_Maintenance_Item__c> items = [
+                        SELECT Maintenance_Request__c,
+                               Equipment__r.Maintenance_Cycle__c
+                        FROM Equipment_Maintenance_Item__c
+                    ];
+                    Case c = [
+                        SELECT Id, Equipment__c, Equipment__r.Maintenance_Cycle__c
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'MaintenanceRequestHelper'
+        );
+
+        assert.ok(
+            !result.customFields.includes('Equipment__c.Maintenance_Cycle__c'),
+            `Must not invent Equipment__c.Maintenance_Cycle__c, got: ${result.customFields.join(', ')}`
+        );
+        assert.ok(
+            !result.customObjects.includes('Equipment__c'),
+            'Equipment__c must not be emitted as CustomObject'
+        );
+        assert.ok(
+            result.customObjects.includes('Equipment_Maintenance_Item__c'),
+            'Equipment_Maintenance_Item__c must remain CustomObject'
+        );
+    }
+);
+
+runTest(
+    'Relationship__r.Field__c emits CustomField when related __c has strong object evidence',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class RegistrationController {
+                public void load() {
+                    List<Experience__c> experiences;
+                    List<Experience_Registration__c> rows = [
+                        SELECT Experience__r.Price__c
+                        FROM Experience_Registration__c
+                    ];
+                }
+            }
+            `,
+            'RegistrationController'
+        );
+
+        assert.ok(result.customFields.includes('Experience__c.Price__c'));
+        assert.ok(result.customObjects.includes('Experience__c'));
+        assert.ok(
+            result.customObjects.includes('Experience_Registration__c')
+        );
+    }
+);
+
+runTest(
+    'Direct Vehicle__c.Some_Field__c remains CustomField when Vehicle__c is proven',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class FleetService {
+                public void run() {
+                    Vehicle__c v = new Vehicle__c();
+                    v.Some_Field__c = 'x';
+                }
+            }
+            `,
+            'FleetService'
+        );
+
+        assert.ok(result.customObjects.includes('Vehicle__c'));
+        assert.ok(result.customFields.includes('Vehicle__c.Some_Field__c'));
     }
 );
 

@@ -330,8 +330,17 @@ function extractVariableObjectTypes(cleanedContent) {
  * - Relationship fields → related object:
  *   Experience__r.Price__c → Experience__c.Price__c
  *   (never FROMObject.Price__c)
+ *
+ * Relationship__r.Field__c is only rewritten to Relationship__c.Field__c when
+ * Relationship__c has independent strong CustomObject evidence in the same
+ * analysis unit. Lookup fields whose __r name matches a field API name
+ * (e.g. Case.Equipment__c → Equipment__r.Maintenance_Cycle__c targeting
+ * Product2) must not invent CustomField Equipment__c.Maintenance_Cycle__c.
+ *
+ * @param {string} cleanedContent
+ * @param {Set<string>} [strongObjectNames]
  */
-function extractSoqlQualifiedFields(cleanedContent) {
+function extractSoqlQualifiedFields(cleanedContent, strongObjectNames = new Set()) {
     const qualifiedFields = new Set();
     const soqlBlocks = cleanedContent.matchAll(/\[([\s\S]*?)\]/g);
 
@@ -358,7 +367,10 @@ function extractSoqlQualifiedFields(cleanedContent) {
         const selectClause = selectMatch[1];
 
         // 1) Relationship-qualified fields: Relationship__r.Field__c
-        //    → Relationship__c.Field__c (not FROMObject.Field__c).
+        //    → Relationship__c.Field__c only when Relationship__c is a proven
+        //    CustomObject (strong object evidence). Otherwise the __r name may
+        //    be a lookup field on the FROM object whose target is not
+        //    Relationship__c (e.g. Equipment__r → Product2).
         for (const match of selectClause.matchAll(
             /\b([A-Za-z0-9_]+__r)\.([A-Za-z0-9_]+__c)\b/g
         )) {
@@ -368,6 +380,11 @@ function extractSoqlQualifiedFields(cleanedContent) {
                 /__r$/i,
                 '__c'
             );
+
+            if (!strongObjectNames.has(relatedObjectApiName)) {
+                continue;
+            }
+
             const qualified = `${relatedObjectApiName}.${fieldApiName}`;
             qualifiedFields.add(qualified);
         }
@@ -430,7 +447,8 @@ function extractSoqlSelectFieldTokens(cleanedContent) {
 }
 
 function classifyCustomObjectsAndFields(cleanedContent) {
-    const { objectNames } = extractObjectContextNames(cleanedContent);
+    const { objectNames, strongObjectNames } =
+        extractObjectContextNames(cleanedContent);
     const customObjects = [];
     // Salesforce CustomField identity is always ObjectApiName.FieldApiName.
     // Never emit bare __c field tokens — that loses parent context.
@@ -468,8 +486,11 @@ function classifyCustomObjectsAndFields(cleanedContent) {
         }
     }
 
-    // 3) Qualify SOQL SELECT fields with the FROM object.
-    for (const qualifiedField of extractSoqlQualifiedFields(cleanedContent)) {
+    // 3) Qualify SOQL SELECT fields with the FROM object / proven related objects.
+    for (const qualifiedField of extractSoqlQualifiedFields(
+        cleanedContent,
+        strongObjectNames
+    )) {
         customFields.add(qualifiedField);
     }
 
