@@ -21,6 +21,202 @@ const {
 
 const RETRIEVAL_CLI_ALIAS = 'temporg';
 
+/**
+ * Metadata types requested by retrieveMetadataInternal via `-m <Type>`.
+ * Keep in sync with the migrate backup retrieve path only.
+ */
+const RETRIEVAL_METADATA_TYPES = [
+    'ApexClass',
+    'ApexTrigger',
+    'LightningComponentBundle',
+    'AuraDefinitionBundle',
+    'FlexiPage',
+    'ApexPage',
+    'ApexComponent',
+    'CustomObject',
+    'CustomField',
+    'CustomTab',
+    'ValidationRule',
+    'RecordType',
+    'Flow',
+    'Workflow',
+    'AssignmentRules',
+    'EscalationRules',
+    'PermissionSet',
+    'CustomPermission',
+    'Profile',
+    'NamedCredential',
+    'ExternalCredential',
+    'CustomLabel',
+    'CustomMetadata'
+];
+
+/**
+ * Standard-object members required so Profile RecordTypes on Account /
+ * Opportunity are retrieved. Bare `-m CustomObject` does not return these.
+ * Do NOT add Equipment__c (Equipment label maps to Product2).
+ */
+const RETRIEVAL_STANDARD_OBJECT_MEMBERS = [
+    'CustomObject:Account',
+    'CustomObject:Opportunity'
+];
+
+const RETRIEVE_RESULT_PROBES = [
+    'Equipment_Maintenance_Item__c',
+    'Maintenance_Request__c'
+];
+
+function buildRetrieveMetadataMembers() {
+    return [
+        ...RETRIEVAL_METADATA_TYPES,
+        ...RETRIEVAL_STANDARD_OBJECT_MEMBERS
+    ];
+}
+
+function buildRetrieveMetadataArgs(members = buildRetrieveMetadataMembers()) {
+    return members.map((member) => `-m ${member}`).join(' ');
+}
+
+function extractJsonPayload(stdout) {
+    const text = String(stdout || '').trim();
+    if (!text) {
+        return null;
+    }
+
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start < 0 || end < start) {
+        return null;
+    }
+
+    try {
+        return JSON.parse(text.slice(start, end + 1));
+    } catch (error) {
+        return null;
+    }
+}
+
+function collectRetrieveFileStrings(files) {
+    if (!Array.isArray(files)) {
+        return [];
+    }
+
+    return files.map((file) => {
+        if (typeof file === 'string') {
+            return file;
+        }
+        if (!file || typeof file !== 'object') {
+            return String(file);
+        }
+
+        return [
+            file.filePath,
+            file.path,
+            file.fullName,
+            file.type,
+            file.state
+        ]
+            .filter(Boolean)
+            .join(' ');
+    });
+}
+
+function summarizeRetrieveResultJson(stdout) {
+    const text = String(stdout || '').trim();
+    if (!text) {
+        return {
+            parsed: false,
+            reason: 'empty_stdout'
+        };
+    }
+
+    const payload = extractJsonPayload(text);
+    if (!payload) {
+        return {
+            parsed: false,
+            reason: 'invalid_json',
+            stdoutLength: text.length
+        };
+    }
+
+    const result = payload.result && typeof payload.result === 'object'
+        ? payload.result
+        : payload;
+    const files = result.files || result.fileProperties || [];
+    const failures = result.failures
+        || (Array.isArray(result.messages) ? result.messages : null)
+        || payload.warnings
+        || [];
+    const fileStrings = collectRetrieveFileStrings(files);
+    const searchText = `${fileStrings.join('\n')}\n${JSON.stringify(failures)}`;
+
+    const probes = {};
+    for (const name of RETRIEVE_RESULT_PROBES) {
+        probes[name] = searchText.includes(name);
+    }
+
+    return {
+        parsed: true,
+        status: payload.status,
+        fileCount: fileStrings.length,
+        failureCount: Array.isArray(failures) ? failures.length : 0,
+        failures: Array.isArray(failures) ? failures.slice(0, 25) : failures,
+        sampleFiles: fileStrings.slice(0, 40),
+        probes
+    };
+}
+
+function logRetrieveResultDebug(stdout) {
+    const summary = summarizeRetrieveResultJson(stdout);
+
+    console.log('========================================');
+    console.log('METADATA RETRIEVE RESULT DEBUG');
+    console.log('========================================');
+
+    if (!summary.parsed) {
+        console.log('parsed: false');
+        console.log('reason:', summary.reason);
+        if (summary.stdoutLength != null) {
+            console.log('stdoutLength:', summary.stdoutLength);
+        }
+        console.log('========================================');
+        return summary;
+    }
+
+    console.log('status:', summary.status);
+    console.log('fileCount:', summary.fileCount);
+    console.log('failureCount:', summary.failureCount);
+    console.log('probes:', JSON.stringify(summary.probes, null, 2));
+
+    if (summary.failureCount > 0) {
+        console.log('failures (truncated):');
+        console.log(JSON.stringify(summary.failures, null, 2));
+    }
+
+    if (summary.sampleFiles.length > 0) {
+        console.log('sampleFiles (truncated):');
+        for (const file of summary.sampleFiles) {
+            console.log(' -', file);
+        }
+        if (summary.fileCount > summary.sampleFiles.length) {
+            console.log(
+                ` - ... ${summary.fileCount - summary.sampleFiles.length} more file(s)`
+            );
+        }
+    } else {
+        console.log('sampleFiles: (none)');
+    }
+
+    console.log('========================================');
+    return summary;
+}
+
+exports.RETRIEVAL_METADATA_TYPES = RETRIEVAL_METADATA_TYPES;
+exports.RETRIEVAL_STANDARD_OBJECT_MEMBERS = RETRIEVAL_STANDARD_OBJECT_MEMBERS;
+exports.buildRetrieveMetadataMembers = buildRetrieveMetadataMembers;
+exports.buildRetrieveMetadataArgs = buildRetrieveMetadataArgs;
+exports.summarizeRetrieveResultJson = summarizeRetrieveResultJson;
+
 function resolveSourceOrgId(identityUrl) {
     try {
         const segments = new URL(identityUrl).pathname
@@ -203,53 +399,66 @@ console.log('STEP 4 COMPLETE');
  
         console.log('STEP 5 - Retrieving ApexClass');
         setStatus('Retrieving ApexClass');
- 
-const metadataTypes = [
- 'ApexClass',
- 'ApexTrigger',
- 'LightningComponentBundle',
- 'AuraDefinitionBundle',
- 'FlexiPage',
- 'ApexPage',
- 'ApexComponent',
- 'CustomObject',
- 'CustomField',
- 'CustomTab',
- 'ValidationRule',
- 'RecordType',
- 'Flow',
- 'Workflow',
- 'AssignmentRules',
- 'EscalationRules',
- 'PermissionSet',
- 'CustomPermission',
- 'Profile',
- 'NamedCredential',
- 'ExternalCredential',
- 'CustomLabel',
- 'CustomMetadata'
-];
 
-const metadataArgs =
- metadataTypes
- .map(type => `-m ${type}`)
- .join(' ');
+const metadataArgs = buildRetrieveMetadataArgs();
 
 console.log(
  'Retrieving Full Metadata...'
 );
+console.log('Retrieve metadata args:', metadataArgs);
 setStatus('Retrieving Full Metadata');
 
-await execAsync(
- `cd ${workspace}/backup-project && ` +
- `sf project retrieve start ` +
- `-o temporg ` +
- `${metadataArgs} ` +
- `--json`,
- {
-     maxBuffer: 50 * 1024 * 1024
- }
-);
+let retrieveStdout = '';
+let retrieveStderr = '';
+
+try {
+    const retrieveCliResult = await execAsync(
+        `cd ${workspace}/backup-project && ` +
+        `sf project retrieve start ` +
+        `-o temporg ` +
+        `${metadataArgs} ` +
+        `--json`,
+        {
+            maxBuffer: 50 * 1024 * 1024
+        }
+    );
+
+    retrieveStdout = retrieveCliResult.stdout || '';
+    retrieveStderr = retrieveCliResult.stderr || '';
+} catch (error) {
+    retrieveStdout = error.stdout || '';
+    retrieveStderr = error.stderr || '';
+
+    logRetrieveResultDebug(retrieveStdout);
+
+    if (retrieveStderr) {
+        console.log('RETRIEVE STDERR');
+        console.log(retrieveStderr);
+    }
+
+    // Preserve existing behavior: CLI non-zero exit still fails the migrate.
+    throw error;
+}
+
+const retrieveSummary = logRetrieveResultDebug(retrieveStdout);
+
+if (retrieveStderr) {
+    console.log('RETRIEVE STDERR');
+    console.log(retrieveStderr);
+}
+
+// Narrow check only: Salesforce CLI reported a non-zero JSON status
+// even though the process may have returned stdout. Do not change
+// behavior for status 0 / unparsable stdout (continue as before).
+if (
+    retrieveSummary.parsed &&
+    typeof retrieveSummary.status === 'number' &&
+    retrieveSummary.status !== 0
+) {
+    throw new Error(
+        `Salesforce CLI retrieve reported status ${retrieveSummary.status}`
+    );
+}
 
 console.log(
  'Full Metadata Retrieval Complete'
