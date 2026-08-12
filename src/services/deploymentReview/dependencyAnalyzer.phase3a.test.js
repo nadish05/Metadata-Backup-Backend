@@ -163,3 +163,176 @@ runTest(
         );
     }
 );
+
+runTest('VF Page.* does not produce ApexClass Page', () => {
+    const result = analyzeApexContent(
+        `
+        public class SiteController {
+            public PageReference go() {
+                return Page.ChangePassword;
+            }
+            public PageReference confirm() {
+                return Page.CommunitiesSelfRegConfirm;
+            }
+        }
+        `,
+        'SiteController'
+    );
+
+    assert.ok(
+        !result.apexClasses.includes('Page'),
+        `Page must not be emitted, got: ${result.apexClasses.join(', ')}`
+    );
+});
+
+runTest('Schema.SObjectType.User does not produce ApexClass SObjectType', () => {
+    const result = analyzeApexContent(
+        `
+        public class DescribeHelper {
+            public void run() {
+                Schema.DescribeSObjectResult d = Schema.SObjectType.User;
+            }
+        }
+        `,
+        'DescribeHelper'
+    );
+
+    assert.ok(!result.apexClasses.includes('SObjectType'));
+    assert.ok(!result.apexClasses.includes('Schema'));
+    assert.ok(!result.apexClasses.includes('User'));
+});
+
+runTest('Standard sObject dotted/new references are not ApexClass deps', () => {
+    const result = analyzeApexContent(
+        `
+        public class StandardObjectConsumer {
+            public void run() {
+                Schema.SObjectField f = User.fields.Name;
+                Account a = new Account();
+                Contact c = new Contact();
+                Case k = new Case();
+                User u = new User();
+                Decimal rev = Account.Total_Revenue__c;
+            }
+        }
+        `,
+        'StandardObjectConsumer'
+    );
+
+    assert.ok(!result.apexClasses.includes('User'));
+    assert.ok(!result.apexClasses.includes('Account'));
+    assert.ok(!result.apexClasses.includes('Contact'));
+    assert.ok(!result.apexClasses.includes('Case'));
+});
+
+runTest('NoAccessException is not emitted as ApexClass dependency', () => {
+    const result = analyzeApexContent(
+        `
+        public class AccessGuard {
+            public void deny() {
+                throw new NoAccessException();
+            }
+        }
+        `,
+        'AccessGuard'
+    );
+
+    assert.ok(!result.apexClasses.includes('NoAccessException'));
+});
+
+runTest('Legitimate custom Apex classes still discovered after FP guards', () => {
+    const result = analyzeApexContent(
+        `
+        public class MyController {
+            public void run() {
+                HelperService.doWork();
+                new AccountHelper();
+                new HelperService();
+            }
+        }
+        `,
+        'MyController'
+    );
+
+    assert.ok(result.apexClasses.includes('HelperService'));
+    assert.ok(result.apexClasses.includes('AccountHelper'));
+});
+
+runTest('Legitimate custom objects still discovered', () => {
+    const result = analyzeApexContent(
+        `
+        public class FleetService {
+            public void run() {
+                Vehicle__c v = new Vehicle__c();
+                Error_Log__c e;
+                List<Maintenance_Request__c> rows;
+                Equipment_Maintenance_Item__c item =
+                    new Equipment_Maintenance_Item__c();
+                Comparison_Result__c comparison;
+            }
+        }
+        `,
+        'FleetService'
+    );
+
+    assert.ok(result.customObjects.includes('Vehicle__c'));
+    assert.ok(result.customObjects.includes('Error_Log__c'));
+    assert.ok(result.customObjects.includes('Maintenance_Request__c'));
+    assert.ok(
+        result.customObjects.includes('Equipment_Maintenance_Item__c')
+    );
+    assert.ok(result.customObjects.includes('Comparison_Result__c'));
+});
+
+runTest(
+    'Weak typed field API names are not promoted to CustomObject',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceService {
+                public void load() {
+                    Date_Due__c d;
+                    End_Time__c endTime;
+                    Start_Time__c startTime;
+                    Maintenance_Request__c request;
+                    List<Maintenance_Request__c> rows = [
+                        SELECT Date_Due__c,
+                               End_Time__c,
+                               Start_Time__c
+                        FROM Maintenance_Request__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceService'
+        );
+
+        assert.ok(
+            result.customObjects.includes('Maintenance_Request__c'),
+            'Maintenance_Request__c must remain a CustomObject'
+        );
+        assert.ok(
+            result.customFields.includes('Maintenance_Request__c.Date_Due__c')
+        );
+        assert.ok(
+            result.customFields.includes('Maintenance_Request__c.End_Time__c')
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Maintenance_Request__c.Start_Time__c'
+            )
+        );
+        assert.ok(
+            !result.customObjects.includes('Date_Due__c'),
+            'Date_Due__c must not be CustomObject'
+        );
+        assert.ok(
+            !result.customObjects.includes('End_Time__c'),
+            'End_Time__c must not be CustomObject'
+        );
+        assert.ok(
+            !result.customObjects.includes('Start_Time__c'),
+            'Start_Time__c must not be CustomObject'
+        );
+    }
+);

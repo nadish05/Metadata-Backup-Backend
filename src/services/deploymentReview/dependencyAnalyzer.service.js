@@ -30,6 +30,7 @@ const SYSTEM_CLASSES = new Set([
     'Exception',
     'CalloutException',
     'AuraHandledException',
+    'NoAccessException',
     'UserInfo',
     'LoggingLevel',
     'Test',
@@ -215,26 +216,55 @@ function isRelationshipReferenceToken(name) {
     return name.endsWith('__r');
 }
 
+/**
+ * Standard Salesforce sObjects that must never be emitted as ApexClass
+ * dependencies from dotted_reference / new_type. Intentionally narrow —
+ * only proven false positives, not a full platform object catalog.
+ */
+const STANDARD_SOBJECTS_NOT_APEX_CLASS = new Set([
+    'Account',
+    'Contact',
+    'User',
+    'Case'
+]);
+
+/**
+ * Left-hand dotted tokens that are platform/VF globals, not Apex classes.
+ */
+const DOTTED_REFERENCE_LEFT_EXCLUSIONS = new Set(['Page', 'SObjectType']);
+
 function extractObjectContextNames(cleanedContent) {
     const objectNames = new Set();
+    const strongObjectNames = new Set();
 
-    const objectPatterns = [
+    // Strong evidence: real sObject type usage (new / SOQL DML / collections /
+    // Schema / for-each / cast / typed method). Weak typed-variable alone is
+    // tracked separately so field API names used as "types" can be suppressed.
+    const strongObjectPatterns = [
         /\bnew\s+([A-Za-z0-9_]+__c)\b/g,
         /\b(?:FROM|UPDATE|INSERT|DELETE|UPSERT|MERGE|UNDELETE)\s+([A-Za-z0-9_]+__c)\b/gi,
         /\bList<\s*([A-Za-z0-9_]+__c)\s*>/g,
         /\bSet<\s*([A-Za-z0-9_]+__c)\s*>/g,
         /\bMap<\s*[^,>]+\s*,\s*([A-Za-z0-9_]+__c)\s*>/g,
         /\bSchema\.SObjectType\.([A-Za-z0-9_]+__c)\b/g,
-        /\b([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\b/g,
         /\bfor\s*\(\s*([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\s*:/gi,
         /\(\s*([A-Za-z0-9_]+__c)\s*\)/g,
         /\b([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\s*\(/g
     ];
 
-    objectPatterns.forEach((pattern) => {
-        const matches = cleanedContent.matchAll(pattern);
+    const weakObjectPatterns = [
+        /\b([A-Za-z0-9_]+__c)\s+[a-z][A-Za-z0-9_]*\b/g
+    ];
 
-        for (const match of matches) {
+    strongObjectPatterns.forEach((pattern) => {
+        for (const match of cleanedContent.matchAll(pattern)) {
+            objectNames.add(match[1]);
+            strongObjectNames.add(match[1]);
+        }
+    });
+
+    weakObjectPatterns.forEach((pattern) => {
+        for (const match of cleanedContent.matchAll(pattern)) {
             objectNames.add(match[1]);
         }
     });
@@ -245,7 +275,9 @@ function extractObjectContextNames(cleanedContent) {
         ) || [];
 
     dottedFieldRefs.forEach((fieldRef) => {
-        objectNames.add(fieldRef.split('.')[0]);
+        const objectApiName = fieldRef.split('.')[0];
+        objectNames.add(objectApiName);
+        strongObjectNames.add(objectApiName);
     });
 
     const objectPropertyAccess = cleanedContent.matchAll(
@@ -254,9 +286,10 @@ function extractObjectContextNames(cleanedContent) {
 
     for (const match of objectPropertyAccess) {
         objectNames.add(match[1]);
+        strongObjectNames.add(match[1]);
     }
 
-    return objectNames;
+    return { objectNames, strongObjectNames };
 }
 
 /**
@@ -355,7 +388,8 @@ function extractSoqlQualifiedFields(cleanedContent) {
 }
 
 function classifyCustomObjectsAndFields(cleanedContent) {
-    const objectNames = extractObjectContextNames(cleanedContent);
+    const { objectNames, strongObjectNames } =
+        extractObjectContextNames(cleanedContent);
     const customObjects = [];
     // Salesforce CustomField identity is always ObjectApiName.FieldApiName.
     // Never emit bare __c field tokens — that loses parent context.
@@ -398,14 +432,36 @@ function classifyCustomObjectsAndFields(cleanedContent) {
         customFields.add(qualifiedField);
     }
 
+    const customFieldSegments = new Set(
+        [...customFields]
+            .map((qualified) => {
+                const parts = String(qualified).split('.');
+                return parts.length === 2 ? parts[1] : null;
+            })
+            .filter(Boolean)
+    );
+
     // 4) Remaining __c tokens with object context are CustomObjects.
     //    Unqualified __c tokens are NOT CustomFields (invalid identity).
+    //    Weak-only typed-variable evidence is suppressed when the token is
+    //    already the field segment of a CustomField in this analysis.
     const allTokens = uniqueSorted(
         cleanedContent.match(/\b[A-Za-z0-9_]+__c\b/g) || []
     );
 
     allTokens.forEach((token) => {
-        if (objectNames.has(token)) {
+        if (!objectNames.has(token)) {
+            return;
+        }
+
+        if (strongObjectNames.has(token)) {
+            customObjects.push(token);
+            return;
+        }
+
+        // Weak-only (Type__c varname) — keep real objects declared as types,
+        // but do not promote field API names that already appear as fields.
+        if (!customFieldSegments.has(token)) {
             customObjects.push(token);
         }
     });
@@ -492,11 +548,8 @@ function analyzeApexContent(content, currentClassName) {
         .replace(/\bFlow\.Interview\.[A-Za-z0-9_]+\b/g, '')
         .replace(/\b[A-Za-z0-9_]+__r\./g, '');
 
-    const classRefs =
-        contentForClassRefs.match(
-            /\b[A-Z][A-Za-z0-9_]+\./g
-        ) || [];
-
+    // Same dotted / new_type regex shapes as before; structural emission
+    // guards (Page / SObjectType / standard sObjects / __c members) applied below.
     const constructorMatches =
         contentForClassRefs.match(
             /\bnew\s+([A-Z][A-Za-z0-9_]+)\b/g
@@ -531,22 +584,58 @@ function analyzeApexContent(content, currentClassName) {
     function isEmittedApexClass(name) {
         return (
             !excludedClasses.has(normalizeApexIdentifier(name)) &&
+            !STANDARD_SOBJECTS_NOT_APEX_CLASS.has(name) &&
             !isSalesforceMetadataToken(name) &&
             !isRelationshipReferenceToken(name)
         );
     }
 
-    // Same emission filters as before (classRefs / constructorMatches regexes unchanged).
+    function shouldEmitDottedReferenceAsApexClass(name, memberName) {
+        // Field access (standard or custom object): Account.Total_Revenue__c
+        if (
+            memberName &&
+            (memberName.endsWith('__c') || memberName.endsWith('__mdt'))
+        ) {
+            return false;
+        }
+
+        // VF Page.X and Schema.SObjectType.X middle token
+        if (DOTTED_REFERENCE_LEFT_EXCLUSIONS.has(name)) {
+            return false;
+        }
+
+        return isEmittedApexClass(name);
+    }
+
+    // Emission filters for dotted_reference / new_type (regex shapes unchanged).
+    // Structural guards suppress proven false positives only.
     const dottedApexByName = new Map();
-    for (const ref of classRefs) {
-        const name = ref.replace(/\.$/, '');
-        if (!isEmittedApexClass(name)) {
+    for (const match of contentForClassRefs.matchAll(
+        /\b([A-Z][A-Za-z0-9_]+)\./g
+    )) {
+        const name = match[1];
+        const matchedPrefix = match[0];
+        const after = contentForClassRefs.slice(
+            match.index + matchedPrefix.length
+        );
+        const trailing = after.match(/^([A-Za-z][A-Za-z0-9_]*)/);
+        const memberName = trailing ? trailing[1] : '';
+
+        if (!shouldEmitDottedReferenceAsApexClass(name, memberName)) {
             continue;
         }
+
         if (!dottedApexByName.has(name)) {
+            const matchedText = memberName
+                ? `${matchedPrefix}${memberName}`
+                : matchedPrefix;
             dottedApexByName.set(name, {
-                matchedText: ref,
-                context: extractDiagnosticMatchContext(contentForClassRefs, ref)
+                matchedText,
+                context: extractDiagnosticMatchContext(
+                    contentForClassRefs,
+                    matchedText
+                ),
+                _enriched: Boolean(memberName)
             });
         }
     }
@@ -566,34 +655,6 @@ function analyzeApexContent(content, currentClassName) {
                 )
             });
         }
-    }
-
-    // TEMP DIAGNOSTIC — enrich dotted matchedText with Type.Member when present.
-    for (const match of contentForClassRefs.matchAll(
-        /\b[A-Z][A-Za-z0-9_]+\./g
-    )) {
-        const matchedPrefix = match[0];
-        const name = matchedPrefix.replace(/\.$/, '');
-        const existing = dottedApexByName.get(name);
-
-        if (!existing || existing._enriched) {
-            continue;
-        }
-
-        const after = contentForClassRefs.slice(
-            match.index + matchedPrefix.length
-        );
-        const trailing = after.match(/^([A-Za-z][A-Za-z0-9_]*)/);
-        const matchedText = trailing
-            ? `${matchedPrefix}${trailing[1]}`
-            : matchedPrefix;
-
-        existing.matchedText = matchedText;
-        existing.context = extractDiagnosticMatchContext(
-            contentForClassRefs,
-            matchedText
-        );
-        existing._enriched = true;
     }
 
     const apexClasses = uniqueSorted([
