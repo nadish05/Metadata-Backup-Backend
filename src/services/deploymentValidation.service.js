@@ -22,6 +22,7 @@ const deploymentPackageProvenanceService = require('./deploymentPackageProvenanc
 const packageXmlService = require('./packageXml.service');
 const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
+const deploymentCheckOnlyGateService = require('./deploymentCheckOnlyGate.service');
 const deploymentExecutionService = require('./deploymentExecution.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
 const metadataCompatibilityService = require('./metadataCompatibility/metadataCompatibility.service');
@@ -1857,7 +1858,7 @@ async function validateDeployment({
     logSection('Deployment Mode Selected');
     console.log('Mode:', deploymentMode);
 
-    let checkOnlyDeployment;
+    let checkOnlyDeployment = null;
     let deploymentExecution;
 
     // TEMP (Phase 15.3.1) — PersonAccount trace step 7 and final report.
@@ -1871,22 +1872,44 @@ async function validateDeployment({
     });
     personAccountTrace.logPersonAccountReport();
 
-    if (!compatibilityDeploymentSkipped) {
-        if (deploymentMode === 'DEPLOY') {
+    // Safety contract: actual deploy requires Salesforce check-only SUCCESS.
+    // Phase 11.4 skip is preserved — when skipped, check-only is NOT EXECUTED
+    // and actual deployment must not run.
+    if (compatibilityDeploymentSkipped) {
+        const skipReason =
+            deploymentReadiness?.reason ||
+            generatedWorkspace?.skippedReason ||
+            'Pre-validation blocked check-only execution.';
+        deploymentCheckOnlyGateService.logCheckOnlySkipped(skipReason);
+        checkOnlyDeployment =
+            deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
+                skipReason
+            );
+    } else {
+        checkOnlyDeployment =
+            deploymentCheckOnlyGateService.annotateCheckOnlyExecuted(
+                await checkOnlyDeploymentService.runCheckOnlyDeployment({
+                    generatedWorkspace,
+                    generatedManifest,
+                    refreshToken,
+                    instanceUrl,
+                    deploymentApiVersion
+                })
+            );
+
+        if (
+            deploymentCheckOnlyGateService.shouldAllowActualDeployment({
+                deploymentMode,
+                checkOnlyDeployment,
+                canDeploy: deploymentReadiness?.canDeploy
+            })
+        ) {
             deploymentExecution =
                 await deploymentExecutionService.runDeploymentExecution({
                     generatedWorkspace,
                     generatedManifest,
                     deploymentReadiness,
-                    refreshToken,
-                    instanceUrl,
-                    deploymentApiVersion
-                });
-        } else {
-            checkOnlyDeployment =
-                await checkOnlyDeploymentService.runCheckOnlyDeployment({
-                    generatedWorkspace,
-                    generatedManifest,
+                    priorCheckOnlyDeployment: checkOnlyDeployment,
                     refreshToken,
                     instanceUrl,
                     deploymentApiVersion
@@ -1956,18 +1979,24 @@ async function validateDeployment({
                 blockingComponents: compatibilityBlockingComponents
             })
         );
-    } else if (deploymentMode === 'DEPLOY') {
-        response.deploymentExecution = deploymentExecution;
-    } else {
-        response.checkOnlyDeployment = checkOnlyDeployment;
     }
 
-    const deploymentResult =
-        compatibilityDeploymentSkipped
-            ? null
-            : deploymentMode === 'DEPLOY'
-              ? deploymentExecution
-              : checkOnlyDeployment;
+    // Always expose check-only state (SUCCESS / FAILURE / NOT_EXECUTED).
+    response.checkOnlyDeployment = checkOnlyDeployment;
+
+    if (deploymentExecution) {
+        response.deploymentExecution = deploymentExecution;
+    }
+
+    // Prefer actual deploy outcome when it ran; otherwise use check-only.
+    // When Phase 11.4 skips check-only, keep deployOutcome null so
+    // classification continues to use compatibility/dependency inputs only
+    // (do not fabricate a Salesforce CLI failure from NOT_EXECUTED).
+    const deploymentResult = deploymentExecution
+        ? deploymentExecution
+        : compatibilityDeploymentSkipped
+          ? null
+          : checkOnlyDeployment;
 
     // Additive diagnostics only — existing nested deploy payloads unchanged.
     if (deploymentResult?.deploymentDiagnostics) {
@@ -2115,11 +2144,17 @@ async function validateDeployment({
             stage:
                 compatibilityDeploymentSkipped
                     ? deploymentHistoryService.STAGES.PACKAGE_GENERATED
-                    : deploymentMode === 'DEPLOY'
+                    : deploymentExecution
                       ? deploymentHistoryService.STAGES.DEPLOYMENT_EXECUTED
                       : deploymentHistoryService.STAGES.CHECK_ONLY_COMPLETED,
-            deploymentSummary: deploymentResult?.deploymentSummary || null,
-            deploymentId: deploymentResult?.deploymentId || null,
+            deploymentSummary:
+                deploymentResult?.deploymentSummary ||
+                checkOnlyDeployment?.deploymentSummary ||
+                null,
+            deploymentId:
+                deploymentResult?.deploymentId ||
+                checkOnlyDeployment?.deploymentId ||
+                null,
             errors: compatibilityDeploymentSkipped
                 ? ['BLOCKING_DEPENDENCIES']
                 : deploymentResult?.success === false &&

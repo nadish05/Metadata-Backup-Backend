@@ -19,6 +19,10 @@ const {
     buildBlockedResult,
     buildFailedResult
 } = require('./checkOnlyDeployment.service');
+const {
+    isCheckOnlySuccess,
+    buildActualDeploymentBlockedMessage
+} = require('./deploymentCheckOnlyGate.service');
 
 const execAsync = util.promisify(exec);
 const rm = util.promisify(fs.rm);
@@ -139,6 +143,7 @@ async function runDeploymentExecution({
     generatedWorkspace,
     generatedManifest,
     deploymentReadiness,
+    priorCheckOnlyDeployment,
     refreshToken,
     instanceUrl,
     deploymentApiVersion
@@ -153,6 +158,21 @@ async function runDeploymentExecution({
     try {
         if (generatedManifest) {
             // Manifest is consumed upstream; package.xml is already written to workspace.
+        }
+
+        // Safety gate: Salesforce check-only must have executed and succeeded.
+        // Missing / unknown / not-executed / failed check-only → do not deploy.
+        if (!isCheckOnlySuccess(priorCheckOnlyDeployment)) {
+            const result = buildBlockedResult(
+                buildActualDeploymentBlockedMessage(priorCheckOnlyDeployment),
+                {
+                    mode: 'execution',
+                    executionMode: 'deploy'
+                }
+            );
+            logExecutionSummary(result);
+            logSection('Deployment Failed');
+            return result;
         }
 
         if (!deploymentReadiness?.canDeploy) {
