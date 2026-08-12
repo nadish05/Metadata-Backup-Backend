@@ -445,3 +445,142 @@ runTest(
         );
     }
 );
+
+runTest(
+    'End_Time__c false type is not CustomObject when known as field segment',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceService {
+                public void load() {
+                    End_Time__c e;
+                    List<Maintenance_Request__c> rows = [
+                        SELECT End_Time__c FROM Maintenance_Request__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceService'
+        );
+
+        assert.ok(!result.customObjects.includes('End_Time__c'));
+        assert.ok(
+            result.customFields.includes('Maintenance_Request__c.End_Time__c')
+        );
+    }
+);
+
+runTest(
+    'Start_Time__c false type is not CustomObject when known as field segment',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceService {
+                public void load() {
+                    Start_Time__c s;
+                    List<Maintenance_Request__c> rows = [
+                        SELECT Start_Time__c FROM Maintenance_Request__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceService'
+        );
+
+        assert.ok(!result.customObjects.includes('Start_Time__c'));
+        assert.ok(
+            result.customFields.includes(
+                'Maintenance_Request__c.Start_Time__c'
+            )
+        );
+    }
+);
+
+runTest(
+    'End_Time__c method return type is not CustomObject when known as field',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceService {
+                End_Time__c getEnd() {
+                    return null;
+                }
+                public void load() {
+                    List<Maintenance_Request__c> rows = [
+                        SELECT End_Time__c FROM Maintenance_Request__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceService'
+        );
+
+        assert.ok(!result.customObjects.includes('End_Time__c'));
+        assert.ok(
+            result.customFields.includes('Maintenance_Request__c.End_Time__c')
+        );
+    }
+);
+
+runTest(
+    'End_Time__c cast is not CustomObject when known as field',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceService {
+                public void load(Object obj) {
+                    End_Time__c e = (End_Time__c) obj;
+                    List<Maintenance_Request__c> rows = [
+                        SELECT End_Time__c FROM Maintenance_Request__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceService'
+        );
+
+        assert.ok(!result.customObjects.includes('End_Time__c'));
+        assert.ok(
+            result.customFields.includes('Maintenance_Request__c.End_Time__c')
+        );
+    }
+);
+
+runTest('new Maintenance_Request__c() still produces CustomObject', () => {
+    const result = analyzeApexContent(
+        `
+        public class FleetService {
+            public void run() {
+                new Maintenance_Request__c();
+            }
+        }
+        `,
+        'FleetService'
+    );
+
+    assert.ok(result.customObjects.includes('Maintenance_Request__c'));
+});
+
+runTest(
+    'Date_Due__c remains suppressed as CustomObject when known as field',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceService {
+                public void load() {
+                    Date_Due__c d;
+                    List<Maintenance_Request__c> rows = [
+                        SELECT Date_Due__c FROM Maintenance_Request__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceService'
+        );
+
+        assert.ok(!result.customObjects.includes('Date_Due__c'));
+        assert.ok(
+            result.customFields.includes('Maintenance_Request__c.Date_Due__c')
+        );
+    }
+);

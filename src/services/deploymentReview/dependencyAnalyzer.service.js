@@ -430,8 +430,7 @@ function extractSoqlSelectFieldTokens(cleanedContent) {
 }
 
 function classifyCustomObjectsAndFields(cleanedContent) {
-    const { objectNames, strongObjectNames } =
-        extractObjectContextNames(cleanedContent);
+    const { objectNames } = extractObjectContextNames(cleanedContent);
     const customObjects = [];
     // Salesforce CustomField identity is always ObjectApiName.FieldApiName.
     // Never emit bare __c field tokens — that loses parent context.
@@ -486,8 +485,9 @@ function classifyCustomObjectsAndFields(cleanedContent) {
 
     // 4) Remaining __c tokens with object context are CustomObjects.
     //    Unqualified __c tokens are NOT CustomFields (invalid identity).
-    //    Weak-only typed-variable evidence is suppressed when the token is
-    //    already the field segment of a CustomField in this analysis.
+    //    Field API names already known as CustomField segments or SOQL SELECT
+    //    tokens must not be promoted — including when strong object-context
+    //    patterns matched (method return, for-each, cast, new, FROM, etc.).
     const allTokens = uniqueSorted(
         cleanedContent.match(/\b[A-Za-z0-9_]+__c\b/g) || []
     );
@@ -497,20 +497,14 @@ function classifyCustomObjectsAndFields(cleanedContent) {
             return;
         }
 
-        if (strongObjectNames.has(token)) {
-            customObjects.push(token);
+        if (
+            customFieldSegments.has(token) ||
+            soqlSelectFieldTokens.has(token)
+        ) {
             return;
         }
 
-        // Weak-only (Type__c varname) — keep real objects declared as types,
-        // but do not promote field API names that already appear as fields or
-        // as bare SOQL SELECT tokens in the same analysis unit.
-        if (
-            !customFieldSegments.has(token) &&
-            !soqlSelectFieldTokens.has(token)
-        ) {
-            customObjects.push(token);
-        }
+        customObjects.push(token);
     });
 
     return {
