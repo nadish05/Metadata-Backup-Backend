@@ -96,6 +96,10 @@ function buildDependencySelection(rawAnalysis, testValidation) {
                     metadataType: row.metadataType,
                     source: row.source || 'ApexAnalyzer',
                     sourceSnippetOrMatch: row.sourceSnippetOrMatch || null,
+                    matchedText: row.matchedText || row.sourceSnippetOrMatch || null,
+                    context: row.context || null,
+                    sourceCategory: row.sourceCategory || null,
+                    reason: row.reason || null,
                     sourceClass: row.sourceClass || null,
                     classification: classification.classification,
                     artifactRequired: classification.artifactRequired

@@ -165,6 +165,48 @@ function uniqueSorted(values) {
     return [...new Set(values)].sort();
 }
 
+/**
+ * TEMP DIAGNOSTIC — short source window around a match (logging only).
+ * @param {string} sourceText
+ * @param {string} matchedText
+ * @param {number} [maxLen=150]
+ * @returns {string|null}
+ */
+function extractDiagnosticMatchContext(sourceText, matchedText, maxLen = 150) {
+    if (!sourceText || !matchedText) {
+        return null;
+    }
+
+    const idx = String(sourceText).indexOf(matchedText);
+
+    if (idx < 0) {
+        const fallback = String(matchedText).replace(/\s+/g, ' ').trim();
+        return fallback.length > maxLen ? fallback.slice(0, maxLen) : fallback;
+    }
+
+    const pad = Math.max(24, Math.floor((maxLen - matchedText.length) / 2));
+    const start = Math.max(0, idx - pad);
+    const end = Math.min(sourceText.length, idx + matchedText.length + pad);
+    let snippet = String(sourceText)
+        .slice(start, end)
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (start > 0) {
+        snippet = `…${snippet}`;
+    }
+
+    if (end < sourceText.length) {
+        snippet = `${snippet}…`;
+    }
+
+    if (snippet.length > maxLen) {
+        snippet = snippet.slice(0, maxLen);
+    }
+
+    return snippet;
+}
+
 function isSalesforceMetadataToken(name) {
     return name.endsWith('__c') || name.endsWith('__mdt');
 }
@@ -494,7 +536,7 @@ function analyzeApexContent(content, currentClassName) {
         );
     }
 
-    // TEMP DIAGNOSTIC — provenance for APEX DEPENDENCY DEBUG (no behavior change).
+    // Same emission filters as before (classRefs / constructorMatches regexes unchanged).
     const dottedApexByName = new Map();
     for (const ref of classRefs) {
         const name = ref.replace(/\.$/, '');
@@ -502,7 +544,10 @@ function analyzeApexContent(content, currentClassName) {
             continue;
         }
         if (!dottedApexByName.has(name)) {
-            dottedApexByName.set(name, ref);
+            dottedApexByName.set(name, {
+                matchedText: ref,
+                context: extractDiagnosticMatchContext(contentForClassRefs, ref)
+            });
         }
     }
 
@@ -513,8 +558,42 @@ function analyzeApexContent(content, currentClassName) {
             continue;
         }
         if (!newTypeApexByName.has(name)) {
-            newTypeApexByName.set(name, match);
+            newTypeApexByName.set(name, {
+                matchedText: match,
+                context: extractDiagnosticMatchContext(
+                    contentForClassRefs,
+                    match
+                )
+            });
         }
+    }
+
+    // TEMP DIAGNOSTIC — enrich dotted matchedText with Type.Member when present.
+    for (const match of contentForClassRefs.matchAll(
+        /\b[A-Z][A-Za-z0-9_]+\./g
+    )) {
+        const matchedPrefix = match[0];
+        const name = matchedPrefix.replace(/\.$/, '');
+        const existing = dottedApexByName.get(name);
+
+        if (!existing || existing._enriched) {
+            continue;
+        }
+
+        const after = contentForClassRefs.slice(
+            match.index + matchedPrefix.length
+        );
+        const trailing = after.match(/^([A-Za-z][A-Za-z0-9_]*)/);
+        const matchedText = trailing
+            ? `${matchedPrefix}${trailing[1]}`
+            : matchedPrefix;
+
+        existing.matchedText = matchedText;
+        existing.context = extractDiagnosticMatchContext(
+            contentForClassRefs,
+            matchedText
+        );
+        existing._enriched = true;
     }
 
     const apexClasses = uniqueSorted([
@@ -528,57 +607,126 @@ function analyzeApexContent(content, currentClassName) {
     const apexDependencyDebug = [];
 
     for (const name of apexClasses) {
-        const fromDotted = dottedApexByName.has(name);
-        const fromNew = newTypeApexByName.has(name);
+        const fromDotted = dottedApexByName.get(name);
+        const fromNew = newTypeApexByName.get(name);
         let detectedBy = 'other';
-        let sourceSnippetOrMatch = null;
+        let matchedText = name;
+        let context = null;
+        let sourceCategory = 'other';
+        let reason =
+            'Emitted as ApexClass by analyzer without a classified match mechanism.';
 
         if (fromDotted) {
             detectedBy = 'dotted_reference';
-            sourceSnippetOrMatch = dottedApexByName.get(name);
+            matchedText = fromDotted.matchedText;
+            context = fromDotted.context;
+            sourceCategory = 'apex_class_reference';
+            reason =
+                "Matched capitalized identifier followed by '.' (class-ref / Type.Member pattern).";
         } else if (fromNew) {
             detectedBy = 'new_type';
-            sourceSnippetOrMatch = newTypeApexByName.get(name);
+            matchedText = fromNew.matchedText;
+            context = fromNew.context;
+            sourceCategory = 'apex_constructor';
+            reason = "Matched 'new TypeName' constructor expression.";
         }
 
         apexDependencyDebug.push({
             name,
+            dependencyName: name,
             detectedBy,
             metadataType: 'ApexClass',
             source: 'ApexAnalyzer',
-            sourceSnippetOrMatch,
+            sourceSnippetOrMatch: matchedText,
+            matchedText,
+            context,
+            sourceCategory,
+            reason,
             sourceClass: outerClassName || null
         });
     }
 
     for (const name of customFields) {
+        const matchedText = name;
+        const context = extractDiagnosticMatchContext(cleanedContent, matchedText);
+
         apexDependencyDebug.push({
             name,
+            dependencyName: name,
             detectedBy: 'qualified_field',
             metadataType: 'CustomField',
             source: 'ApexAnalyzer',
-            sourceSnippetOrMatch: name,
+            sourceSnippetOrMatch: matchedText,
+            matchedText,
+            context,
+            sourceCategory: 'custom_field_reference',
+            reason:
+                'Matched qualified CustomField identity Object__c.Field__c (or analyzer-qualified equivalent).',
             sourceClass: outerClassName || null
         });
     }
 
     for (const name of customObjects) {
         let detectedBy = 'other';
+        let sourceCategory = 'other';
+        let reason =
+            'Emitted as CustomObject by analyzer without a bare-token classification.';
+
         if (customMetadataTypeSet.has(name)) {
             detectedBy = 'other';
+            sourceCategory = 'custom_metadata_type';
+            reason =
+                'Matched bare Custom Metadata Type token (__mdt) classified as CustomObject.';
         } else if (objectTokenSet.has(name)) {
             detectedBy = 'bare_custom_token';
+            sourceCategory = 'custom_object_token';
+            reason =
+                'Matched __c token present in object-context extraction (bare custom identifier treated as CustomObject).';
         }
+
+        const matchedText = name;
+        const context = extractDiagnosticMatchContext(cleanedContent, matchedText);
 
         apexDependencyDebug.push({
             name,
+            dependencyName: name,
             detectedBy,
             metadataType: 'CustomObject',
             source: 'ApexAnalyzer',
-            sourceSnippetOrMatch: name,
+            sourceSnippetOrMatch: matchedText,
+            matchedText,
+            context,
+            sourceCategory,
+            reason,
             sourceClass: outerClassName || null
         });
     }
+
+    // TEMP DIAGNOSTIC — APEX DEPENDENCY PROVENANCE DEBUG (logging only).
+    console.log('========================================');
+    console.log('APEX DEPENDENCY PROVENANCE DEBUG');
+    console.log('========================================');
+    console.log(
+        JSON.stringify({
+            sourceClass: outerClassName || null,
+            dependencyCount: apexDependencyDebug.length
+        })
+    );
+    for (const row of apexDependencyDebug) {
+        console.log(
+            JSON.stringify({
+                dependencyName: row.dependencyName,
+                metadataType: row.metadataType,
+                detectedBy: row.detectedBy,
+                matchedText: row.matchedText,
+                context: row.context,
+                sourceCategory: row.sourceCategory,
+                reason: row.reason,
+                sourceClass: row.sourceClass || null
+            })
+        );
+    }
+    console.log('========================================');
 
     return {
         customObjects,
