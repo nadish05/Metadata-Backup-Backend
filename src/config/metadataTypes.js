@@ -46,6 +46,13 @@ const METADATA_TYPE_RULES = {
         memberNamePattern: /^[A-Za-z_][A-Za-z0-9_]*$/,
         requiresMetaXml: false
     },
+    CustomApplication: {
+        kind: METADATA_KINDS.FILE,
+        folder: 'applications',
+        extension: '.app-meta.xml',
+        memberNamePattern: /^[A-Za-z_][A-Za-z0-9_]*$/,
+        requiresMetaXml: false
+    },
     Flow: {
         kind: METADATA_KINDS.FILE,
         extension: '.flow-meta.xml',

@@ -18,6 +18,7 @@ function usesToolingApi(type) {
         type === 'ApexTrigger' ||
         type === 'ApexPage' ||
         type === 'CustomField' ||
+        type === 'CustomApplication' ||
         type === 'FlexiPage' ||
         type === 'LightningComponentBundle' ||
         type === 'Flow'
@@ -200,6 +201,14 @@ function buildExistenceQuery(type, name) {
 
         case 'ApexPage':
             return `SELECT Id FROM ApexPage WHERE Name = '${escapedName}' LIMIT 1`;
+
+        case 'CustomApplication':
+            // Tooling CustomApplication.FullName matches MDAPI member names,
+            // including standard__* applications (API ≥30).
+            return (
+                'SELECT Id FROM CustomApplication ' +
+                `WHERE FullName = '${escapedName}' LIMIT 1`
+            );
 
         case 'CustomObject':
             return (

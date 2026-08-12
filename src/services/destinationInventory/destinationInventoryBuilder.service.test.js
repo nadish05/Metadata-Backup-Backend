@@ -233,6 +233,159 @@ async function main() {
     );
 
     await runTest(
+        'CustomApplication Tooling query → EXISTS when a row is returned',
+        async () => {
+            const stub = stubSalesforce({
+                totalSize: 1,
+                records: [{ Id: '0Ap000000000001AAA' }]
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomApplication',
+                            metadataName: 'My_Custom_App'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomApplication',
+                        'My_Custom_App'
+                    ),
+                    DESTINATION_STATE.EXISTS
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        url.includes('/tooling/query')
+                    )
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        decodeURIComponent(url).includes(
+                            'SELECT Id FROM CustomApplication WHERE FullName ='
+                        )
+                    )
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomApplication standard__Sales Tooling query → EXISTS',
+        async () => {
+            const stub = stubSalesforce({
+                totalSize: 1,
+                records: [{ Id: '0Ap000000000002AAA' }]
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomApplication',
+                            metadataName: 'standard__Sales'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomApplication',
+                        'standard__Sales'
+                    ),
+                    DESTINATION_STATE.EXISTS
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        decodeURIComponent(url).includes(
+                            "FullName = 'standard__Sales'"
+                        )
+                    )
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomApplication Tooling query → MISSING when zero rows returned',
+        async () => {
+            const stub = stubSalesforce({ totalSize: 0, records: [] });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomApplication',
+                            metadataName: 'Missing_App'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomApplication',
+                        'Missing_App'
+                    ),
+                    DESTINATION_STATE.MISSING
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomApplication Tooling query → UNKNOWN when the query fails',
+        async () => {
+            const stub = stubSalesforce({
+                totalSize: 0,
+                records: [],
+                fail: true
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomApplication',
+                            metadataName: 'My_Custom_App'
+                        }
+                    ],
+                    accessToken: 'test-access-token',
+                    instanceUrl: 'https://test.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(
+                        result.inventory,
+                        'CustomApplication',
+                        'My_Custom_App'
+                    ),
+                    DESTINATION_STATE.UNKNOWN
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
         'only orchestration consumes the builder; no legacy existence helpers remain',
         async () => {
             const fs = require('fs');
