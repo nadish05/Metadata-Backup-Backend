@@ -231,7 +231,12 @@ const STANDARD_SOBJECTS_NOT_APEX_CLASS = new Set([
 /**
  * Left-hand dotted tokens that are platform/VF globals, not Apex classes.
  */
-const DOTTED_REFERENCE_LEFT_EXCLUSIONS = new Set(['Page', 'SObjectType']);
+const DOTTED_REFERENCE_LEFT_EXCLUSIONS = new Set([
+    'Page',
+    'SObjectType',
+    // ApexPages.Severity.ERROR and bare Severity.* platform enum references.
+    'Severity'
+]);
 
 function extractObjectContextNames(cleanedContent) {
     const objectNames = new Set();
@@ -387,6 +392,43 @@ function extractSoqlQualifiedFields(cleanedContent) {
     return qualifiedFields;
 }
 
+/**
+ * Bare __c field API names appearing in SOQL SELECT clauses (before qualification).
+ * Used to suppress weak-only CustomObject promotion for field tokens.
+ */
+function extractSoqlSelectFieldTokens(cleanedContent) {
+    const fieldTokens = new Set();
+    const soqlBlocks = cleanedContent.matchAll(/\[([\s\S]*?)\]/g);
+
+    for (const block of soqlBlocks) {
+        const query = block[1];
+
+        if (!/\bSELECT\b/i.test(query) || !/\bFROM\b/i.test(query)) {
+            continue;
+        }
+
+        const selectMatch = query.match(/\bSELECT\s+([\s\S]*?)\s+FROM\b/i);
+
+        if (!selectMatch) {
+            continue;
+        }
+
+        const selectClause = selectMatch[1];
+        const selectWithoutRelationships = selectClause.replace(
+            /\b[A-Za-z0-9_]+__r\.[A-Za-z0-9_]+__c\b/g,
+            ' '
+        );
+        const tokens =
+            selectWithoutRelationships.match(/\b[A-Za-z0-9_]+__c\b/g) || [];
+
+        for (const token of tokens) {
+            fieldTokens.add(token);
+        }
+    }
+
+    return fieldTokens;
+}
+
 function classifyCustomObjectsAndFields(cleanedContent) {
     const { objectNames, strongObjectNames } =
         extractObjectContextNames(cleanedContent);
@@ -440,6 +482,7 @@ function classifyCustomObjectsAndFields(cleanedContent) {
             })
             .filter(Boolean)
     );
+    const soqlSelectFieldTokens = extractSoqlSelectFieldTokens(cleanedContent);
 
     // 4) Remaining __c tokens with object context are CustomObjects.
     //    Unqualified __c tokens are NOT CustomFields (invalid identity).
@@ -460,8 +503,12 @@ function classifyCustomObjectsAndFields(cleanedContent) {
         }
 
         // Weak-only (Type__c varname) — keep real objects declared as types,
-        // but do not promote field API names that already appear as fields.
-        if (!customFieldSegments.has(token)) {
+        // but do not promote field API names that already appear as fields or
+        // as bare SOQL SELECT tokens in the same analysis unit.
+        if (
+            !customFieldSegments.has(token) &&
+            !soqlSelectFieldTokens.has(token)
+        ) {
             customObjects.push(token);
         }
     });
@@ -546,7 +593,17 @@ function analyzeApexContent(content, currentClassName) {
 
     const contentForClassRefs = cleanedContent
         .replace(/\bFlow\.Interview\.[A-Za-z0-9_]+\b/g, '')
+        .replace(/\bApexPages\.Severity\.[A-Za-z0-9_]+\b/g, '')
         .replace(/\b[A-Za-z0-9_]+__r\./g, '');
+
+    // Visualforce Page.X member names are ApexPage references, not ApexClass.
+    const visualforcePageNames = new Set();
+
+    for (const match of cleanedContent.matchAll(
+        /\bPage\.([A-Za-z][A-Za-z0-9_]*)\b/g
+    )) {
+        visualforcePageNames.add(match[1]);
+    }
 
     // Same dotted / new_type regex shapes as before; structural emission
     // guards (Page / SObjectType / standard sObjects / __c members) applied below.
@@ -585,6 +642,7 @@ function analyzeApexContent(content, currentClassName) {
         return (
             !excludedClasses.has(normalizeApexIdentifier(name)) &&
             !STANDARD_SOBJECTS_NOT_APEX_CLASS.has(name) &&
+            !visualforcePageNames.has(name) &&
             !isSalesforceMetadataToken(name) &&
             !isRelationshipReferenceToken(name)
         );

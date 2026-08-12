@@ -336,3 +336,112 @@ runTest(
         );
     }
 );
+
+runTest('ApexPages.Severity.ERROR does not produce ApexClass Severity', () => {
+    const result = analyzeApexContent(
+        `
+        public class SiteController {
+            public void log() {
+                ApexPages.Severity.ERROR;
+            }
+        }
+        `,
+        'SiteController'
+    );
+
+    assert.ok(
+        !result.apexClasses.includes('Severity'),
+        `Severity must not be emitted, got: ${result.apexClasses.join(', ')}`
+    );
+});
+
+runTest('Page.ChangePassword does not produce ApexClass ChangePassword', () => {
+    const result = analyzeApexContent(
+        `
+        public class SiteController {
+            public PageReference go() {
+                return Page.ChangePassword;
+            }
+        }
+        `,
+        'SiteController'
+    );
+
+    assert.ok(
+        !result.apexClasses.includes('ChangePassword'),
+        `ChangePassword must not be emitted as ApexClass, got: ${result.apexClasses.join(', ')}`
+    );
+    assert.ok(!result.apexClasses.includes('Page'));
+});
+
+runTest(
+    'SOQL field names without weak vars are not promoted to CustomObject',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceService {
+                public void load() {
+                    List<Maintenance_Request__c> rows = [
+                        SELECT Date_Due__c,
+                               End_Time__c,
+                               Start_Time__c
+                        FROM Maintenance_Request__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceService'
+        );
+
+        assert.ok(result.customObjects.includes('Maintenance_Request__c'));
+        assert.ok(
+            result.customFields.includes('Maintenance_Request__c.Date_Due__c')
+        );
+        assert.ok(
+            result.customFields.includes('Maintenance_Request__c.End_Time__c')
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Maintenance_Request__c.Start_Time__c'
+            )
+        );
+        assert.ok(!result.customObjects.includes('Date_Due__c'));
+        assert.ok(!result.customObjects.includes('End_Time__c'));
+        assert.ok(!result.customObjects.includes('Start_Time__c'));
+    }
+);
+
+runTest('new Vehicle__c() still produces CustomObject Vehicle__c', () => {
+    const result = analyzeApexContent(
+        `
+        public class FleetService {
+            public void run() {
+                Vehicle__c vehicle = new Vehicle__c();
+            }
+        }
+        `,
+        'FleetService'
+    );
+
+    assert.ok(result.customObjects.includes('Vehicle__c'));
+});
+
+runTest(
+    'new Equipment_Maintenance_Item__c() still produces CustomObject',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class FleetService {
+                public void run() {
+                    new Equipment_Maintenance_Item__c();
+                }
+            }
+            `,
+            'FleetService'
+        );
+
+        assert.ok(
+            result.customObjects.includes('Equipment_Maintenance_Item__c')
+        );
+    }
+);
