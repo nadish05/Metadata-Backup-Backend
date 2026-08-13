@@ -19,7 +19,11 @@ const {
     toExplicitCustomObjectMembers,
     toExplicitStandardValueSetMembers,
     mergeRetrieveMetadataMembers,
-    buildRetrieveMetadataMembersWithDiscovery
+    buildRetrieveMetadataMembersWithDiscovery,
+    buildStandardValueSetRawResponseDebug,
+    summarizeListMetadataPayloadShape,
+    buildStandardValueSetParserDebug,
+    STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT
 } = require('./metadata.controller');
 
 function runTest(name, fn) {
@@ -510,6 +514,81 @@ async function main() {
         } finally {
             fs.rmSync(projectPath, { recursive: true, force: true });
         }
+    });
+
+    await runTest('StandardValueSet raw debug truncates stdout at 5000 chars', () => {
+        const stdout = 'A'.repeat(STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT + 25);
+        const debug = buildStandardValueSetRawResponseDebug({
+            command: 'sf org list metadata -m StandardValueSet -o temporg --json',
+            exitStatus: 0,
+            stdout,
+            stderr: 'warn'
+        });
+
+        assert.strictEqual(debug.stdoutLength, stdout.length);
+        assert.strictEqual(debug.stderrLength, 4);
+        assert.strictEqual(debug.rawStdoutTruncated, true);
+        assert.strictEqual(
+            debug.rawStdoutPreview.length,
+            STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT
+        );
+        assert.strictEqual(debug.exitStatus, 0);
+    });
+
+    await runTest('StandardValueSet shape debug reports array result without inventing keys', () => {
+        const shape = summarizeListMetadataPayloadShape(JSON.stringify({
+            status: 0,
+            result: [
+                { fullName: 'AccountSource', type: 'StandardValueSet' }
+            ]
+        }));
+
+        assert.strictEqual(shape.parsed, true);
+        assert.strictEqual(shape.resultIsArray, true);
+        assert.strictEqual(shape.resultLength, 1);
+        assert.ok(!Object.prototype.hasOwnProperty.call(shape, 'resultKeys'));
+        assert.ok(!Object.prototype.hasOwnProperty.call(shape, 'metadataIsArray'));
+        assert.deepStrictEqual(shape.firstItemKeys, ['fullName', 'type']);
+        assert.strictEqual(shape.firstItem.fullName, 'AccountSource');
+    });
+
+    await runTest('StandardValueSet shape debug reports object result keys', () => {
+        const shape = summarizeListMetadataPayloadShape(JSON.stringify({
+            status: 0,
+            result: {
+                records: [{ fullName: 'AccountSource' }]
+            }
+        }));
+
+        assert.strictEqual(shape.parsed, true);
+        assert.strictEqual(shape.resultIsArray, false);
+        assert.deepStrictEqual(shape.resultKeys, ['records']);
+        assert.ok(!Object.prototype.hasOwnProperty.call(shape, 'resultLength'));
+        assert.ok(!Object.prototype.hasOwnProperty.call(shape, 'metadataIsArray'));
+    });
+
+    await runTest('StandardValueSet parser debug previews at most 20 names and does not alter them', () => {
+        const names = Array.from({ length: 25 }, (_, index) => `ValueSet${index}`);
+        const debug = buildStandardValueSetParserDebug({
+            names,
+            strategy: 'explicit_discovered_standard_value_sets',
+            errorMessage: null
+        });
+
+        assert.strictEqual(debug.parsedNameCount, 25);
+        assert.strictEqual(debug.parsedNamesPreview.length, 20);
+        assert.strictEqual(debug.parsedNamesPreview[0], 'ValueSet0');
+        assert.strictEqual(names.length, 25);
+
+        const empty = buildStandardValueSetParserDebug({
+            names: [],
+            strategy: 'discovery_empty_fallback',
+            errorMessage: null
+        });
+        assert.strictEqual(empty.parsedNameCount, 0);
+        assert.deepStrictEqual(empty.parsedNamesPreview, []);
+        assert.strictEqual(empty.strategy, 'discovery_empty_fallback');
+        assert.strictEqual(empty.errorMessage, null);
     });
 }
 

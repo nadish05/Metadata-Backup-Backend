@@ -296,6 +296,116 @@ async function discoverCustomObjectNames(alias = RETRIEVAL_CLI_ALIAS) {
     }
 }
 
+const STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT = 5000;
+const STANDARD_VALUE_SET_NAMES_PREVIEW_LIMIT = 20;
+
+function describeJsType(value) {
+    if (value === null) {
+        return 'null';
+    }
+
+    if (Array.isArray(value)) {
+        return 'array';
+    }
+
+    return typeof value;
+}
+
+function buildStandardValueSetRawResponseDebug({
+    command,
+    exitStatus = null,
+    stdout = '',
+    stderr = ''
+} = {}) {
+    const stdoutText = String(stdout || '');
+    const stderrText = String(stderr || '');
+    const truncated =
+        stdoutText.length > STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT;
+
+    return {
+        command,
+        exitStatus,
+        stdoutLength: stdoutText.length,
+        stderrLength: stderrText.length,
+        rawStdoutTruncated: truncated,
+        rawStdoutPreview: truncated
+            ? stdoutText.slice(0, STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT)
+            : stdoutText
+    };
+}
+
+function summarizeListMetadataPayloadShape(stdout) {
+    const payload = extractJsonPayload(stdout);
+
+    if (!payload) {
+        return {
+            parsed: false
+        };
+    }
+
+    const summary = {
+        parsed: true,
+        topLevelType: describeJsType(payload)
+    };
+
+    if (!Object.prototype.hasOwnProperty.call(payload, 'result')) {
+        return summary;
+    }
+
+    const result = payload.result;
+    summary.resultType = describeJsType(result);
+    summary.resultIsArray = Array.isArray(result);
+
+    if (Array.isArray(result)) {
+        summary.resultLength = result.length;
+
+        if (result.length > 0) {
+            const firstItem = result[0];
+
+            if (firstItem && typeof firstItem === 'object') {
+                summary.firstItemKeys = Object.keys(firstItem);
+                summary.firstItem = firstItem;
+            } else {
+                summary.firstItem = firstItem;
+            }
+        }
+
+        return summary;
+    }
+
+    if (result && typeof result === 'object') {
+        summary.resultKeys = Object.keys(result);
+
+        if (Object.prototype.hasOwnProperty.call(result, 'metadata')) {
+            summary.metadataIsArray = Array.isArray(result.metadata);
+
+            if (Array.isArray(result.metadata)) {
+                summary.metadataLength = result.metadata.length;
+            }
+        }
+    }
+
+    return summary;
+}
+
+function buildStandardValueSetParserDebug({
+    names = [],
+    strategy = null,
+    errorMessage = null
+} = {}) {
+    const parsedNames = Array.isArray(names) ? names : [];
+
+    return {
+        strategy,
+        errorMessage,
+        parsedNameCount: parsedNames.length,
+        parsedNamesPreview: parsedNames.slice(
+            0,
+            STANDARD_VALUE_SET_NAMES_PREVIEW_LIMIT
+        )
+    };
+}
+
 function logStandardValueSetDiscoveryDebug({
     strategy,
     discoveredCount = 0,
@@ -314,6 +424,30 @@ function logStandardValueSetDiscoveryDebug({
     console.log('====================================================');
 }
 
+function logStandardValueSetRawResponseDebug(debugPayload) {
+    console.log('====================================================');
+    console.log('STANDARD VALUE SET RAW RESPONSE DEBUG');
+    console.log('====================================================');
+    console.log(JSON.stringify(debugPayload, null, 2));
+    console.log('====================================================');
+}
+
+function logStandardValueSetParsedShapeDebug(shapePayload) {
+    console.log('====================================================');
+    console.log('STANDARD VALUE SET PARSED SHAPE DEBUG');
+    console.log('====================================================');
+    console.log(JSON.stringify(shapePayload, null, 2));
+    console.log('====================================================');
+}
+
+function logStandardValueSetParserDebug(debugPayload) {
+    console.log('====================================================');
+    console.log('STANDARD VALUE SET PARSER DEBUG');
+    console.log('====================================================');
+    console.log(JSON.stringify(debugPayload, null, 2));
+    console.log('====================================================');
+}
+
 /**
  * Discover StandardValueSet members from the already-authenticated temporg
  * session. Wildcard StandardValueSet retrieve is not supported; explicit
@@ -321,55 +455,90 @@ function logStandardValueSetDiscoveryDebug({
  * existing retrieve behavior for all other metadata types.
  */
 async function discoverStandardValueSetNames(alias = RETRIEVAL_CLI_ALIAS) {
+    const command =
+        `sf org list metadata -m StandardValueSet -o ${alias} --json`;
+
     try {
         const listResult = await execAsync(
-            `sf org list metadata -m StandardValueSet -o ${alias} --json`,
+            command,
             {
                 maxBuffer: 50 * 1024 * 1024
             }
         );
+        const stdout = listResult.stdout || '';
+        const stderr = listResult.stderr || '';
 
-        const parsed = parseDiscoveredStandardValueSetNames(
-            listResult.stdout || ''
+        logStandardValueSetRawResponseDebug(
+            buildStandardValueSetRawResponseDebug({
+                command,
+                exitStatus: 0,
+                stdout,
+                stderr
+            })
         );
+        logStandardValueSetParsedShapeDebug(
+            summarizeListMetadataPayloadShape(stdout)
+        );
+
+        const parsed = parseDiscoveredStandardValueSetNames(stdout);
         if (!parsed.parsed) {
-            return {
+            const outcome = {
                 names: [],
                 strategy: 'discovery_failed_fallback',
                 errorMessage: parsed.reason || 'invalid_json'
             };
+            logStandardValueSetParserDebug(
+                buildStandardValueSetParserDebug(outcome)
+            );
+            return outcome;
         }
 
         if (
             typeof parsed.status === 'number'
             && parsed.status !== 0
         ) {
-            return {
+            const outcome = {
                 names: [],
                 strategy: 'discovery_failed_fallback',
                 errorMessage: `list metadata status ${parsed.status}`
             };
+            logStandardValueSetParserDebug(
+                buildStandardValueSetParserDebug(outcome)
+            );
+            return outcome;
         }
 
         if (parsed.names.length === 0) {
-            return {
+            const outcome = {
                 names: [],
                 strategy: 'discovery_empty_fallback',
                 errorMessage: null
             };
+            logStandardValueSetParserDebug(
+                buildStandardValueSetParserDebug(outcome)
+            );
+            return outcome;
         }
 
-        return {
+        const outcome = {
             names: parsed.names,
             strategy: 'explicit_discovered_standard_value_sets',
             errorMessage: null
         };
+        logStandardValueSetParserDebug(
+            buildStandardValueSetParserDebug(outcome)
+        );
+        return outcome;
     } catch (error) {
-        return {
+        const outcome = {
             names: [],
             strategy: 'discovery_failed_fallback',
             errorMessage: error.message || String(error)
         };
+        logStandardValueSetParserDebug(
+            buildStandardValueSetParserDebug(outcome)
+        );
+        return outcome;
     }
 }
 
@@ -853,6 +1022,12 @@ exports.buildRetrieveMetadataArgs = buildRetrieveMetadataArgs;
 exports.parseDiscoveredCustomObjectNames = parseDiscoveredCustomObjectNames;
 exports.parseDiscoveredStandardValueSetNames =
     parseDiscoveredStandardValueSetNames;
+exports.buildStandardValueSetRawResponseDebug =
+    buildStandardValueSetRawResponseDebug;
+exports.summarizeListMetadataPayloadShape = summarizeListMetadataPayloadShape;
+exports.buildStandardValueSetParserDebug = buildStandardValueSetParserDebug;
+exports.STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT =
+    STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT;
 exports.toExplicitCustomObjectMembers = toExplicitCustomObjectMembers;
 exports.toExplicitStandardValueSetMembers = toExplicitStandardValueSetMembers;
 exports.mergeRetrieveMetadataMembers = mergeRetrieveMetadataMembers;
