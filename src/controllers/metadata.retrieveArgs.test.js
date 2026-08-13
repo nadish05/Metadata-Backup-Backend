@@ -23,7 +23,11 @@ const {
     buildStandardValueSetRawResponseDebug,
     summarizeListMetadataPayloadShape,
     buildStandardValueSetParserDebug,
-    STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT
+    STANDARD_VALUE_SET_STDOUT_PREVIEW_LIMIT,
+    buildSecondStandardValueSetRetrieveMembers,
+    buildSecondStandardValueSetRetrieveArgs,
+    shouldSkipSecondStandardValueSetRetrieve,
+    runPostFirstRetrieveStandardValueSetRetrieval
 } = require('./metadata.controller');
 
 function runTest(name, fn) {
@@ -589,6 +593,202 @@ async function main() {
         assert.deepStrictEqual(empty.parsedNamesPreview, []);
         assert.strictEqual(empty.strategy, 'discovery_empty_fallback');
         assert.strictEqual(empty.errorMessage, null);
+    });
+
+    await runTest('first retrieve member list remains unchanged without StandardValueSet', () => {
+        const members = buildRetrieveMetadataMembers();
+        const args = buildRetrieveMetadataArgs(members);
+        const withEmptyDiscovery = buildRetrieveMetadataMembersWithDiscovery(
+            [],
+            []
+        );
+
+        assert.ok(members.includes('ApexClass'));
+        assert.ok(members.includes('Profile'));
+        assert.ok(members.includes('PermissionSet'));
+        assert.ok(members.includes('CustomObject'));
+        assert.ok(members.includes('RecordType'));
+        assert.ok(!RETRIEVAL_METADATA_TYPES.includes('StandardValueSet'));
+        assert.ok(!members.includes('StandardValueSet'));
+        assert.ok(!args.includes('-m StandardValueSet'));
+        assert.ok(!args.includes('-m StandardValueSet:'));
+        assert.deepStrictEqual(withEmptyDiscovery, members);
+    });
+
+    await runTest('one discovered member becomes an explicit second-retrieve member', () => {
+        const members = buildSecondStandardValueSetRetrieveMembers([
+            'AccountSource'
+        ]);
+        const args = buildSecondStandardValueSetRetrieveArgs(['AccountSource']);
+
+        assert.deepStrictEqual(members, ['StandardValueSet:AccountSource']);
+        assert.strictEqual(args, '-m StandardValueSet:AccountSource');
+        assert.ok(!args.includes('-m StandardValueSet '));
+        assert.ok(!shouldSkipSecondStandardValueSetRetrieve(['AccountSource']));
+    });
+
+    await runTest('multiple discovered members are all passed explicitly', () => {
+        const members = buildSecondStandardValueSetRetrieveMembers([
+            'AccountSource',
+            'LeadSource',
+            'OpportunityStage'
+        ]);
+        const args = buildRetrieveMetadataArgs(members);
+
+        assert.deepStrictEqual(members, [
+            'StandardValueSet:AccountSource',
+            'StandardValueSet:LeadSource',
+            'StandardValueSet:OpportunityStage'
+        ]);
+        assert.ok(args.includes('-m StandardValueSet:AccountSource'));
+        assert.ok(args.includes('-m StandardValueSet:LeadSource'));
+        assert.ok(args.includes('-m StandardValueSet:OpportunityStage'));
+        assert.ok(!args.split(' ').includes('StandardValueSet'));
+    });
+
+    await runTest('second retrieve never passes wildcard StandardValueSet', () => {
+        const members = buildSecondStandardValueSetRetrieveMembers([
+            'AccountSource'
+        ]);
+        const args = buildRetrieveMetadataArgs(members);
+
+        assert.deepStrictEqual(members, ['StandardValueSet:AccountSource']);
+        assert.ok(!members.includes('StandardValueSet'));
+        assert.ok(!RETRIEVAL_METADATA_TYPES.includes('StandardValueSet'));
+        assert.ok(args.includes('-m StandardValueSet:AccountSource'));
+        assert.ok(!/(^|\s)-m StandardValueSet(\s|$)/.test(` ${args} `));
+    });
+
+    await runTest('zero StandardValueSet dependencies skip the second retrieve', async () => {
+        let execCalled = false;
+
+        const result = await runPostFirstRetrieveStandardValueSetRetrieval({
+            projectPath: '/tmp/unused-project',
+            discoverNamesFn: async () => [],
+            execFn: async () => {
+                execCalled = true;
+                throw new Error('second retrieve must not run');
+            }
+        });
+
+        assert.strictEqual(result.skipped, true);
+        assert.strictEqual(result.success, true);
+        assert.deepStrictEqual(result.members, []);
+        assert.strictEqual(execCalled, false);
+        assert.strictEqual(shouldSkipSecondStandardValueSetRetrieve([]), true);
+    });
+
+    await runTest('second retrieve receives explicit members from discovered names', async () => {
+        let executedCommand = null;
+
+        const result = await runPostFirstRetrieveStandardValueSetRetrieval({
+            projectPath: '/tmp/backup-project',
+            alias: 'temporg',
+            discoverNamesFn: async () => ['AccountSource', 'LeadSource'],
+            execFn: async (command) => {
+                executedCommand = command;
+                return {
+                    stdout: JSON.stringify({ status: 0, result: { files: [] } }),
+                    stderr: ''
+                };
+            }
+        });
+
+        assert.strictEqual(result.skipped, false);
+        assert.strictEqual(result.success, true);
+        assert.deepStrictEqual(result.members, [
+            'StandardValueSet:AccountSource',
+            'StandardValueSet:LeadSource'
+        ]);
+        assert.ok(executedCommand.includes('-m StandardValueSet:AccountSource'));
+        assert.ok(executedCommand.includes('-m StandardValueSet:LeadSource'));
+        assert.ok(executedCommand.includes('-o temporg'));
+        assert.ok(executedCommand.includes('sf project retrieve start'));
+        assert.ok(!/(^|\s)-m StandardValueSet(\s|$)/.test(` ${executedCommand} `));
+    });
+
+    await runTest('second retrieve CLI failure is surfaced and not marked successful', async () => {
+        let completedSuccessfully = false;
+
+        try {
+            await runPostFirstRetrieveStandardValueSetRetrieval({
+                projectPath: '/tmp/backup-project',
+                discoverNamesFn: async () => ['AccountSource'],
+                execFn: async () => {
+                    const error = new Error('retrieve failed');
+                    error.stdout = JSON.stringify({
+                        status: 1,
+                        result: { files: [], failures: [{ message: 'missing' }] }
+                    });
+                    error.stderr = 'CLI retrieve failed';
+                    throw error;
+                }
+            });
+            completedSuccessfully = true;
+        } catch (error) {
+            assert.strictEqual(error.message, 'retrieve failed');
+        }
+
+        assert.strictEqual(completedSuccessfully, false);
+    });
+
+    await runTest('second retrieve non-zero JSON status fails the migration retrieve', async () => {
+        let completedSuccessfully = false;
+
+        try {
+            await runPostFirstRetrieveStandardValueSetRetrieval({
+                projectPath: '/tmp/backup-project',
+                discoverNamesFn: async () => ['LeadSource'],
+                execFn: async () => ({
+                    stdout: JSON.stringify({
+                        status: 1,
+                        result: { files: [], failures: [{ message: 'denied' }] }
+                    }),
+                    stderr: ''
+                })
+            });
+            completedSuccessfully = true;
+        } catch (error) {
+            assert.strictEqual(
+                error.message,
+                'Salesforce CLI retrieve reported status 1'
+            );
+        }
+
+        assert.strictEqual(completedSuccessfully, false);
+    });
+
+    await runTest('Git add occurs after retrieveMetadataInternal in runMigration', () => {
+        const githubSource = fs.readFileSync(
+            path.join(__dirname, 'github.controller.js'),
+            'utf8'
+        );
+        const controllerSource = fs.readFileSync(
+            path.join(__dirname, 'metadata.controller.js'),
+            'utf8'
+        );
+
+        const retrieveCallIndex = githubSource.indexOf(
+            'retrieveMetadataInternal('
+        );
+        const gitAddIndex = githubSource.indexOf('git add .');
+        const secondRetrieveIndex = controllerSource.indexOf(
+            'await runPostFirstRetrieveStandardValueSetRetrieval('
+        );
+        const stepCompleteIndex = controllerSource.indexOf(
+            "console.log('STEP 5 COMPLETE')"
+        );
+
+        assert.ok(retrieveCallIndex >= 0, 'expected retrieveMetadataInternal call');
+        assert.ok(gitAddIndex > retrieveCallIndex, 'git add must follow retrieve');
+        assert.ok(
+            secondRetrieveIndex >= 0,
+            'expected post-first-retrieve StandardValueSet retrieve'
+        );
+        assert.ok(
+            stepCompleteIndex > secondRetrieveIndex,
+            'second retrieve must complete before retrieveMetadataInternal returns'
+        );
     });
 }
 

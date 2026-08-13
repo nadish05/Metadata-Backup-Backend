@@ -20,6 +20,9 @@ const {
 const {
     getLatestApiVersion
 } = require('../services/destinationInventory/destinationInventoryBuilder.service');
+const {
+    discoverStandardValueSetNamesFromRetrievedProject
+} = require('../services/retrieval/standardValueSetPostRetrieve.service');
 
 const RETRIEVAL_CLI_ALIAS = 'temporg';
 
@@ -446,6 +449,172 @@ function logStandardValueSetParserDebug(debugPayload) {
     console.log('====================================================');
     console.log(JSON.stringify(debugPayload, null, 2));
     console.log('====================================================');
+}
+
+function buildSecondStandardValueSetRetrieveMembers(names = []) {
+    return mergeRetrieveMetadataMembers({
+        baseMembers: [],
+        discoveredStandardValueSetNames: names
+    }).filter((member) => (
+        member.startsWith('StandardValueSet:')
+        && member !== 'StandardValueSet:'
+        && member !== 'StandardValueSet'
+    ));
+}
+
+function buildSecondStandardValueSetRetrieveArgs(members = []) {
+    return buildRetrieveMetadataArgs(
+        buildSecondStandardValueSetRetrieveMembers(members)
+    );
+}
+
+function shouldSkipSecondStandardValueSetRetrieve(names = []) {
+    return buildSecondStandardValueSetRetrieveMembers(names).length === 0;
+}
+
+function logStandardValueSetPostRetrieveDiscovery(names = []) {
+    console.log('====================================================');
+    console.log('STANDARD VALUE SET RETRIEVAL');
+    console.log('====================================================');
+    console.log(JSON.stringify({
+        stage: 'post_first_retrieve',
+        discoveredCount: Array.isArray(names) ? names.length : 0,
+        members: Array.isArray(names) ? names : []
+    }, null, 2));
+    console.log('====================================================');
+}
+
+function logStandardValueSetExplicitRetrieve(members = []) {
+    console.log('====================================================');
+    console.log('STANDARD VALUE SET EXPLICIT RETRIEVE');
+    console.log('====================================================');
+    console.log(JSON.stringify({
+        memberCount: members.length,
+        members
+    }, null, 2));
+    console.log('====================================================');
+}
+
+function logStandardValueSetExplicitRetrieveComplete(payload) {
+    console.log('====================================================');
+    console.log('STANDARD VALUE SET EXPLICIT RETRIEVE COMPLETE');
+    console.log('====================================================');
+    console.log(JSON.stringify(payload, null, 2));
+    console.log('====================================================');
+}
+
+/**
+ * After the first retrieve, discover StandardValueSet members from retrieved
+ * RecordType / BusinessProcess XML and retrieve them explicitly. Does not
+ * change the first retrieve member list. Skips when no members are found.
+ */
+async function runPostFirstRetrieveStandardValueSetRetrieval({
+    projectPath,
+    alias = RETRIEVAL_CLI_ALIAS,
+    discoverNamesFn = discoverStandardValueSetNamesFromRetrievedProject,
+    execFn = execAsync
+} = {}) {
+    const discoveredNames = await discoverNamesFn(projectPath);
+    const names = Array.isArray(discoveredNames) ? discoveredNames : [];
+
+    logStandardValueSetPostRetrieveDiscovery(names);
+
+    const members = buildSecondStandardValueSetRetrieveMembers(names);
+
+    if (members.length === 0) {
+        console.log('STANDARD VALUE SET RETRIEVAL');
+        console.log(
+            'No StandardValueSet dependencies discovered. Skipping second retrieval.'
+        );
+        return {
+            skipped: true,
+            success: true,
+            members: [],
+            discoveredCount: names.length
+        };
+    }
+
+    const metadataArgs = buildRetrieveMetadataArgs(members);
+    const command =
+        `sf project retrieve start -o ${alias} ${metadataArgs} --json`;
+
+    logStandardValueSetExplicitRetrieve(members);
+
+    let stdout = '';
+    let stderr = '';
+
+    try {
+        const retrieveResult = await execFn(
+            `cd ${projectPath} && ${command}`,
+            {
+                maxBuffer: 50 * 1024 * 1024
+            }
+        );
+        stdout = retrieveResult.stdout || '';
+        stderr = retrieveResult.stderr || '';
+    } catch (error) {
+        stdout = error.stdout || '';
+        stderr = error.stderr || '';
+
+        logStandardValueSetExplicitRetrieveComplete({
+            success: false,
+            memberCount: members.length,
+            discoveredCount: names.length,
+            members,
+            command,
+            reason: error.message || String(error)
+        });
+
+        if (stderr) {
+            console.log('RETRIEVE STDERR');
+            console.log(stderr);
+        }
+
+        throw error;
+    }
+
+    const summary = summarizeRetrieveResultJson(stdout);
+
+    if (
+        summary.parsed
+        && typeof summary.status === 'number'
+        && summary.status !== 0
+    ) {
+        logStandardValueSetExplicitRetrieveComplete({
+            success: false,
+            memberCount: members.length,
+            discoveredCount: names.length,
+            members,
+            command,
+            reason: `Salesforce CLI retrieve reported status ${summary.status}`
+        });
+
+        if (stderr) {
+            console.log('RETRIEVE STDERR');
+            console.log(stderr);
+        }
+
+        throw new Error(
+            `Salesforce CLI retrieve reported status ${summary.status}`
+        );
+    }
+
+    logStandardValueSetExplicitRetrieveComplete({
+        success: true,
+        memberCount: members.length
+    });
+
+    if (stderr) {
+        console.log('RETRIEVE STDERR');
+        console.log(stderr);
+    }
+
+    return {
+        skipped: false,
+        success: true,
+        members,
+        discoveredCount: names.length
+    };
 }
 
 /**
@@ -1033,6 +1202,14 @@ exports.toExplicitStandardValueSetMembers = toExplicitStandardValueSetMembers;
 exports.mergeRetrieveMetadataMembers = mergeRetrieveMetadataMembers;
 exports.buildRetrieveMetadataMembersWithDiscovery =
     buildRetrieveMetadataMembersWithDiscovery;
+exports.buildSecondStandardValueSetRetrieveMembers =
+    buildSecondStandardValueSetRetrieveMembers;
+exports.buildSecondStandardValueSetRetrieveArgs =
+    buildSecondStandardValueSetRetrieveArgs;
+exports.shouldSkipSecondStandardValueSetRetrieve =
+    shouldSkipSecondStandardValueSetRetrieve;
+exports.runPostFirstRetrieveStandardValueSetRetrieval =
+    runPostFirstRetrieveStandardValueSetRetrieval;
 exports.summarizeRetrieveResultJson = summarizeRetrieveResultJson;
 exports.collectEmiPostRetrieveDebug = collectEmiPostRetrieveDebug;
 exports.EXPLICIT_EMI_RETRIEVE_MEMBER = EXPLICIT_EMI_RETRIEVE_MEMBER;
@@ -1340,6 +1517,11 @@ console.log(
  'Full Metadata Retrieval Complete'
 );
 setStatus('Full Metadata Retrieval Complete');
+
+        await runPostFirstRetrieveStandardValueSetRetrieval({
+            projectPath: `${workspace}/backup-project`,
+            alias: RETRIEVAL_CLI_ALIAS
+        });
 
         // TEMP DIAGNOSTIC — log-only filesystem probe after CLI retrieve
         // and before Git (git add runs later in runMigration).
