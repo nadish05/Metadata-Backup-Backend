@@ -655,11 +655,18 @@ function parseRelationshipFromFieldXml(fieldXml) {
  * Push relationship records for a parsed field relationship.
  * Summary may also emit CustomField deps for summarizedField and
  * qualified summaryForeignKey.
+ * MasterDetail on a CustomObject scan also emits the owning CustomField
+ * (Object.Field) without replacing the target CustomObject dependency.
  */
 function pushParsedRelationshipRecords(
     relationships,
     parsed,
-    { sourceMetadata, sourceField, depth }
+    {
+        sourceMetadata,
+        sourceField,
+        depth,
+        emitOwningMasterDetailField = false
+    }
 ) {
     relationships.push(
         createRelationshipRecord({
@@ -670,6 +677,31 @@ function pushParsedRelationshipRecords(
             depth
         })
     );
+
+    if (
+        emitOwningMasterDetailField &&
+        parsed.relationship === RELATIONSHIP_TYPES.MasterDetail
+    ) {
+        const owningFieldName = qualifyCustomFieldName(
+            sourceMetadata,
+            sourceField
+        );
+
+        if (owningFieldName && isCustomFieldApiToken(owningFieldName)) {
+            relationships.push(
+                createRelationshipRecord({
+                    referencedObject: owningFieldName,
+                    relationship: RELATIONSHIP_TYPES.MasterDetail,
+                    sourceMetadata,
+                    sourceField,
+                    depth,
+                    metadataType: 'CustomField',
+                    reason:
+                        'MasterDetail field discovered from CustomObject field metadata.'
+                })
+            );
+        }
+    }
 
     if (parsed.relationship !== RELATIONSHIP_TYPES.Summary) {
         return;
@@ -970,7 +1002,8 @@ const customObjectRelationshipDiscoverer = {
                         pushParsedRelationshipRecords(relationships, parsed, {
                             sourceMetadata: objectApiName,
                             sourceField: entry.sourceField,
-                            depth
+                            depth,
+                            emitOwningMasterDetailField: true
                         });
                     }
 
