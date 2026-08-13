@@ -1146,6 +1146,7 @@ async function main() {
                     'PermissionSetRelationshipDiscoverer',
                     'ProfileRelationshipDiscoverer',
                     'RecordTypeBusinessProcessDiscoverer',
+                    'RecordTypeCompactLayoutDiscoverer',
                     'StandardValueSetDiscoverer'
                 ]
             );
