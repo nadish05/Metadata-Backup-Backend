@@ -39,7 +39,7 @@ const NEW_BUSINESS_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <RecordType xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>New_Business</fullName>
     <active>true</active>
-    <compactLayout>Opportunity_Highlights</compactLayout>
+    <compactLayoutAssignment>Opportunity_Highlights</compactLayoutAssignment>
     <label>New Business</label>
 </RecordType>`;
 
@@ -47,7 +47,7 @@ const RENEWAL_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <RecordType xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Renewal</fullName>
     <active>true</active>
-    <compactLayout>Opportunity_Highlights</compactLayout>
+    <compactLayoutAssignment>Opportunity_Highlights</compactLayoutAssignment>
     <label>Renewal</label>
 </RecordType>`;
 
@@ -55,7 +55,7 @@ const ACCOUNT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <RecordType xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Business</fullName>
     <active>true</active>
-    <compactLayout>Account_Highlights</compactLayout>
+    <compactLayoutAssignment>Account_Highlights</compactLayoutAssignment>
     <label>Business</label>
 </RecordType>`;
 
@@ -63,7 +63,7 @@ const INVOICE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <RecordType xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Standard</fullName>
     <active>true</active>
-    <compactLayout>Invoice_Compact</compactLayout>
+    <compactLayoutAssignment>Invoice_Compact</compactLayoutAssignment>
     <label>Standard</label>
 </RecordType>`;
 
@@ -78,15 +78,23 @@ const EMPTY_LAYOUT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <RecordType xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Empty</fullName>
     <active>true</active>
-    <compactLayout></compactLayout>
+    <compactLayoutAssignment></compactLayoutAssignment>
     <label>Empty</label>
+</RecordType>`;
+
+const WHITESPACE_ONLY_LAYOUT_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<RecordType xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>WhitespaceOnly</fullName>
+    <active>true</active>
+    <compactLayoutAssignment>   </compactLayoutAssignment>
+    <label>Whitespace Only</label>
 </RecordType>`;
 
 const WHITESPACE_LAYOUT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <RecordType xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Spaced</fullName>
     <active>true</active>
-    <compactLayout>  Opportunity_Highlights  </compactLayout>
+    <compactLayoutAssignment>  Opportunity_Highlights  </compactLayoutAssignment>
     <label>Spaced</label>
 </RecordType>`;
 
@@ -95,6 +103,7 @@ const REPO_FILES = [
     'force-app/main/default/objects/Opportunity/recordTypes/Renewal.recordType-meta.xml',
     'force-app/main/default/objects/Opportunity/recordTypes/Standard.recordType-meta.xml',
     'force-app/main/default/objects/Opportunity/recordTypes/Empty.recordType-meta.xml',
+    'force-app/main/default/objects/Opportunity/recordTypes/WhitespaceOnly.recordType-meta.xml',
     'force-app/main/default/objects/Opportunity/recordTypes/Spaced.recordType-meta.xml',
     'force-app/main/default/objects/Opportunity/compactLayouts/Opportunity_Highlights.compactLayout-meta.xml',
     'force-app/main/default/objects/Account/recordTypes/Business.recordType-meta.xml',
@@ -112,6 +121,8 @@ const XML_BY_PATH = {
         NO_LAYOUT_XML,
     'force-app/main/default/objects/Opportunity/recordTypes/Empty.recordType-meta.xml':
         EMPTY_LAYOUT_XML,
+    'force-app/main/default/objects/Opportunity/recordTypes/WhitespaceOnly.recordType-meta.xml':
+        WHITESPACE_ONLY_LAYOUT_XML,
     'force-app/main/default/objects/Opportunity/recordTypes/Spaced.recordType-meta.xml':
         WHITESPACE_LAYOUT_XML,
     'force-app/main/default/objects/Account/recordTypes/Business.recordType-meta.xml':
@@ -153,7 +164,7 @@ async function discoverRecordType(metadataName) {
 
 async function main() {
     await runTest(
-        'TEST 1: Opportunity.New_Business compactLayout → CompactLayout:Opportunity.Opportunity_Highlights',
+        'TEST 1: Opportunity.New_Business compactLayoutAssignment → CompactLayout:Opportunity.Opportunity_Highlights',
         async () => {
             const result = await discoverRecordType('Opportunity.New_Business');
 
@@ -177,7 +188,7 @@ async function main() {
             );
             assert.strictEqual(
                 result.relationships[0].sourceField,
-                'compactLayout'
+                'compactLayoutAssignment'
             );
             assert.strictEqual(result.relationships[0].required, true);
             assert.strictEqual(result.relationships[0].selected, true);
@@ -189,7 +200,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 2: Opportunity.Renewal compactLayout → CompactLayout:Opportunity.Opportunity_Highlights',
+        'TEST 2: Opportunity.Renewal compactLayoutAssignment → CompactLayout:Opportunity.Opportunity_Highlights',
         async () => {
             const result = await discoverRecordType('Opportunity.Renewal');
 
@@ -206,7 +217,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 3: Account.Business compactLayout → CompactLayout:Account.Account_Highlights',
+        'TEST 3: Account.Business compactLayoutAssignment → CompactLayout:Account.Account_Highlights',
         async () => {
             const result = await discoverRecordType('Account.Business');
 
@@ -224,7 +235,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 4: Invoice__c.Standard compactLayout → CompactLayout:Invoice__c.Invoice_Compact',
+        'TEST 4: Invoice__c.Standard compactLayoutAssignment → CompactLayout:Invoice__c.Invoice_Compact',
         async () => {
             const result = await discoverRecordType('Invoice__c.Standard');
 
@@ -237,7 +248,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 5: RecordType without compactLayout emits no CompactLayout',
+        'TEST 5: RecordType without compactLayoutAssignment emits no CompactLayout',
         async () => {
             const result = await discoverRecordType('Opportunity.Standard');
 
@@ -246,7 +257,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 6: empty compactLayout emits no CompactLayout',
+        'TEST 6: empty compactLayoutAssignment emits no CompactLayout',
         async () => {
             const result = await discoverRecordType('Opportunity.Empty');
 
@@ -255,7 +266,16 @@ async function main() {
     );
 
     await runTest(
-        'TEST 7: whitespace around compactLayout value is trimmed',
+        'TEST 6b: whitespace-only compactLayoutAssignment emits no CompactLayout',
+        async () => {
+            const result = await discoverRecordType('Opportunity.WhitespaceOnly');
+
+            assert.deepStrictEqual(result.relationships, []);
+        }
+    );
+
+    await runTest(
+        'TEST 7: whitespace around compactLayoutAssignment value is trimmed',
         async () => {
             const result = await discoverRecordType('Opportunity.Spaced');
 

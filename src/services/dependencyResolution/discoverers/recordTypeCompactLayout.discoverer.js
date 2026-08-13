@@ -4,6 +4,7 @@ const RECORD_TYPE_META_SUFFIX = '.recordType-meta.xml';
 const DISCOVERER_ID = 'RecordTypeCompactLayoutDiscoverer';
 const DISCOVERY_METHOD = 'recordTypeCompactLayout';
 const RELATIONSHIP = 'RecordTypeCompactLayout';
+const SOURCE_FIELD = 'compactLayoutAssignment';
 
 function normalizePath(filePath) {
     return String(filePath || '').replace(/\\/g, '/');
@@ -113,7 +114,7 @@ function createCompactLayoutRelationship({
         type: 'CompactLayout',
         relationship: RELATIONSHIP,
         sourceMetadata: sourceRecordTypeName,
-        sourceField: 'compactLayout',
+        sourceField: SOURCE_FIELD,
         discoveredBy: DISCOVERER_ID,
         discoveryMethod: DISCOVERY_METHOD,
         required: true,
@@ -125,7 +126,7 @@ function createCompactLayoutRelationship({
 }
 
 /**
- * Discover CompactLayout dependencies from RecordType <compactLayout>.
+ * Discover CompactLayout dependencies from RecordType <compactLayoutAssignment>.
  * Generic for any object RecordType — does not special-case Opportunity.
  */
 const recordTypeCompactLayoutDiscoverer = {
@@ -184,7 +185,7 @@ const recordTypeCompactLayoutDiscoverer = {
                 const recordTypeXml = await readRepoFile(fieldFilePath);
                 const layoutName = extractXmlTagValue(
                     recordTypeXml,
-                    'compactLayout'
+                    SOURCE_FIELD
                 );
 
                 if (!layoutName) {
