@@ -69,11 +69,11 @@ async function readRepoFile(filePath) {
 
 async function main() {
     await runTest(
-        'EXPANDABLE_DEPENDENCY_TYPES includes CustomField and CustomObject',
+        'EXPANDABLE_DEPENDENCY_TYPES includes CustomField, CustomObject, and RecordType',
         () => {
             assert.deepStrictEqual(
                 [...EXPANDABLE_DEPENDENCY_TYPES],
-                ['CustomField', 'CustomObject']
+                ['CustomField', 'CustomObject', 'RecordType']
             );
         }
     );

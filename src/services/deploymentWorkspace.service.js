@@ -251,6 +251,30 @@ function resolveRecordTypePath(objectApiName, childApiName, repoFiles) {
     );
 }
 
+function parseBusinessProcessMemberName(name) {
+    const trimmed = String(name || '').trim();
+    const separatorIndex = trimmed.indexOf('.');
+
+    if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
+        return null;
+    }
+
+    return {
+        objectApiName: trimmed.slice(0, separatorIndex).trim(),
+        childApiName: trimmed.slice(separatorIndex + 1).trim()
+    };
+}
+
+function resolveBusinessProcessPath(objectApiName, childApiName, repoFiles) {
+    return resolveObjectChildMetadataPath(
+        objectApiName,
+        childApiName,
+        repoFiles,
+        'businessProcesses',
+        METADATA_TYPE_RULES.BusinessProcess.extension
+    );
+}
+
 function resolveCompactLayoutPath(objectApiName, childApiName, repoFiles) {
     return resolveObjectChildMetadataPath(
         objectApiName,
@@ -416,6 +440,17 @@ function resolvePathByTypeAndName(type, name, repoFiles) {
         const parsed = parseObjectChildName(name);
         return parsed
             ? resolveRecordTypePath(
+                  parsed.objectApiName,
+                  parsed.childApiName,
+                  repoFiles
+              )
+            : null;
+    }
+
+    if (type === 'BusinessProcess') {
+        const parsed = parseBusinessProcessMemberName(name);
+        return parsed
+            ? resolveBusinessProcessPath(
                   parsed.objectApiName,
                   parsed.childApiName,
                   repoFiles

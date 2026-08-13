@@ -52,7 +52,9 @@ async function main() {
             'PermissionSet',
             'ValidationRule',
             'Profile',
-            'ApexClass'
+            'ApexClass',
+            'BusinessProcess',
+            'RecordType'
         ]) {
             const result = classifyDependency({ type, name: 'Sample' });
             assert.strictEqual(

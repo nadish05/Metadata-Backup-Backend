@@ -73,6 +73,7 @@ const genericFileArtifactResolver = {
             const folderHints = {
                 ValidationRule: 'validationRules',
                 RecordType: 'recordTypes',
+                BusinessProcess: 'businessProcesses',
                 CompactLayout: 'compactLayouts',
                 FieldSet: 'fieldSets',
                 SharingReason: 'sharingReasons',
@@ -81,8 +82,17 @@ const genericFileArtifactResolver = {
             };
             const folder = folderHints[metadataType];
 
-            if (folder && objectApiName && childApiName) {
-                const expectedFolder = `/objects/${objectApiName}/${folder}/`;
+            // BusinessProcess names preserve spaces and must split on first '.'.
+            const objectChild =
+                metadataType === 'BusinessProcess' && name.includes('.')
+                    ? {
+                          objectApiName: name.slice(0, name.indexOf('.')).trim(),
+                          childApiName: name.slice(name.indexOf('.') + 1).trim()
+                      }
+                    : { objectApiName, childApiName };
+
+            if (folder && objectChild.objectApiName && objectChild.childApiName) {
+                const expectedFolder = `/objects/${objectChild.objectApiName}/${folder}/`;
 
                 return (
                     repoFiles
@@ -92,7 +102,7 @@ const genericFileArtifactResolver = {
                                 repoFile.endsWith(suffix) &&
                                 repoFile.includes(expectedFolder) &&
                                 basenameWithoutSuffix(repoFile, suffix) ===
-                                    childApiName
+                                    objectChild.childApiName
                         ) || null
                 );
             }

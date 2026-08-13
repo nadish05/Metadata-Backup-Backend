@@ -90,6 +90,11 @@ const METADATA_TYPE_RULES = {
         extension: '.recordType-meta.xml',
         requiresMetaXml: false
     },
+    BusinessProcess: {
+        kind: METADATA_KINDS.FILE,
+        extension: '.businessProcess-meta.xml',
+        requiresMetaXml: false
+    },
     CustomField: {
         kind: METADATA_KINDS.FILE,
         extension: '.field-meta.xml',
