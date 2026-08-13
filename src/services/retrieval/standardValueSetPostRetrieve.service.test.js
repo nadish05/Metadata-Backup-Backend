@@ -101,7 +101,7 @@ function createTempProject() {
 
 async function main() {
     await runTest(
-        'RecordType XML AccountSource → StandardValueSet:AccountSource',
+        'RecordType XML AccountSource → StandardValueSet:LeadSource',
         async () => {
             const projectPath = createTempProject();
 
@@ -116,7 +116,8 @@ async function main() {
                     projectPath
                 );
 
-                assert.deepStrictEqual(names, ['AccountSource']);
+                assert.deepStrictEqual(names, ['LeadSource']);
+                assert.ok(!names.includes('AccountSource'));
             } finally {
                 fs.rmSync(projectPath, { recursive: true, force: true });
             }
@@ -246,13 +247,13 @@ async function main() {
         () => {
             const names = extractUniqueStandardValueSetNames({
                 relationships: [
-                    { name: 'AccountSource' },
                     { name: 'LeadSource' },
-                    { name: 'AccountSource' }
+                    { name: 'Industry' },
+                    { name: 'LeadSource' }
                 ]
             });
 
-            assert.deepStrictEqual(names, ['AccountSource', 'LeadSource']);
+            assert.deepStrictEqual(names, ['LeadSource', 'Industry']);
         }
     );
 }

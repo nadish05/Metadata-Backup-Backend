@@ -8,6 +8,9 @@
  * RecordType XML:
  *   <picklistValues><picklist>LeadSource</picklist>...</picklistValues>
  *   → StandardValueSet:LeadSource
+ *   <picklistValues><picklist>AccountSource</picklist>...</picklistValues>
+ *   → StandardValueSet:LeadSource
+ *     (Account.AccountSource uses the LeadSource StandardValueSet)
  *
  * BusinessProcess:
  *   Salesforce allows BusinessProcess only on Lead, Opportunity, Case, and
@@ -23,7 +26,7 @@
  * Used when the field name uniquely identifies one StandardValueSet.
  */
 const PICKLIST_FIELD_TO_STANDARD_VALUE_SET = Object.freeze({
-    AccountSource: 'AccountSource',
+    AccountSource: 'LeadSource',
     LeadSource: 'LeadSource',
     StageName: 'OpportunityStage',
     Industry: 'Industry'
@@ -32,9 +35,11 @@ const PICKLIST_FIELD_TO_STANDARD_VALUE_SET = Object.freeze({
 /**
  * Object-qualified RecordType picklist field → StandardValueSet member.
  * Used when the field API name is shared across objects (Status, Type, …).
+ * Member names are Salesforce StandardValueSet names, not field API names.
  */
 const OBJECT_FIELD_TO_STANDARD_VALUE_SET = Object.freeze({
-    'Account.AccountSource': 'AccountSource',
+    'Account.AccountSource': 'LeadSource',
+    'Account.Industry': 'Industry',
     'Account.Rating': 'AccountRating',
     'Account.Type': 'AccountType',
     'Case.Origin': 'CaseOrigin',
@@ -42,8 +47,10 @@ const OBJECT_FIELD_TO_STANDARD_VALUE_SET = Object.freeze({
     'Case.Reason': 'CaseReason',
     'Case.Status': 'CaseStatus',
     'Case.Type': 'CaseType',
+    'Contact.LeadSource': 'LeadSource',
     'Lead.Industry': 'Industry',
-    'Lead.Rating': 'LeadRating',
+    'Lead.LeadSource': 'LeadSource',
+    'Lead.Rating': 'AccountRating',
     'Lead.Status': 'LeadStatus',
     'Opportunity.LeadSource': 'LeadSource',
     'Opportunity.StageName': 'OpportunityStage',

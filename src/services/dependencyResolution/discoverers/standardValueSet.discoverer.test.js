@@ -114,7 +114,6 @@ const REPO_FILES = [
     'force-app/main/default/objects/Opportunity/recordTypes/Renewal.recordType-meta.xml',
     'force-app/main/default/objects/Invoice__c/recordTypes/Retail.recordType-meta.xml',
     'force-app/main/default/objects/Opportunity/businessProcesses/Standard Sales.businessProcess-meta.xml',
-    'force-app/main/default/standardValueSets/AccountSource.standardValueSet-meta.xml',
     'force-app/main/default/standardValueSets/LeadSource.standardValueSet-meta.xml',
     'force-app/main/default/standardValueSets/OpportunityStage.standardValueSet-meta.xml'
 ];
@@ -156,7 +155,7 @@ function relationshipNames(result) {
 
 async function main() {
     await runTest(
-        'A: RecordType picklist AccountSource → StandardValueSet:AccountSource',
+        'A: RecordType picklist AccountSource → StandardValueSet:LeadSource',
         async () => {
             const result = await standardValueSetDiscoverer.discover({
                 selectedMetadata: [
@@ -175,7 +174,12 @@ async function main() {
                 'StandardValueSet'
             );
             assert.strictEqual(result.relationships[0].type, 'StandardValueSet');
-            assert.strictEqual(result.relationships[0].name, 'AccountSource');
+            assert.strictEqual(result.relationships[0].name, 'LeadSource');
+            assert.ok(
+                !result.relationships.some(
+                    (item) => item.name === 'AccountSource'
+                )
+            );
             assert.strictEqual(
                 result.relationships[0].relationship,
                 'RecordTypeStandardValueSet'
@@ -282,6 +286,132 @@ async function main() {
     );
 
     await runTest(
+        'AccountSource and LeadSource RecordTypes deduplicate to LeadSource',
+        async () => {
+            const result = await standardValueSetDiscoverer.discover({
+                selectedMetadata: [
+                    {
+                        metadataType: 'RecordType',
+                        metadataName: 'Account.Customer'
+                    },
+                    {
+                        metadataType: 'RecordType',
+                        metadataName: 'Opportunity.Enterprise'
+                    }
+                ],
+                repoFiles: REPO_FILES,
+                readRepoFile
+            });
+
+            assert.deepStrictEqual(relationshipNames(result), ['LeadSource']);
+            assert.ok(
+                !result.relationships.some(
+                    (item) => item.name === 'AccountSource'
+                )
+            );
+        }
+    );
+
+    await runTest(
+        'Salesforce StandardValueSet member names are used, not field API names',
+        () => {
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Account',
+                    'AccountSource'
+                ),
+                'LeadSource'
+            );
+            assert.notStrictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Account',
+                    'AccountSource'
+                ),
+                'AccountSource'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Lead',
+                    'LeadSource'
+                ),
+                'LeadSource'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Contact',
+                    'LeadSource'
+                ),
+                'LeadSource'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Opportunity',
+                    'LeadSource'
+                ),
+                'LeadSource'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Account',
+                    'Rating'
+                ),
+                'AccountRating'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet('Lead', 'Rating'),
+                'AccountRating'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet('Account', 'Type'),
+                'AccountType'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Account',
+                    'Industry'
+                ),
+                'Industry'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Opportunity',
+                    'StageName'
+                ),
+                'OpportunityStage'
+            );
+            assert.strictEqual(
+                resolveRecordTypePicklistStandardValueSet(
+                    'Opportunity',
+                    'Type'
+                ),
+                'OpportunityType'
+            );
+        }
+    );
+
+    await runTest(
+        'BusinessProcess mappings remain unchanged',
+        () => {
+            assert.strictEqual(
+                resolveBusinessProcessStandardValueSet('Opportunity'),
+                'OpportunityStage'
+            );
+            assert.strictEqual(
+                resolveBusinessProcessStandardValueSet('Case'),
+                'CaseStatus'
+            );
+            assert.strictEqual(
+                resolveBusinessProcessStandardValueSet('Lead'),
+                'LeadStatus'
+            );
+            assert.strictEqual(
+                resolveBusinessProcessStandardValueSet('Solution'),
+                'SolutionStatus'
+            );
+        }
+    );
+
+    await runTest(
         'E: individual picklist values are not StandardValueSet members',
         async () => {
             const accountResult = await standardValueSetDiscoverer.discover({
@@ -371,21 +501,6 @@ async function main() {
     await runTest(
         'F: StandardValueSet artifact resolves under standardValueSets/',
         () => {
-            const enriched = enrichNode(
-                {
-                    metadataType: 'StandardValueSet',
-                    name: 'AccountSource'
-                },
-                REPO_FILES
-            );
-
-            assert.strictEqual(enriched.artifactResolved, true);
-            assert.strictEqual(enriched.sourceExists, true);
-            assert.strictEqual(
-                enriched.filePath,
-                'force-app/main/default/standardValueSets/AccountSource.standardValueSet-meta.xml'
-            );
-
             const leadSource = enrichNode(
                 {
                     metadataType: 'StandardValueSet',
@@ -393,6 +508,9 @@ async function main() {
                 },
                 REPO_FILES
             );
+
+            assert.strictEqual(leadSource.artifactResolved, true);
+            assert.strictEqual(leadSource.sourceExists, true);
             assert.strictEqual(
                 leadSource.filePath,
                 'force-app/main/default/standardValueSets/LeadSource.standardValueSet-meta.xml'
@@ -417,7 +535,7 @@ async function main() {
         () => {
             const result = classifyDependency({
                 type: 'StandardValueSet',
-                name: 'AccountSource'
+                name: 'LeadSource'
             });
 
             assert.strictEqual(
@@ -429,7 +547,7 @@ async function main() {
             assert.strictEqual(result.defaultResolutionPolicy, ACTIONS.DEPLOY);
 
             const decision = createDefaultDecision({
-                name: 'AccountSource',
+                name: 'LeadSource',
                 type: 'StandardValueSet',
                 required: true,
                 selected: true
@@ -444,7 +562,7 @@ async function main() {
         'H: DEPLOY + selected StandardValueSet reaches package.xml',
         () => {
             const decision = createDefaultDecision({
-                name: 'AccountSource',
+                name: 'LeadSource',
                 type: 'StandardValueSet',
                 required: true,
                 selected: true
@@ -462,7 +580,10 @@ async function main() {
             });
 
             assert.ok(
-                packageHasMember(pkg, 'StandardValueSet', 'AccountSource')
+                packageHasMember(pkg, 'StandardValueSet', 'LeadSource')
+            );
+            assert.ok(
+                !packageHasMember(pkg, 'StandardValueSet', 'AccountSource')
             );
 
             const manifest = generateManifest(pkg);
@@ -471,6 +592,10 @@ async function main() {
                 /<name>StandardValueSet<\/name>/
             );
             assert.match(
+                manifest.packageXml,
+                /<members>LeadSource<\/members>/
+            );
+            assert.doesNotMatch(
                 manifest.packageXml,
                 /<members>AccountSource<\/members>/
             );
@@ -490,7 +615,7 @@ async function main() {
                     ],
                     requiredDependencies: [
                         {
-                            name: 'AccountSource',
+                            name: 'LeadSource',
                             type: 'StandardValueSet',
                             action,
                             selected: action === 'SKIP' ? false : true,
@@ -501,7 +626,7 @@ async function main() {
                 });
 
                 assert.strictEqual(
-                    packageHasMember(pkg, 'StandardValueSet', 'AccountSource'),
+                    packageHasMember(pkg, 'StandardValueSet', 'LeadSource'),
                     false,
                     `${action} must not force StandardValueSet into package`
                 );
