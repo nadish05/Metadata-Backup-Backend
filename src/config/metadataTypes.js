@@ -95,6 +95,13 @@ const METADATA_TYPE_RULES = {
         extension: '.businessProcess-meta.xml',
         requiresMetaXml: false
     },
+    StandardValueSet: {
+        kind: METADATA_KINDS.FILE,
+        folder: 'standardValueSets',
+        extension: '.standardValueSet-meta.xml',
+        memberNamePattern: /^[A-Za-z][A-Za-z0-9_]*$/,
+        requiresMetaXml: false
+    },
     CustomField: {
         kind: METADATA_KINDS.FILE,
         extension: '.field-meta.xml',

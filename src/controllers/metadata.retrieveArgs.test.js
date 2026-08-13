@@ -15,7 +15,9 @@ const {
     inspectExplicitEmiRetrieveFilesystem,
     buildExplicitEmiRetrieveDebugPayload,
     parseDiscoveredCustomObjectNames,
+    parseDiscoveredStandardValueSetNames,
     toExplicitCustomObjectMembers,
+    toExplicitStandardValueSetMembers,
     mergeRetrieveMetadataMembers,
     buildRetrieveMetadataMembersWithDiscovery
 } = require('./metadata.controller');
@@ -255,6 +257,77 @@ async function main() {
         assert.ok(merged.includes('Profile'));
         assert.ok(merged.includes('CustomField'));
         assert.ok(merged.includes('RecordType'));
+    });
+
+    await runTest('StandardValueSet is not a wildcard retrieve type', () => {
+        const members = buildRetrieveMetadataMembers();
+
+        assert.ok(!RETRIEVAL_METADATA_TYPES.includes('StandardValueSet'));
+        assert.ok(!members.includes('StandardValueSet'));
+        assert.ok(!members.includes('StandardValueSet:AccountSource'));
+        assert.ok(!members.includes('StandardValueSet:LeadSource'));
+        assert.ok(!members.includes('StandardValueSet:OpportunityStage'));
+    });
+
+    await runTest('parseDiscoveredStandardValueSetNames extracts unique members', () => {
+        const parsed = parseDiscoveredStandardValueSetNames(JSON.stringify({
+            status: 0,
+            result: [
+                { fullName: 'AccountSource', type: 'StandardValueSet' },
+                { fullName: 'LeadSource', type: 'StandardValueSet' },
+                { fullName: 'OpportunityStage', type: 'StandardValueSet' },
+                { fullName: 'LeadSource', type: 'StandardValueSet' }
+            ]
+        }));
+
+        assert.deepStrictEqual(parsed.names, [
+            'AccountSource',
+            'LeadSource',
+            'OpportunityStage'
+        ]);
+    });
+
+    await runTest('discovered StandardValueSet names become explicit members', () => {
+        assert.deepStrictEqual(
+            toExplicitStandardValueSetMembers([
+                'AccountSource',
+                'LeadSource'
+            ]),
+            [
+                'StandardValueSet:AccountSource',
+                'StandardValueSet:LeadSource'
+            ]
+        );
+    });
+
+    await runTest('StandardValueSet members are included only when discovered', () => {
+        const withoutDiscovery = buildRetrieveMetadataMembersWithDiscovery([]);
+        const withDiscovery = buildRetrieveMetadataMembersWithDiscovery(
+            [],
+            ['AccountSource', 'LeadSource', 'OpportunityStage']
+        );
+
+        assert.ok(!withoutDiscovery.includes('StandardValueSet:AccountSource'));
+        assert.ok(!withoutDiscovery.includes('StandardValueSet'));
+        assert.ok(withDiscovery.includes('StandardValueSet:AccountSource'));
+        assert.ok(withDiscovery.includes('StandardValueSet:LeadSource'));
+        assert.ok(withDiscovery.includes('StandardValueSet:OpportunityStage'));
+        assert.ok(withDiscovery.includes('CustomObject'));
+        assert.ok(withDiscovery.includes('ApexClass'));
+        assert.ok(withDiscovery.includes('Profile'));
+    });
+
+    await runTest('merge keeps CustomObject discovery independent of StandardValueSet', () => {
+        const merged = mergeRetrieveMetadataMembers({
+            baseMembers: buildRetrieveMetadataMembers(),
+            discoveredCustomObjectNames: ['Equipment_Maintenance_Item__c'],
+            discoveredStandardValueSetNames: ['AccountSource']
+        });
+
+        assert.ok(merged.includes('CustomObject:Equipment_Maintenance_Item__c'));
+        assert.ok(merged.includes('StandardValueSet:AccountSource'));
+        assert.ok(merged.includes('CustomObject'));
+        assert.ok(!merged.includes('StandardValueSet'));
     });
 
     await runTest('discovery-backed args keep existing metadata types', () => {

@@ -101,7 +101,7 @@ function normalizeDiscoveredCustomObjectName(entry) {
  * Convert Metadata API / CLI list-metadata entries into bare CustomObject
  * API names (e.g. Equipment_Maintenance_Item__c). Does not invent members.
  */
-function parseDiscoveredCustomObjectNames(stdout) {
+function parseDiscoveredListMetadataNames(stdout, typePrefix = null) {
     const payload = extractJsonPayload(stdout);
     if (!payload) {
         return {
@@ -120,6 +120,7 @@ function parseDiscoveredCustomObjectNames(stdout) {
 
     const names = [];
     const seen = new Set();
+    const prefix = typePrefix ? `${typePrefix}:` : null;
 
     for (const entry of rows) {
         let name = normalizeDiscoveredCustomObjectName(entry);
@@ -127,8 +128,8 @@ function parseDiscoveredCustomObjectNames(stdout) {
             continue;
         }
 
-        if (name.startsWith('CustomObject:')) {
-            name = name.slice('CustomObject:'.length).trim();
+        if (prefix && name.startsWith(prefix)) {
+            name = name.slice(prefix.length).trim();
         }
 
         if (!name || seen.has(name)) {
@@ -147,6 +148,14 @@ function parseDiscoveredCustomObjectNames(stdout) {
     };
 }
 
+function parseDiscoveredCustomObjectNames(stdout) {
+    return parseDiscoveredListMetadataNames(stdout, 'CustomObject');
+}
+
+function parseDiscoveredStandardValueSetNames(stdout) {
+    return parseDiscoveredListMetadataNames(stdout, 'StandardValueSet');
+}
+
 function toExplicitCustomObjectMembers(names = []) {
     return (Array.isArray(names) ? names : [])
         .map((name) => String(name || '').trim())
@@ -158,18 +167,32 @@ function toExplicitCustomObjectMembers(names = []) {
         ));
 }
 
+function toExplicitStandardValueSetMembers(names = []) {
+    return (Array.isArray(names) ? names : [])
+        .map((name) => String(name || '').trim())
+        .filter(Boolean)
+        .map((name) => (
+            name.startsWith('StandardValueSet:')
+                ? name
+                : `StandardValueSet:${name}`
+        ));
+}
+
 /**
- * Merge base retrieve members with discovered CustomObject members.
- * Preserves order, removes duplicates, never invents Maintenance_Request__c
- * unless discovery returned it as a CustomObject name.
+ * Merge base retrieve members with discovered CustomObject and
+ * StandardValueSet members. Preserves order, removes duplicates, never
+ * invents Maintenance_Request__c or StandardValueSet names unless discovery
+ * returned them.
  */
 function mergeRetrieveMetadataMembers({
     baseMembers = buildRetrieveMetadataMembers(),
-    discoveredCustomObjectNames = []
+    discoveredCustomObjectNames = [],
+    discoveredStandardValueSetNames = []
 } = {}) {
-    const explicitDiscovered = toExplicitCustomObjectMembers(
-        discoveredCustomObjectNames
-    );
+    const explicitDiscovered = [
+        ...toExplicitCustomObjectMembers(discoveredCustomObjectNames),
+        ...toExplicitStandardValueSetMembers(discoveredStandardValueSetNames)
+    ];
     const merged = [];
     const seen = new Set();
 
@@ -185,11 +208,13 @@ function mergeRetrieveMetadataMembers({
 }
 
 function buildRetrieveMetadataMembersWithDiscovery(
-    discoveredCustomObjectNames = []
+    discoveredCustomObjectNames = [],
+    discoveredStandardValueSetNames = []
 ) {
     return mergeRetrieveMetadataMembers({
         baseMembers: buildRetrieveMetadataMembers(),
-        discoveredCustomObjectNames
+        discoveredCustomObjectNames,
+        discoveredStandardValueSetNames
     });
 }
 
@@ -260,6 +285,83 @@ async function discoverCustomObjectNames(alias = RETRIEVAL_CLI_ALIAS) {
         return {
             names: parsed.names,
             strategy: 'explicit_discovered_custom_objects',
+            errorMessage: null
+        };
+    } catch (error) {
+        return {
+            names: [],
+            strategy: 'discovery_failed_fallback',
+            errorMessage: error.message || String(error)
+        };
+    }
+}
+
+function logStandardValueSetDiscoveryDebug({
+    strategy,
+    discoveredCount = 0,
+    explicitMembersAdded = 0,
+    errorMessage = null
+} = {}) {
+    console.log('====================================================');
+    console.log('STANDARD VALUE SET DISCOVERY DEBUG');
+    console.log('====================================================');
+    console.log(JSON.stringify({
+        strategy,
+        discoveredCount,
+        explicitMembersAdded,
+        errorMessage
+    }, null, 2));
+    console.log('====================================================');
+}
+
+/**
+ * Discover StandardValueSet members from the already-authenticated temporg
+ * session. Wildcard StandardValueSet retrieve is not supported; explicit
+ * members are required. On failure, returns empty names so callers preserve
+ * existing retrieve behavior for all other metadata types.
+ */
+async function discoverStandardValueSetNames(alias = RETRIEVAL_CLI_ALIAS) {
+    try {
+        const listResult = await execAsync(
+            `sf org list metadata -m StandardValueSet -o ${alias} --json`,
+            {
+                maxBuffer: 50 * 1024 * 1024
+            }
+        );
+
+        const parsed = parseDiscoveredStandardValueSetNames(
+            listResult.stdout || ''
+        );
+        if (!parsed.parsed) {
+            return {
+                names: [],
+                strategy: 'discovery_failed_fallback',
+                errorMessage: parsed.reason || 'invalid_json'
+            };
+        }
+
+        if (
+            typeof parsed.status === 'number'
+            && parsed.status !== 0
+        ) {
+            return {
+                names: [],
+                strategy: 'discovery_failed_fallback',
+                errorMessage: `list metadata status ${parsed.status}`
+            };
+        }
+
+        if (parsed.names.length === 0) {
+            return {
+                names: [],
+                strategy: 'discovery_empty_fallback',
+                errorMessage: null
+            };
+        }
+
+        return {
+            names: parsed.names,
+            strategy: 'explicit_discovered_standard_value_sets',
             errorMessage: null
         };
     } catch (error) {
@@ -749,7 +851,10 @@ exports.RETRIEVAL_STANDARD_OBJECT_MEMBERS = RETRIEVAL_STANDARD_OBJECT_MEMBERS;
 exports.buildRetrieveMetadataMembers = buildRetrieveMetadataMembers;
 exports.buildRetrieveMetadataArgs = buildRetrieveMetadataArgs;
 exports.parseDiscoveredCustomObjectNames = parseDiscoveredCustomObjectNames;
+exports.parseDiscoveredStandardValueSetNames =
+    parseDiscoveredStandardValueSetNames;
 exports.toExplicitCustomObjectMembers = toExplicitCustomObjectMembers;
+exports.toExplicitStandardValueSetMembers = toExplicitStandardValueSetMembers;
 exports.mergeRetrieveMetadataMembers = mergeRetrieveMetadataMembers;
 exports.buildRetrieveMetadataMembersWithDiscovery =
     buildRetrieveMetadataMembersWithDiscovery;
@@ -947,18 +1052,31 @@ console.log('STEP 4 COMPLETE');
         console.log('STEP 5 - Retrieving ApexClass');
         setStatus('Retrieving ApexClass');
 
-const discovery = await discoverCustomObjectNames(RETRIEVAL_CLI_ALIAS);
+const [discovery, standardValueSetDiscovery] = await Promise.all([
+    discoverCustomObjectNames(RETRIEVAL_CLI_ALIAS),
+    discoverStandardValueSetNames(RETRIEVAL_CLI_ALIAS)
+]);
 const discoveredCustomObjectNames = discovery.names || [];
+const discoveredStandardValueSetNames =
+    standardValueSetDiscovery.names || [];
 const retrieveMembers = buildRetrieveMetadataMembersWithDiscovery(
-    discoveredCustomObjectNames
+    discoveredCustomObjectNames,
+    discoveredStandardValueSetNames
 );
 const explicitDiscoveredMembers = toExplicitCustomObjectMembers(
     discoveredCustomObjectNames
+);
+const explicitStandardValueSetMembers = toExplicitStandardValueSetMembers(
+    discoveredStandardValueSetNames
 );
 const baseMemberSet = new Set(buildRetrieveMetadataMembers());
 const explicitMembersAdded = explicitDiscoveredMembers.filter(
     (member) => !baseMemberSet.has(member)
 ).length;
+const explicitStandardValueSetMembersAdded =
+    explicitStandardValueSetMembers.filter(
+        (member) => !baseMemberSet.has(member)
+    ).length;
 
 logCustomObjectDiscoveryDebug({
     strategy: discovery.strategy,
@@ -970,6 +1088,13 @@ logCustomObjectDiscoveryDebug({
     discoveredIncludesMaintenanceRequestObject:
         discoveredCustomObjectNames.includes('Maintenance_Request__c'),
     errorMessage: discovery.errorMessage || null
+});
+
+logStandardValueSetDiscoveryDebug({
+    strategy: standardValueSetDiscovery.strategy,
+    discoveredCount: discoveredStandardValueSetNames.length,
+    explicitMembersAdded: explicitStandardValueSetMembersAdded,
+    errorMessage: standardValueSetDiscovery.errorMessage || null
 });
 
 const metadataArgs = buildRetrieveMetadataArgs(retrieveMembers);

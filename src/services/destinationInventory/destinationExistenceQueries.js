@@ -357,6 +357,11 @@ function buildExistenceQuery(type, name) {
         case 'EmailAlert':
             return null;
 
+        // StandardValueSet: no supported SOQL/Tooling existence query in this
+        // catalog. Destination remains UNKNOWN. Do not invent a query.
+        case 'StandardValueSet':
+            return null;
+
         default:
             return null;
     }

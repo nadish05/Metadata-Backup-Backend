@@ -54,7 +54,8 @@ async function main() {
             'Profile',
             'ApexClass',
             'BusinessProcess',
-            'RecordType'
+            'RecordType',
+            'StandardValueSet'
         ]) {
             const result = classifyDependency({ type, name: 'Sample' });
             assert.strictEqual(

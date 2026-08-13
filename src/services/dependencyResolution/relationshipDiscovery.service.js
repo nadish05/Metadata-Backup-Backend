@@ -20,13 +20,16 @@ const MAX_GRAPH_DEPTH = 10;
  * Flow/Apex/FlexiPage → CustomObject). CustomObject seeds let the existing
  * discoverers expand internal object dependencies (search layouts, record
  * types, compact layouts, nameField) for indirectly discovered objects.
- * RecordType seeds let RecordType XML scan BusinessProcess references.
+ * RecordType seeds let RecordType XML scan BusinessProcess and
+ * StandardValueSet references. BusinessProcess seeds let object-context
+ * StandardValueSet relationships expand.
  * Keeps expansion generic — not Flow-specific.
  */
 const EXPANDABLE_DEPENDENCY_TYPES = Object.freeze([
     'CustomField',
     'CustomObject',
-    'RecordType'
+    'RecordType',
+    'BusinessProcess'
 ]);
 
 function logSection(title) {

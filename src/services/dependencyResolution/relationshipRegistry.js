@@ -8,6 +8,7 @@ const customObjectActionOverrideDiscoverer = require('./discoverers/customObject
 const permissionSetRelationshipDiscoverer = require('./discoverers/permissionSetRelationship.discoverer');
 const profileRelationshipDiscoverer = require('./discoverers/profileRelationship.discoverer');
 const recordTypeBusinessProcessDiscoverer = require('./discoverers/recordTypeBusinessProcess.discoverer');
+const standardValueSetDiscoverer = require('./discoverers/standardValueSet.discoverer');
 
 function getRegisteredDiscoverers() {
     return [
@@ -15,7 +16,8 @@ function getRegisteredDiscoverers() {
         customObjectActionOverrideDiscoverer,
         permissionSetRelationshipDiscoverer,
         profileRelationshipDiscoverer,
-        recordTypeBusinessProcessDiscoverer
+        recordTypeBusinessProcessDiscoverer,
+        standardValueSetDiscoverer
     ];
 }
 

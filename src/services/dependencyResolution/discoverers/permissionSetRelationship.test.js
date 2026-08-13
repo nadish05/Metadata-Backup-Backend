@@ -1145,7 +1145,8 @@ async function main() {
                     'CustomObjectActionOverrideDiscoverer',
                     'PermissionSetRelationshipDiscoverer',
                     'ProfileRelationshipDiscoverer',
-                    'RecordTypeBusinessProcessDiscoverer'
+                    'RecordTypeBusinessProcessDiscoverer',
+                    'StandardValueSetDiscoverer'
                 ]
             );
         }
