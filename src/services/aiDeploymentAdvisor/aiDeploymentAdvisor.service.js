@@ -9,6 +9,10 @@
  */
 
 const { generateAiText } = require('../aiTextGeneration.service');
+const {
+    sanitizeFactPackForAi,
+    getComponentFactPack
+} = require('./aiResolutionFactPack.service');
 
 const DEFAULT_DISCLAIMER =
     'AI explanations are advisory only. They do not change deployment decisions, packages, metadata, or validation results.';
@@ -26,7 +30,8 @@ const ALLOWED_CONTEXT_KEYS = Object.freeze([
     'autoValidationReport',
     'enterpriseDeploymentReport',
     'deploymentDiagnostics',
-    'deploymentSummary'
+    'deploymentSummary',
+    'aiResolutionFactPack'
 ]);
 
 const SUPPORTED_PROVIDERS = Object.freeze(['gemini', 'openai']);
@@ -112,6 +117,12 @@ function sanitizeAiResolutionContext(rawContext) {
         if (Object.prototype.hasOwnProperty.call(source, key)) {
             sanitized[key] = source[key];
         }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(sanitized, 'aiResolutionFactPack')) {
+        sanitized.aiResolutionFactPack = sanitizeFactPackForAi(
+            sanitized.aiResolutionFactPack
+        );
     }
 
     return sanitized;
@@ -327,7 +338,7 @@ function deriveSafeToSkip(item) {
     return null;
 }
 
-function attachBackendDerivedFields(explanation, knownItems) {
+function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
     const key = failureKey(
         explanation?.metadataType,
         explanation?.metadataName
@@ -341,8 +352,13 @@ function attachBackendDerivedFields(explanation, knownItems) {
         null;
 
     const safeToSkip = deriveSafeToSkip(item);
+    const componentFacts = getComponentFactPack(
+        factPack,
+        explanation?.metadataType,
+        explanation?.metadataName
+    );
 
-    return {
+    const enriched = {
         ...explanation,
         resolutionCategory: deriveResolutionCategory(item),
         backendCanAutoFix: deriveBackendCanAutoFix(item),
@@ -353,16 +369,122 @@ function attachBackendDerivedFields(explanation, knownItems) {
                 ? 'Backend marked this component as safe to skip.'
                 : SKIP_GUIDANCE_DEFAULT
     };
+
+    if (!componentFacts) {
+        return enriched;
+    }
+
+    // Backend-authoritative additive facts — never invent destination types.
+    enriched.source = {
+        type: componentFacts.source?.type ?? null,
+        calculated: componentFacts.source?.calculated ?? null,
+        confidence: componentFacts.source?.confidence || 'UNKNOWN',
+        exists: componentFacts.source?.exists ?? null,
+        label: componentFacts.source?.label ?? null
+    };
+    enriched.destination = {
+        type: componentFacts.destination?.type ?? null,
+        calculated: componentFacts.destination?.calculated ?? null,
+        confidence: componentFacts.destination?.confidence || 'UNKNOWN',
+        exists: componentFacts.destination?.exists ?? null,
+        label: componentFacts.destination?.label ?? null
+    };
+    enriched.conflict = {
+        type: componentFacts.comparison?.conflictType ?? null,
+        description: buildConflictDescription(componentFacts),
+        cliProblem: componentFacts.cliProblem || null,
+        classifiedReason: componentFacts.classifiedReason || null
+    };
+    enriched.resolution = {
+        action: deriveResolutionAction(componentFacts),
+        steps: buildResolutionSteps(componentFacts),
+        reason: buildResolutionReason(componentFacts)
+    };
+
+    return enriched;
 }
 
-function enrichReportExplanations(report, knownItems) {
+function buildConflictDescription(componentFacts) {
+    const comparison = componentFacts?.comparison;
+    const source = componentFacts?.source;
+    const destination = componentFacts?.destination;
+
+    if (!comparison || comparison.confidence === 'UNKNOWN') {
+        return (
+            'Destination field type could not be verified. Salesforce reported a field definition conflict, but the exact destination type is UNKNOWN.'
+        );
+    }
+
+    if (comparison.conflictType !== 'FIELD_TYPE_CONVERSION') {
+        return null;
+    }
+
+    return (
+        `Source field type is ${source?.type ?? 'UNKNOWN'}` +
+        ` (calculated=${String(source?.calculated)})` +
+        ` while destination field type is ${destination?.type ?? 'UNKNOWN'}` +
+        ` (calculated=${String(destination?.calculated)}).`
+    );
+}
+
+function deriveResolutionAction(componentFacts) {
+    const comparison = componentFacts?.comparison;
+
+    if (!comparison || comparison.confidence === 'UNKNOWN') {
+        return 'MANUAL';
+    }
+
+    if (comparison.conflictType === 'FIELD_TYPE_CONVERSION') {
+        return 'BOTH';
+    }
+
+    return 'MANUAL';
+}
+
+function buildResolutionSteps(componentFacts) {
+    const comparison = componentFacts?.comparison;
+
+    if (!comparison || comparison.confidence === 'UNKNOWN') {
+        return [
+            'Review the Salesforce CLI problem text for this CustomField.',
+            'Verify the destination field definition in Setup.',
+            'Reconcile source and destination field definitions manually before redeploying.'
+        ];
+    }
+
+    if (comparison.conflictType === 'FIELD_TYPE_CONVERSION') {
+        return [
+            'Compare the source CustomField definition with the destination field definition.',
+            'Salesforce does not allow in-place conversion between incompatible field types (including Formula ↔ non-Formula).',
+            'Decide whether to change the source metadata, change the destination field, or deploy a new field — then re-validate.',
+            'Do not delete or replace production fields without reviewing business impact.'
+        ];
+    }
+
+    return [
+        'Review the Salesforce error and reconcile source/destination metadata manually.'
+    ];
+}
+
+function buildResolutionReason(componentFacts) {
+    if (componentFacts?.cliProblem) {
+        return componentFacts.cliProblem;
+    }
+
+    return (
+        componentFacts?.classifiedReason ||
+        'Manual reconciliation is required for this CustomField failure.'
+    );
+}
+
+function enrichReportExplanations(report, knownItems, factPack = null) {
     if (!report || typeof report !== 'object') {
         return report;
     }
 
     const explanations = Array.isArray(report.explanations)
         ? report.explanations.map((explanation) =>
-              attachBackendDerivedFields(explanation, knownItems)
+              attachBackendDerivedFields(explanation, knownItems, factPack)
           )
         : [];
 
@@ -486,7 +608,11 @@ function buildStructuredContext(context) {
                     category: failure.category || null,
                     severity: failure.severity || null,
                     reason: failure.reason || null,
-                    recommendedNextStep: failure.recommendedNextStep || null
+                    recommendedNextStep: failure.recommendedNextStep || null,
+                    cliProblem:
+                        failure.evidence?.problem ||
+                        failure.cliProblem ||
+                        null
                 })
             )
         },
@@ -586,7 +712,10 @@ function buildStructuredContext(context) {
                   success: context.deploymentSummary.success,
                   message: context.deploymentSummary.message || null
               }
-            : null
+            : null,
+        aiResolutionFactPack: sanitizeFactPackForAi(
+            context.aiResolutionFactPack
+        )
     };
 }
 
@@ -598,9 +727,18 @@ Using ONLY the structured deployment validation context below, produce a JSON ob
 Rules:
 - Explain what failed, why it failed, business impact, recommended resolution, and Salesforce best practice.
 - Never invent metadata, package members, or components not present in the context.
+- Never invent destination field types, calculated flags, or org capabilities.
+- Treat aiResolutionFactPack.source as authoritative for source field facts.
+- Treat aiResolutionFactPack.destination as authoritative for destination field facts.
+- Prefer cliProblem (original Salesforce error) over rewritten classification reasons when both are present.
+- If destination.confidence is UNKNOWN or destination.type is null, explicitly say the destination type could not be verified. Do not claim it is Formula or any other type.
+- Explain conflicts using provided source/destination facts and comparison.conflictType when present.
+- Give actionable user guidance (SOURCE, DESTINATION, BOTH, or MANUAL) without automatically modifying metadata.
 - Never recommend unsafe skips, disabling validations, or automatically modifying the deployment package.
 - Never say a component is safe to skip unless the backend context explicitly marks safeToSkip=true (it normally will not).
+- Never convert FAILURE into SAFE_SKIP or claim check-only succeeded when it failed.
 - Never override backend decisions. If autoFixReport shows a successful include, explain that the backend already auto-fixed it.
+- Do not recommend deleting or replacing production fields unless facts support that option and clearly require user review of business impact.
 - Return JSON only. No markdown.
 
 Required JSON shape:
@@ -666,6 +804,7 @@ function normalizeExplanation(raw, knownKeys) {
     }
 
     // Strip any client/model-invented decision fields; backend derives them.
+    // Also strip invented source/destination facts — fact pack is authoritative.
     return {
         metadataType,
         metadataName,
@@ -754,6 +893,7 @@ async function generateAiResolutionReport(context = {}, options = {}) {
 
     const generateText = options.generateText || generateAiText;
     const structuredContext = buildStructuredContext(context);
+    const factPack = structuredContext.aiResolutionFactPack;
     const prompt = buildPrompt(structuredContext);
     const startedAt = Date.now();
 
@@ -782,7 +922,8 @@ async function generateAiResolutionReport(context = {}, options = {}) {
                     parsed?.summary ||
                         'AI response was incomplete; returned deterministic resolution explanations.'
                 ),
-                knownItems
+                knownItems,
+                factPack
             );
         }
 
@@ -806,7 +947,8 @@ async function generateAiResolutionReport(context = {}, options = {}) {
                         : `Generated ${aiExplanations.length} deployment resolution explanation(s).`,
                 disclaimer: DEFAULT_DISCLAIMER
             },
-            knownItems
+            knownItems,
+            factPack
         );
     } catch (error) {
         console.error('AI RESOLUTION LAYER ERROR');
@@ -824,7 +966,8 @@ async function generateAiResolutionReport(context = {}, options = {}) {
                 provider,
                 'AI provider unavailable; returned deterministic resolution explanations.'
             ),
-            knownItems
+            knownItems,
+            factPack
         );
     }
 }

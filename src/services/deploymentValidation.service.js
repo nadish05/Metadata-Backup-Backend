@@ -80,6 +80,10 @@ const {
     buildOnDemandAiResolutionStub
 } = require('./aiDeploymentAdvisor/aiDeploymentAdvisor.service');
 const {
+    buildAiResolutionFactPack,
+    serializeSourceCustomFieldShapeIndex
+} = require('./aiDeploymentAdvisor/aiResolutionFactPack.service');
+const {
     buildEnterpriseDeploymentReport
 } = require('./deploymentReporting/enterpriseDeploymentReport.service');
 
@@ -1963,6 +1967,11 @@ async function validateDeployment({
         destinationShape: destinationShapeIndex
             ? serializeDestinationShapeIndex(destinationShapeIndex)
             : null,
+        // Phase 9C — source CustomField shapes for AI / CONTRACT consumers.
+        // Additive only — never mutates package or deployment gates.
+        sourceCustomFieldShape: sourceShapeIndex
+            ? serializeSourceCustomFieldShapeIndex(sourceShapeIndex)
+            : null,
         // Additive report-only provenance. Output only — never consumed by backend.
         deploymentPackageProvenance
     };
@@ -2034,6 +2043,22 @@ async function validateDeployment({
 
     response.failureClassification = failureClassification;
     response.resolutionReport = resolutionReport;
+
+    // Phase 1 AI Resolution — deterministic CustomField fact pack (advisory only).
+    // Does not change classification, gates, package, or check-only outcomes.
+    try {
+        response.aiResolutionFactPack = buildAiResolutionFactPack({
+            failureClassification,
+            deploymentDiagnostics: response.deploymentDiagnostics || null,
+            deployOutcome: deploymentResult,
+            sourceShapeIndex,
+            destinationShapeIndex
+        });
+    } catch (factPackError) {
+        console.error('AI RESOLUTION FACT PACK ERROR');
+        console.error(factPackError?.message || factPackError);
+        response.aiResolutionFactPack = { version: 1, components: [] };
+    }
 
     // Phase 17.3 — Auto Fix Orchestrator (additive).
     // Reuses existing package/workspace services only. Never retries CLI,
@@ -2208,6 +2233,19 @@ async function validateDeployment({
     // Preserve SAFE_SKIP report across revalidation response merge.
     if (!finalResponse.safeSkipReport) {
         finalResponse.safeSkipReport = response.safeSkipReport;
+    }
+
+    // Preserve AI fact pack across revalidation merge (advisory only).
+    if (!finalResponse.aiResolutionFactPack && response.aiResolutionFactPack) {
+        finalResponse.aiResolutionFactPack = response.aiResolutionFactPack;
+    }
+
+    // Preserve serialized source CustomField shapes for on-demand AI clients.
+    if (
+        !finalResponse.sourceCustomFieldShape &&
+        response.sourceCustomFieldShape
+    ) {
+        finalResponse.sourceCustomFieldShape = response.sourceCustomFieldShape;
     }
 
     // Phase 17.7 — AI Resolution is on-demand only (no automatic LLM call).
