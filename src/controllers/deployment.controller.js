@@ -304,68 +304,81 @@ const dependencies = [
 };
 
 const deploymentValidationService = require('../services/deploymentValidation.service');
+const deploymentValidationAsyncService = require('../services/deploymentValidationAsync.service');
 const {
     attachReservedDeploymentSelections
 } = require('../services/deploymentPlanner/deploymentSelections.foundation');
+
+function extractValidationRequestArgs(req) {
+    const {
+        refreshToken,
+        instanceUrl,
+        orgId,
+        deploymentPackage,
+        // Optional Deployment Planner preferences (Deploy/Skip).
+        deploymentSelections
+    } = req.body || {};
+
+    // TEMPORARY DIAGNOSTIC — first backend sight of client selections.
+    console.log('------------------------------------------');
+    console.log('DEPLOYMENT SELECTION CREATED');
+    console.log('Caller');
+    console.log(
+        req.originalUrl ||
+            req.url ||
+            'POST /api/deployment/validate (client request body)'
+    );
+    console.log('File');
+    console.log('deployment.controller.js');
+    console.log('Method');
+    console.log('validateDeployment');
+    console.log('Current Selection Count');
+    console.log(
+        Array.isArray(deploymentSelections)
+            ? deploymentSelections.length
+            : Array.isArray(deploymentPackage?.deploymentSelections)
+              ? deploymentPackage.deploymentSelections.length
+              : 0
+    );
+    console.log('Last Added Entry');
+    console.log(
+        JSON.stringify(
+            {
+                topLevelDeploymentSelections: deploymentSelections ?? null,
+                packageDeploymentSelections:
+                    deploymentPackage?.deploymentSelections ?? null
+            },
+            null,
+            2
+        )
+    );
+    console.log('------------------------------------------');
+
+    // Attach selections when present. Existing clients that omit this
+    // field keep the same package reference and behaviour.
+    const packageForValidation = attachReservedDeploymentSelections(
+        deploymentPackage,
+        deploymentSelections
+    );
+
+    return {
+        refreshToken,
+        instanceUrl,
+        orgId,
+        deploymentPackage: packageForValidation
+    };
+}
 
 exports.validateDeployment = async (req, res) => {
 
     try {
 
-        const {
-            refreshToken,
-            instanceUrl,
-            orgId,
-            deploymentPackage,
-            // Optional Deployment Planner preferences (Deploy/Skip).
-            deploymentSelections
-        } = req.body;
-
-        // TEMPORARY DIAGNOSTIC — first backend sight of client selections.
-        console.log('------------------------------------------');
-        console.log('DEPLOYMENT SELECTION CREATED');
-        console.log('Caller');
-        console.log('POST /api/deployment/validate (client request body)');
-        console.log('File');
-        console.log('deployment.controller.js');
-        console.log('Method');
-        console.log('validateDeployment');
-        console.log('Current Selection Count');
-        console.log(
-            Array.isArray(deploymentSelections)
-                ? deploymentSelections.length
-                : Array.isArray(deploymentPackage?.deploymentSelections)
-                  ? deploymentPackage.deploymentSelections.length
-                  : 0
-        );
-        console.log('Last Added Entry');
-        console.log(
-            JSON.stringify(
-                {
-                    topLevelDeploymentSelections: deploymentSelections ?? null,
-                    packageDeploymentSelections:
-                        deploymentPackage?.deploymentSelections ?? null
-                },
-                null,
-                2
-            )
-        );
-        console.log('------------------------------------------');
-
-        // Attach selections when present. Existing clients that omit this
-        // field keep the same package reference and behaviour.
-        const packageForValidation = attachReservedDeploymentSelections(
-            deploymentPackage,
-            deploymentSelections
-        );
+        const validationArgs = extractValidationRequestArgs(req);
 
         const result =
-            await deploymentValidationService.validateDeployment({
-                refreshToken,
-                instanceUrl,
-                orgId,
-                deploymentPackage: packageForValidation
-            });
+            await deploymentValidationService.validateDeployment(
+                validationArgs
+            );
 
         return res.json(result);
 
@@ -383,6 +396,81 @@ exports.validateDeployment = async (req, res) => {
                     error.message ||
                     'Unable to authenticate with destination org.'
             }
+        });
+
+    }
+
+};
+
+/**
+ * Async transport: accept validation immediately and run existing
+ * validateDeployment() in the background (same pattern as migrateToGitHub).
+ * Does not await the full validation pipeline.
+ */
+exports.startDeploymentValidation = async (req, res) => {
+
+    try {
+
+        const validationArgs = extractValidationRequestArgs(req);
+
+        const accepted =
+            deploymentValidationAsyncService.startValidation(validationArgs);
+
+        return res.json(accepted);
+
+    } catch (error) {
+
+        console.error('DEPLOYMENT VALIDATION START ERROR');
+        console.error(error);
+
+        return res.status(500).json({
+            success: false,
+            accepted: false,
+            status: 'FAILED',
+            error:
+                error.message ||
+                'Unable to start deployment validation.'
+        });
+
+    }
+
+};
+
+/**
+ * Poll async validation job status / full result.
+ */
+exports.getDeploymentValidationStatus = async (req, res) => {
+
+    try {
+
+        const validationId =
+            req.params?.validationId ||
+            req.query?.validationId ||
+            null;
+
+        const statusResult =
+            deploymentValidationAsyncService.getValidationStatus(validationId);
+
+        if (!statusResult.found) {
+            return res.status(404).json({
+                success: false,
+                error: 'Validation job not found.',
+                validationId: validationId || null
+            });
+        }
+
+        return res.json(statusResult.body);
+
+    } catch (error) {
+
+        console.error('DEPLOYMENT VALIDATION STATUS ERROR');
+        console.error(error);
+
+        return res.status(500).json({
+            success: false,
+            error:
+                error.message ||
+                'Unable to retrieve deployment validation status.'
         });
 
     }

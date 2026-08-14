@@ -17,6 +17,19 @@ router.post(
     deploymentController.analyzeDependencies
 );
 
+// Async validation transport (start → background → poll).
+// Registered before /validate for clarity; paths do not collide.
+router.post(
+    '/validate/start',
+    deploymentController.startDeploymentValidation
+);
+
+router.get(
+    '/validate/status/:validationId',
+    deploymentController.getDeploymentValidationStatus
+);
+
+// Existing synchronous validation — unchanged for backward compatibility.
 router.post(
     '/validate',
     deploymentController.validateDeployment
