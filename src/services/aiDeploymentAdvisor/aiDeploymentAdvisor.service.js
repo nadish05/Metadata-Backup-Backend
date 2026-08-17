@@ -11,7 +11,8 @@
 const { generateAiText } = require('../aiTextGeneration.service');
 const {
     sanitizeFactPackForAi,
-    getComponentFactPack
+    getComponentFactPack,
+    getFlowEvidence
 } = require('./aiResolutionFactPack.service');
 
 const DEFAULT_DISCLAIMER =
@@ -420,7 +421,29 @@ function isFieldTypeConversion(componentFacts) {
  * Backend-owned resolution owner. Not LLM-decided.
  * Does not invent ownership from raw Salesforce CLI text.
  */
-function deriveFixOwner(item, componentFacts) {
+function getMatchedFlowDependency(flowEvidence) {
+    const dependencies = flowEvidence?.dependencies;
+
+    if (!Array.isArray(dependencies) || dependencies.length !== 1) {
+        return null;
+    }
+
+    return dependencies[0];
+}
+
+function isFlowPackageGap(dependency) {
+    return (
+        dependency?.review?.discovered === true &&
+        dependency?.sourceArtifact?.exists === true &&
+        dependency?.deploymentPackage?.included === false
+    );
+}
+
+function isFlowSourceMissing(dependency) {
+    return dependency?.sourceArtifact?.exists === false;
+}
+
+function deriveFixOwner(item, componentFacts, flowEvidence = null) {
     if (deriveBackendCanAutoFix(item)) {
         return FIX_OWNERS.RUNTIME_AUTOFIX;
     }
@@ -435,28 +458,85 @@ function deriveFixOwner(item, componentFacts) {
         return FIX_OWNERS.DESTINATION_FEATURE;
     }
 
+    const flowDependency = getMatchedFlowDependency(flowEvidence);
+
+    if (
+        flowDependency &&
+        (isFlowPackageGap(flowDependency) || isFlowSourceMissing(flowDependency))
+    ) {
+        return FIX_OWNERS.MANUAL_METADATA;
+    }
+
     return FIX_OWNERS.UNKNOWN;
 }
 
-function deriveBackendResolution(fixOwner, componentFacts) {
-    if (fixOwner !== FIX_OWNERS.MANUAL_METADATA) {
+function deriveBackendResolution(
+    fixOwner,
+    componentFacts,
+    flowEvidence = null
+) {
+    if (isFieldTypeConversion(componentFacts)) {
+        if (fixOwner !== FIX_OWNERS.MANUAL_METADATA) {
+            return null;
+        }
+
+        const source = componentFacts.source;
+        const destination = componentFacts.destination;
+
+        return (
+            `Source field type is ${source?.type ?? 'UNKNOWN'}` +
+            ` (calculated=${String(source?.calculated)})` +
+            ` while destination field type is ${destination?.type ?? 'UNKNOWN'}` +
+            ` (calculated=${String(destination?.calculated)}).` +
+            ' Salesforce does not allow this in-place conversion.'
+        );
+    }
+
+    const flowDependency = getMatchedFlowDependency(flowEvidence);
+
+    if (!flowDependency || fixOwner !== FIX_OWNERS.MANUAL_METADATA) {
         return null;
     }
 
-    if (!isFieldTypeConversion(componentFacts)) {
-        return null;
+    if (isFlowPackageGap(flowDependency)) {
+        return (
+            `The Flow references CustomField ${flowDependency.metadataName}. ` +
+            'The dependency exists in the source branch but is not included in the deployment package. ' +
+            'Re-run Deployment Review so the required dependency is included before validation.'
+        );
     }
 
-    const source = componentFacts.source;
-    const destination = componentFacts.destination;
+    if (isFlowSourceMissing(flowDependency)) {
+        return (
+            `The Flow references CustomField ${flowDependency.metadataName}. ` +
+            'No source artifact was resolved for that field. ' +
+            'Confirm the field metadata exists in the source branch, then re-run Deployment Review.'
+        );
+    }
 
-    return (
-        `Source field type is ${source?.type ?? 'UNKNOWN'}` +
-        ` (calculated=${String(source?.calculated)})` +
-        ` while destination field type is ${destination?.type ?? 'UNKNOWN'}` +
-        ` (calculated=${String(destination?.calculated)}).` +
-        ' Salesforce does not allow this in-place conversion.'
-    );
+    return null;
+}
+
+function buildFlowResolutionSteps(dependency) {
+    if (isFlowPackageGap(dependency)) {
+        return [
+            'Re-run Deployment Review for the Flow.',
+            `Confirm ${dependency.metadataName} appears as a required CustomField dependency.`,
+            'Re-run deployment validation.',
+            'Confirm check-only succeeds.',
+            'Proceed with deployment.'
+        ];
+    }
+
+    if (isFlowSourceMissing(dependency)) {
+        return [
+            `Confirm CustomField ${dependency.metadataName} exists in the source branch.`,
+            'Re-run Deployment Review for the Flow.',
+            'Re-run deployment validation.'
+        ];
+    }
+
+    return null;
 }
 
 function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
@@ -478,7 +558,13 @@ function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
         explanation?.metadataType,
         explanation?.metadataName
     );
-    const fixOwner = deriveFixOwner(item, componentFacts);
+    const flowEvidence = getFlowEvidence(
+        factPack,
+        explanation?.metadataType,
+        explanation?.metadataName
+    );
+    const flowDependency = getMatchedFlowDependency(flowEvidence);
+    const fixOwner = deriveFixOwner(item, componentFacts, flowEvidence);
 
     const enriched = {
         ...explanation,
@@ -491,8 +577,27 @@ function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
                 ? 'Backend marked this component as safe to skip.'
                 : SKIP_GUIDANCE_DEFAULT,
         fixOwner,
-        backendResolution: deriveBackendResolution(fixOwner, componentFacts)
+        backendResolution: deriveBackendResolution(
+            fixOwner,
+            componentFacts,
+            flowEvidence
+        ),
+        flowEvidence: flowEvidence || null
     };
+
+    if (isFlowPackageGap(flowDependency) && enriched.resolutionCategory === 'NONE') {
+        enriched.resolutionCategory = 'DEPENDENCY';
+    }
+
+    const flowSteps = buildFlowResolutionSteps(flowDependency);
+
+    if (flowSteps) {
+        enriched.resolution = {
+            action: 'MANUAL',
+            steps: flowSteps,
+            reason: enriched.backendResolution
+        };
+    }
 
     if (!componentFacts) {
         return enriched;
@@ -847,7 +952,12 @@ function buildStructuredContext(context) {
                 item.metadataType,
                 item.metadataName
             );
-            const fixOwner = deriveFixOwner(item, componentFacts);
+            const flowEvidence = getFlowEvidence(
+                factPack,
+                item.metadataType,
+                item.metadataName
+            );
+            const fixOwner = deriveFixOwner(item, componentFacts, flowEvidence);
 
             return {
                 metadataType: item.metadataType,
@@ -855,10 +965,12 @@ function buildStructuredContext(context) {
                 fixOwner,
                 backendResolution: deriveBackendResolution(
                     fixOwner,
-                    componentFacts
+                    componentFacts,
+                    flowEvidence
                 ),
                 backendCanAutoFix: deriveBackendCanAutoFix(item),
-                safeToSkip: deriveSafeToSkip(item)
+                safeToSkip: deriveSafeToSkip(item),
+                flowEvidence: flowEvidence || null
             };
         })
     };
@@ -875,9 +987,12 @@ Rules:
 - Never invent destination field types, calculated flags, or org capabilities.
 - Treat aiResolutionFactPack.source as authoritative for source field facts.
 - Treat aiResolutionFactPack.destination as authoritative for destination field facts.
+- Treat aiResolutionFactPack.flowEvidence as authoritative for Flow dependency, source artifact, and package membership facts.
 - Treat conflict / comparison.conflictType as authoritative. Do not invent a conflict type.
 - Prefer cliProblem (original Salesforce error) over rewritten classification reasons when both are present.
 - If destination.confidence is UNKNOWN or destination.type is null, explicitly say the destination type could not be verified. Do not claim it is Formula or any other type.
+- If flowEvidence.destination.exists is null or confidence is UNKNOWN, do not claim the field exists or is missing in the destination org.
+- Do not invent Flow dependency names, source artifact paths, or package membership.
 - Explain conflicts using provided source/destination facts and comparison.conflictType when present.
 - Give actionable user guidance (SOURCE, DESTINATION, BOTH, or MANUAL) without automatically modifying metadata.
 - Never recommend unsafe skips, disabling validations, or automatically modifying the deployment package.
@@ -885,10 +1000,11 @@ Rules:
 - Never convert FAILURE into SAFE_SKIP or claim check-only succeeded when it failed.
 - Never claim deployment is ready, that metadata was changed, or that a backend fix was performed unless autoFixReport shows a successful include.
 - Never override backend decisions. If autoFixReport shows a successful include, explain that the backend already auto-fixed it.
-- Backend-derived fields are authoritative: fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution.action, source, destination, and conflict.
+- Backend-derived fields are authoritative: fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution.action, source, destination, conflict, and flowEvidence.
 - Use backendOwnedResolution.fixOwner and backendOwnedResolution.backendResolution when explaining who must act. They are backend-authored.
+- Use backendOwnedResolution.backendCanAutoFix only when it is true. Discovery of a Flow dependency is not an automatic fix.
 - Do not invent a backend fix. Do not claim a problem is backend-fixable when fixOwner is UNKNOWN or absent.
-- Do not generate fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution, source, destination, or conflict. The backend attaches those after your response.
+- Do not generate fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution, source, destination, conflict, or flowEvidence. The backend attaches those after your response.
 - Do not recommend deleting or replacing production fields unless facts support that option and clearly require user review of business impact.
 - Return JSON only. No markdown.
 
@@ -957,7 +1073,7 @@ function normalizeExplanation(raw, knownKeys) {
     // Allowlisted prose only. Strip LLM-invented decision and fact fields;
     // backend re-attaches fixOwner, backendResolution, backendCanAutoFix,
     // safeToSkip, userActionRequired, resolutionCategory, resolution,
-    // source, destination, and conflict.
+    // source, destination, conflict, and flowEvidence.
     return {
         metadataType,
         metadataName,

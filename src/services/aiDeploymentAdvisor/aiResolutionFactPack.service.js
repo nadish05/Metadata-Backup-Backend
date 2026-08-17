@@ -1,11 +1,14 @@
 /**
- * AI Resolution Fact Pack (Phase 1).
+ * AI Resolution Fact Pack (Phase 1 + Phase 2B-1).
  *
- * Deterministic CustomField source/destination facts for on-demand AI.
- * Advisory context only — never mutates deployment decisions or metadata.
+ * Deterministic CustomField source/destination facts and Flow dependency
+ * evidence for on-demand AI. Advisory context only — never mutates
+ * deployment decisions or metadata.
  *
- * Reuses existing source CustomField shape + destination shape indexes.
- * Does not parse XML, describe orgs, or invent destination types.
+ * Reuses existing source CustomField shape, destination shape indexes,
+ * Review requiredDependencies, resolved artifacts, and generated package
+ * membership. Does not parse Flow XML, describe orgs, or invent
+ * destination existence.
  */
 
 'use strict';
@@ -337,6 +340,379 @@ function collectFailedCustomFields({
     return items;
 }
 
+function isCustomFieldRef(item) {
+    const metadataType = getMetadataType(item);
+    const metadataName = getMetadataName(item);
+
+    return (
+        metadataType === 'CustomField' &&
+        typeof metadataName === 'string' &&
+        metadataName.includes('.')
+    );
+}
+
+function collectCustomFieldIndex(lists) {
+    const byName = new Map();
+
+    for (const list of lists) {
+        if (!Array.isArray(list)) {
+            continue;
+        }
+
+        for (const item of list) {
+            if (!isCustomFieldRef(item)) {
+                continue;
+            }
+
+            const metadataName = getMetadataName(item);
+            const existing = byName.get(metadataName) || {};
+
+            byName.set(metadataName, {
+                ...existing,
+                ...item,
+                metadataType: 'CustomField',
+                metadataName
+            });
+        }
+    }
+
+    return byName;
+}
+
+function fieldSegment(metadataName) {
+    if (!metadataName || !metadataName.includes('.')) {
+        return null;
+    }
+
+    return metadataName.split('.').slice(1).join('.') || null;
+}
+
+function parseFlowFieldReference(cliProblem) {
+    const text = String(cliProblem || '');
+
+    const objectField = text.match(
+        /(?:the field|field)\s+"([A-Za-z][A-Za-z0-9_]*__c)"\s+for the object\s+"([A-Za-z][A-Za-z0-9_]*)"/i
+    );
+
+    if (objectField) {
+        return {
+            failureType: 'MISSING_OBJECT_FIELD',
+            metadataName: `${objectField[2]}.${objectField[1]}`,
+            fieldApiName: objectField[1],
+            objectApiName: objectField[2]
+        };
+    }
+
+    const recordField = text.match(
+        /\$Record\.([A-Za-z][A-Za-z0-9_]*__c)\b/
+    );
+
+    if (recordField) {
+        return {
+            failureType: 'INVALID_RECORD_FIELD_REFERENCE',
+            metadataName: null,
+            fieldApiName: recordField[1],
+            objectApiName: null
+        };
+    }
+
+    return null;
+}
+
+function matchFlowCustomField(parsed, reviewFields, allFields) {
+    if (!parsed) {
+        return null;
+    }
+
+    if (parsed.metadataName) {
+        if (allFields.has(parsed.metadataName)) {
+            return parsed.metadataName;
+        }
+
+        return null;
+    }
+
+    const matches = [];
+
+    for (const metadataName of reviewFields.keys()) {
+        if (fieldSegment(metadataName) === parsed.fieldApiName) {
+            matches.push(metadataName);
+        }
+    }
+
+    if (matches.length === 1) {
+        return matches[0];
+    }
+
+    return null;
+}
+
+function packageIncludesCustomField(generatedDeploymentPackage, metadataName) {
+    if (!generatedDeploymentPackage || !metadataName) {
+        return false;
+    }
+
+    const items = [
+        ...(generatedDeploymentPackage.metadata || []),
+        ...(generatedDeploymentPackage.dependencies || [])
+    ];
+
+    return items.some((item) => {
+        return (
+            getMetadataType(item) === 'CustomField' &&
+            getMetadataName(item) === metadataName
+        );
+    });
+}
+
+function knownBoolean(value) {
+    if (value === true) {
+        return true;
+    }
+
+    if (value === false) {
+        return false;
+    }
+
+    return null;
+}
+
+function buildSourceArtifactEvidence(resolvedItem) {
+    const resolvedFlag =
+        typeof resolvedItem?.artifactResolved === 'boolean'
+            ? resolvedItem.artifactResolved
+            : typeof resolvedItem?.sourceExists === 'boolean'
+              ? resolvedItem.sourceExists
+              : null;
+
+    if (resolvedFlag === null) {
+        return {
+            exists: null,
+            path: null,
+            confidence: 'UNKNOWN'
+        };
+    }
+
+    if (resolvedFlag === true) {
+        return {
+            exists: true,
+            path: resolvedItem.filePath
+                ? String(resolvedItem.filePath).replace(/\\/g, '/')
+                : null,
+            confidence: 'HIGH'
+        };
+    }
+
+    return {
+        exists: false,
+        path: null,
+        confidence: 'HIGH'
+    };
+}
+
+function buildDestinationExistenceEvidence(destinationShapeIndex, metadataName) {
+    const entry = lookupDestinationEntry(destinationShapeIndex, metadataName);
+
+    if (!entry || entry.queried !== true) {
+        return {
+            exists: null,
+            confidence: 'UNKNOWN'
+        };
+    }
+
+    if (entry.found === true) {
+        return {
+            exists: true,
+            confidence: 'HIGH'
+        };
+    }
+
+    return {
+        exists: false,
+        confidence: 'HIGH'
+    };
+}
+
+function collectFailedFlows({
+    failureClassification,
+    deploymentDiagnostics,
+    deployOutcome
+}) {
+    const items = [];
+    const seen = new Set();
+    const cliProblems = collectCliProblems(
+        deploymentDiagnostics,
+        deployOutcome
+    );
+
+    function add(metadataType, metadataName, problem) {
+        if (metadataType !== 'Flow' || !metadataName) {
+            return;
+        }
+
+        const key = failureKey(metadataType, metadataName);
+
+        if (!key || seen.has(key)) {
+            return;
+        }
+
+        seen.add(key);
+        items.push({
+            metadataType,
+            metadataName,
+            key,
+            cliProblem: cliProblems.get(key) || problem || null
+        });
+    }
+
+    for (const failure of failureClassification?.failures || []) {
+        add(
+            getMetadataType(failure),
+            getMetadataName(failure),
+            failure?.evidence?.problem || failure?.reason || null
+        );
+    }
+
+    for (const failure of deploymentDiagnostics?.componentFailures || []) {
+        add(
+            getMetadataType(failure),
+            getMetadataName(failure),
+            failure?.problem || null
+        );
+    }
+
+    for (const failure of deployOutcome?.deploymentDiagnostics
+        ?.componentFailures || []) {
+        add(
+            getMetadataType(failure),
+            getMetadataName(failure),
+            failure?.problem || null
+        );
+    }
+
+    return items;
+}
+
+function buildFlowDependencyEvidence({
+    flowName,
+    metadataName,
+    reviewItem,
+    resolvedItem,
+    generatedDeploymentPackage,
+    destinationShapeIndex
+}) {
+    const reviewDiscovered = Boolean(reviewItem);
+    const sourceArtifact = buildSourceArtifactEvidence(resolvedItem);
+    const included = packageIncludesCustomField(
+        generatedDeploymentPackage,
+        metadataName
+    );
+    const destination = buildDestinationExistenceEvidence(
+        destinationShapeIndex,
+        metadataName
+    );
+
+    console.log(
+        '[AI Flow Evidence] ' +
+            JSON.stringify({
+                flowName,
+                metadataName,
+                discovered: reviewDiscovered,
+                sourceArtifactExists: sourceArtifact.exists,
+                packageIncluded: included,
+                confidence: sourceArtifact.confidence
+            })
+    );
+
+    return {
+        metadataType: 'CustomField',
+        metadataName,
+        review: {
+            discovered: reviewDiscovered,
+            required: reviewDiscovered
+                ? knownBoolean(reviewItem.required)
+                : null,
+            selected: reviewDiscovered
+                ? knownBoolean(reviewItem.selected)
+                : null
+        },
+        sourceArtifact,
+        deploymentPackage: {
+            included
+        },
+        destination
+    };
+}
+
+function buildFlowEvidence({
+    failureClassification,
+    deploymentDiagnostics,
+    deployOutcome,
+    incomingRequiredDependencies,
+    requiredDependencies,
+    generatedDeploymentPackage,
+    destinationShapeIndex
+}) {
+    const failedFlows = collectFailedFlows({
+        failureClassification,
+        deploymentDiagnostics,
+        deployOutcome
+    });
+
+    if (!failedFlows.length) {
+        return null;
+    }
+
+    const reviewFields = collectCustomFieldIndex([
+        incomingRequiredDependencies
+    ]);
+    const resolvedFields = collectCustomFieldIndex([requiredDependencies]);
+    const allFields = collectCustomFieldIndex([
+        incomingRequiredDependencies,
+        requiredDependencies,
+        generatedDeploymentPackage?.metadata,
+        generatedDeploymentPackage?.dependencies
+    ]);
+
+    const flows = [];
+
+    for (const failed of failedFlows) {
+        const parsed = parseFlowFieldReference(failed.cliProblem);
+        const matchedName = matchFlowCustomField(
+            parsed,
+            reviewFields,
+            allFields
+        );
+
+        if (!matchedName) {
+            continue;
+        }
+
+        const dependency = buildFlowDependencyEvidence({
+            flowName: failed.metadataName,
+            metadataName: matchedName,
+            reviewItem: reviewFields.get(matchedName) || null,
+            resolvedItem:
+                resolvedFields.get(matchedName) ||
+                reviewFields.get(matchedName) ||
+                null,
+            generatedDeploymentPackage,
+            destinationShapeIndex
+        });
+
+        flows.push({
+            flowName: failed.metadataName,
+            failure: {
+                cliProblem: failed.cliProblem,
+                failureType: parsed?.failureType || null
+            },
+            dependencies: [dependency]
+        });
+    }
+
+    return flows.length ? flows : null;
+}
+
 /**
  * Build additive AI-only fact packs for CustomField failures.
  *
@@ -348,7 +724,10 @@ function buildAiResolutionFactPack({
     deploymentDiagnostics = null,
     deployOutcome = null,
     sourceShapeIndex = null,
-    destinationShapeIndex = null
+    destinationShapeIndex = null,
+    incomingRequiredDependencies = [],
+    requiredDependencies = [],
+    generatedDeploymentPackage = null
 } = {}) {
     const cliProblems = collectCliProblems(
         deploymentDiagnostics,
@@ -409,7 +788,16 @@ function buildAiResolutionFactPack({
 
     return {
         version: 1,
-        components
+        components,
+        flowEvidence: buildFlowEvidence({
+            failureClassification,
+            deploymentDiagnostics,
+            deployOutcome,
+            incomingRequiredDependencies,
+            requiredDependencies,
+            generatedDeploymentPackage,
+            destinationShapeIndex
+        })
     };
 }
 
@@ -443,6 +831,22 @@ function getComponentFactPack(factPack, metadataType, metadataName) {
     );
 }
 
+function getFlowEvidence(factPack, metadataType, metadataName) {
+    if (
+        metadataType !== 'Flow' ||
+        !metadataName ||
+        !Array.isArray(factPack?.flowEvidence)
+    ) {
+        return null;
+    }
+
+    return (
+        factPack.flowEvidence.find(
+            (entry) => entry?.flowName === metadataName
+        ) || null
+    );
+}
+
 /**
  * Strip any accidental credential-like keys from a client-supplied fact pack.
  *
@@ -458,6 +862,7 @@ function sanitizeFactPackForAi(raw) {
 
     return {
         version: typeof raw.version === 'number' ? raw.version : 1,
+        flowEvidence: sanitizeFlowEvidence(raw.flowEvidence),
         components: components
             .filter(
                 (component) =>
@@ -535,11 +940,80 @@ function sanitizeFactPackForAi(raw) {
     };
 }
 
+function sanitizeFlowEvidence(raw) {
+    if (!Array.isArray(raw)) {
+        return null;
+    }
+
+    const flows = raw
+        .filter((entry) => entry && typeof entry.flowName === 'string')
+        .map((entry) => ({
+            flowName: String(entry.flowName),
+            failure: {
+                cliProblem:
+                    typeof entry.failure?.cliProblem === 'string'
+                        ? entry.failure.cliProblem
+                        : null,
+                failureType:
+                    typeof entry.failure?.failureType === 'string'
+                        ? entry.failure.failureType
+                        : null
+            },
+            dependencies: Array.isArray(entry.dependencies)
+                ? entry.dependencies
+                      .filter(
+                          (dependency) =>
+                              dependency?.metadataType === 'CustomField' &&
+                              dependency?.metadataName
+                      )
+                      .map((dependency) => ({
+                          metadataType: 'CustomField',
+                          metadataName: String(dependency.metadataName),
+                          review: {
+                              discovered: dependency.review?.discovered === true,
+                              required: knownBoolean(dependency.review?.required),
+                              selected: knownBoolean(dependency.review?.selected)
+                          },
+                          sourceArtifact: {
+                              exists: knownBoolean(
+                                  dependency.sourceArtifact?.exists
+                              ),
+                              path:
+                                  typeof dependency.sourceArtifact?.path ===
+                                  'string'
+                                      ? dependency.sourceArtifact.path
+                                      : null,
+                              confidence:
+                                  dependency.sourceArtifact?.confidence ||
+                                  'UNKNOWN'
+                          },
+                          deploymentPackage: {
+                              included:
+                                  dependency.deploymentPackage?.included ===
+                                  true
+                          },
+                          destination: {
+                              exists: knownBoolean(
+                                  dependency.destination?.exists
+                              ),
+                              confidence:
+                                  dependency.destination?.confidence ||
+                                  'UNKNOWN'
+                          }
+                      }))
+                : []
+        }))
+        .filter((entry) => entry.dependencies.length > 0);
+
+    return flows.length ? flows : null;
+}
+
 module.exports = {
     buildAiResolutionFactPack,
     serializeSourceCustomFieldShapeIndex,
     sanitizeFactPackForAi,
     getComponentFactPack,
+    getFlowEvidence,
     unknownSide,
     buildComparison,
     buildSideFromSourceEntry,

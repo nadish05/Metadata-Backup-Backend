@@ -2077,12 +2077,20 @@ async function validateDeployment({
             deploymentDiagnostics: response.deploymentDiagnostics || null,
             deployOutcome: deploymentResult,
             sourceShapeIndex,
-            destinationShapeIndex
+            destinationShapeIndex,
+            incomingRequiredDependencies:
+                deploymentPackage?.requiredDependencies || [],
+            requiredDependencies: resolvedRequiredDependencies,
+            generatedDeploymentPackage
         });
     } catch (factPackError) {
         console.error('AI RESOLUTION FACT PACK ERROR');
         console.error(factPackError?.message || factPackError);
-        response.aiResolutionFactPack = { version: 1, components: [] };
+        response.aiResolutionFactPack = {
+            version: 1,
+            components: [],
+            flowEvidence: null
+        };
     }
 
     // Phase 17.3 — Auto Fix Orchestrator (additive).
