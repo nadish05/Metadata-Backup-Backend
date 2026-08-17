@@ -486,6 +486,35 @@ async function main() {
         }
     );
 
+    await runTest(
+        'dotted field reference is not a CustomField dependency',
+        () => {
+            const result = analyzeFlowDependencies(`
+                <Flow>
+                    <recordUpdates>
+                        <inputAssignments>
+                            <field>Opportunity.Customer_Status__c</field>
+                        </inputAssignments>
+                        <object>Opportunity</object>
+                    </recordUpdates>
+                    <assignments>
+                        <assignToReference>$Record.Account.Approved__c</assignToReference>
+                    </assignments>
+                    <start>
+                        <object>Opportunity</object>
+                    </start>
+                </Flow>
+            `);
+
+            assert.deepStrictEqual(
+                result.requiredDependencies.filter(
+                    (dep) => dep.type === 'CustomField'
+                ),
+                []
+            );
+        }
+    );
+
     await runTest('Apex dependency discovery unchanged', () => {
         const result = analyzeApexContent(
             `
