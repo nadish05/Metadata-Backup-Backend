@@ -73,6 +73,10 @@ function isCustomObjectApiName(name) {
     return typeof name === 'string' && /__c$/i.test(name);
 }
 
+function isObjectApiName(name) {
+    return typeof name === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(name);
+}
+
 function isCustomFieldApiName(name) {
     return typeof name === 'string' && /__c$/i.test(name) && !name.includes('.');
 }
@@ -150,7 +154,8 @@ function extractCustomFieldsFromRecordBlocks(content) {
         for (const block of extractBlocks(content, tagName)) {
             const objectApiName = extractFirstTagValue(block, 'object');
 
-            if (!isCustomObjectApiName(objectApiName)) {
+            // Parent may be standard or custom. Only the field token must be CustomField.
+            if (!isObjectApiName(objectApiName)) {
                 continue;
             }
 
@@ -174,7 +179,8 @@ function extractCustomFieldsFromStartRecordReferences(content) {
     for (const startBlock of startBlocks) {
         const objectApiName = extractFirstTagValue(startBlock, 'object');
 
-        if (!isCustomObjectApiName(objectApiName)) {
+        // $Record binds to <start><object>, including standard objects.
+        if (!isObjectApiName(objectApiName)) {
             continue;
         }
 

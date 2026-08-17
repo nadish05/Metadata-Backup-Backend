@@ -214,6 +214,278 @@ async function main() {
         }
     );
 
+    await runTest(
+        'standard-object record update discovers CustomField',
+        () => {
+            const result = analyzeFlowDependencies(`
+                <Flow>
+                    <recordUpdates>
+                        <name>Update_Status</name>
+                        <inputAssignments>
+                            <field>Customer_Status__c</field>
+                            <value>
+                                <stringValue>Active Customer</stringValue>
+                            </value>
+                        </inputAssignments>
+                        <object>Opportunity</object>
+                    </recordUpdates>
+                </Flow>
+            `);
+            const fields = result.requiredDependencies.filter(
+                (dep) => dep.type === 'CustomField'
+            );
+
+            assert.deepStrictEqual(
+                fields.map((dep) => dep.name),
+                ['Opportunity.Customer_Status__c']
+            );
+            assert.strictEqual(fields[0].required, true);
+            assert.strictEqual(fields[0].selected, true);
+            assert.strictEqual(fields[0].editable, false);
+            assert.ok(
+                !result.requiredDependencies.some(
+                    (dep) => dep.type === 'CustomObject'
+                )
+            );
+        }
+    );
+
+    await runTest(
+        'standard-object $Record discovers CustomField from start object',
+        () => {
+            const result = analyzeFlowDependencies(`
+                <Flow>
+                    <assignments>
+                        <name>Assignment_1</name>
+                        <assignmentItems>
+                            <assignToReference>$Record.Approved__c</assignToReference>
+                            <operator>Assign</operator>
+                            <value>
+                                <booleanValue>true</booleanValue>
+                            </value>
+                        </assignmentItems>
+                    </assignments>
+                    <start>
+                        <object>Opportunity</object>
+                        <recordTriggerType>CreateAndUpdate</recordTriggerType>
+                        <triggerType>RecordBeforeSave</triggerType>
+                    </start>
+                </Flow>
+            `);
+            const fields = result.requiredDependencies.filter(
+                (dep) => dep.type === 'CustomField'
+            );
+
+            assert.deepStrictEqual(
+                fields.map((dep) => dep.name),
+                ['Opportunity.Approved__c']
+            );
+        }
+    );
+
+    await runTest(
+        'custom-object record update still discovers CustomField',
+        () => {
+            const result = analyzeFlowDependencies(FLOW_XML);
+            const fields = result.requiredDependencies
+                .filter((dep) => dep.type === 'CustomField')
+                .map((dep) => dep.name);
+
+            assert.deepStrictEqual(fields, ['Invoice__c.Amount__c']);
+        }
+    );
+
+    await runTest(
+        'custom-object $Record still discovers CustomField from start object',
+        () => {
+            const result = analyzeFlowDependencies(`
+                <Flow>
+                    <assignments>
+                        <assignToReference>$Record.Status__c</assignToReference>
+                    </assignments>
+                    <start>
+                        <object>Invoice__c</object>
+                    </start>
+                </Flow>
+            `);
+            const fields = result.requiredDependencies
+                .filter((dep) => dep.type === 'CustomField')
+                .map((dep) => dep.name);
+
+            assert.deepStrictEqual(fields, ['Invoice__c.Status__c']);
+            assert.ok(
+                result.requiredDependencies.some(
+                    (dep) =>
+                        dep.type === 'CustomObject' && dep.name === 'Invoice__c'
+                )
+            );
+        }
+    );
+
+    await runTest(
+        'standard field on standard object is not a CustomField dependency',
+        () => {
+            const result = analyzeFlowDependencies(`
+                <Flow>
+                    <recordUpdates>
+                        <inputAssignments>
+                            <field>Amount</field>
+                        </inputAssignments>
+                        <inputAssignments>
+                            <field>StageName</field>
+                        </inputAssignments>
+                        <object>Opportunity</object>
+                    </recordUpdates>
+                </Flow>
+            `);
+
+            assert.deepStrictEqual(
+                result.requiredDependencies.filter(
+                    (dep) => dep.type === 'CustomField'
+                ),
+                []
+            );
+        }
+    );
+
+    await runTest(
+        'standard field through $Record is not a CustomField dependency',
+        () => {
+            const result = analyzeFlowDependencies(`
+                <Flow>
+                    <assignments>
+                        <assignToReference>$Record.Amount</assignToReference>
+                    </assignments>
+                    <assignments>
+                        <assignToReference>$Record.Name</assignToReference>
+                    </assignments>
+                    <start>
+                        <object>Opportunity</object>
+                    </start>
+                </Flow>
+            `);
+
+            assert.deepStrictEqual(
+                result.requiredDependencies.filter(
+                    (dep) => dep.type === 'CustomField'
+                ),
+                []
+            );
+        }
+    );
+
+    await runTest('missing object emits no CustomField dependency', () => {
+        const result = analyzeFlowDependencies(`
+            <Flow>
+                <recordUpdates>
+                    <inputAssignments>
+                        <field>Customer_Status__c</field>
+                    </inputAssignments>
+                </recordUpdates>
+                <assignments>
+                    <assignToReference>$Record.Approved__c</assignToReference>
+                </assignments>
+                <start>
+                    <recordTriggerType>CreateAndUpdate</recordTriggerType>
+                </start>
+            </Flow>
+        `);
+
+        assert.deepStrictEqual(
+            result.requiredDependencies.filter(
+                (dep) => dep.type === 'CustomField'
+            ),
+            []
+        );
+    });
+
+    await runTest('missing field emits no CustomField dependency', () => {
+        const result = analyzeFlowDependencies(`
+            <Flow>
+                <recordUpdates>
+                    <object>Opportunity</object>
+                </recordUpdates>
+                <start>
+                    <object>Opportunity</object>
+                </start>
+            </Flow>
+        `);
+
+        assert.deepStrictEqual(
+            result.requiredDependencies.filter(
+                (dep) => dep.type === 'CustomField'
+            ),
+            []
+        );
+    });
+
+    await runTest('duplicate CustomField references emit one dependency', () => {
+        const result = analyzeFlowDependencies(`
+            <Flow>
+                <recordUpdates>
+                    <inputAssignments>
+                        <field>Customer_Status__c</field>
+                    </inputAssignments>
+                    <filters>
+                        <field>Customer_Status__c</field>
+                    </filters>
+                    <object>Opportunity</object>
+                </recordUpdates>
+                <assignments>
+                    <assignToReference>$Record.Customer_Status__c</assignToReference>
+                </assignments>
+                <start>
+                    <object>Opportunity</object>
+                </start>
+            </Flow>
+        `);
+        const fields = result.requiredDependencies.filter(
+            (dep) => dep.type === 'CustomField'
+        );
+
+        assert.strictEqual(fields.length, 1);
+        assert.strictEqual(fields[0].name, 'Opportunity.Customer_Status__c');
+        assert.strictEqual(fields[0].type, 'CustomField');
+    });
+
+    await runTest(
+        'multiple objects keep CustomField object context',
+        () => {
+            const result = analyzeFlowDependencies(`
+                <Flow>
+                    <recordUpdates>
+                        <inputAssignments>
+                            <field>Customer_Status__c</field>
+                        </inputAssignments>
+                        <object>Opportunity</object>
+                    </recordUpdates>
+                    <recordCreates>
+                        <inputAssignments>
+                            <field>Approved__c</field>
+                        </inputAssignments>
+                        <object>Account</object>
+                    </recordCreates>
+                    <start>
+                        <object>Invoice__c</object>
+                    </start>
+                    <assignments>
+                        <assignToReference>$Record.Amount__c</assignToReference>
+                    </assignments>
+                </Flow>
+            `);
+            const fields = result.requiredDependencies
+                .filter((dep) => dep.type === 'CustomField')
+                .map((dep) => dep.name)
+                .sort();
+
+            assert.deepStrictEqual(fields, [
+                'Account.Approved__c',
+                'Invoice__c.Amount__c',
+                'Opportunity.Customer_Status__c'
+            ]);
+        }
+    );
+
     await runTest('Apex dependency discovery unchanged', () => {
         const result = analyzeApexContent(
             `
