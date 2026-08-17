@@ -39,6 +39,13 @@ const SUPPORTED_PROVIDERS = Object.freeze(['gemini', 'openai']);
 const SKIP_GUIDANCE_DEFAULT =
     'Backend has not marked this component as safe to skip. Skipping is not recommended.';
 
+const FIX_OWNERS = Object.freeze({
+    RUNTIME_AUTOFIX: 'RUNTIME_AUTOFIX',
+    MANUAL_METADATA: 'MANUAL_METADATA',
+    DESTINATION_FEATURE: 'DESTINATION_FEATURE',
+    UNKNOWN: 'UNKNOWN'
+});
+
 class UnsupportedAiProviderError extends Error {
     constructor(message) {
         super(message);
@@ -160,48 +167,113 @@ function failureKey(type, name) {
     return `${type || 'Unknown'}:${name || 'Unknown'}`;
 }
 
+function extractCliProblem(entry) {
+    if (typeof entry?.cliProblem === 'string' && entry.cliProblem) {
+        return entry.cliProblem;
+    }
+
+    if (
+        typeof entry?.evidence?.problem === 'string' &&
+        entry.evidence.problem
+    ) {
+        return entry.evidence.problem;
+    }
+
+    return null;
+}
+
+function toKnownItem(entry) {
+    const metadataType = entry.metadataType || entry.type || null;
+    const metadataName = entry.metadataName || entry.name || null;
+    const key = failureKey(metadataType, metadataName);
+
+    return {
+        key,
+        metadataType,
+        metadataName,
+        severity: entry.severity || entry.category || null,
+        category: entry.category || null,
+        resolutionType: entry.resolutionType || null,
+        reason: entry.reason || entry.summary || entry.title || null,
+        cliProblem: extractCliProblem(entry),
+        recommendation:
+            entry.recommendation ||
+            entry.recommendedNextStep ||
+            entry.recommendedAction ||
+            null,
+        autoFixed: entry.autoFixed === true,
+        autoFixAvailable: entry.autoFixAvailable === true,
+        userActionRequired: entry.userActionRequired,
+        canAutoFix: entry.canAutoFix === true,
+        safeToSkip:
+            entry.safeToSkip === true
+                ? true
+                : entry.safeToSkip === false
+                  ? false
+                  : null
+    };
+}
+
+function mergeKnownItem(existing, incoming) {
+    // Preserve the first (failure) row. Merge deterministic resolutionType
+    // from the resolution report without duplicating or inventing types.
+    if (!existing.resolutionType && incoming.resolutionType) {
+        existing.resolutionType = incoming.resolutionType;
+    }
+
+    if (!existing.cliProblem && incoming.cliProblem) {
+        existing.cliProblem = incoming.cliProblem;
+    }
+
+    if (existing.autoFixAvailable !== true && incoming.autoFixAvailable === true) {
+        existing.autoFixAvailable = true;
+    }
+
+    if (existing.autoFixed !== true && incoming.autoFixed === true) {
+        existing.autoFixed = true;
+    }
+
+    if (existing.canAutoFix !== true && incoming.canAutoFix === true) {
+        existing.canAutoFix = true;
+    }
+
+    if (
+        typeof existing.userActionRequired !== 'boolean' &&
+        typeof incoming.userActionRequired === 'boolean'
+    ) {
+        existing.userActionRequired = incoming.userActionRequired;
+    }
+
+    if (!existing.recommendation && incoming.recommendation) {
+        existing.recommendation = incoming.recommendation;
+    }
+}
+
 function collectKnownItems(context) {
     const items = [];
-    const seen = new Set();
+    const byKey = new Map();
 
     const add = (entry) => {
         if (!entry) {
             return;
         }
 
-        const metadataType = entry.metadataType || entry.type || null;
-        const metadataName = entry.metadataName || entry.name || null;
-        const key = failureKey(metadataType, metadataName);
+        const next = toKnownItem(entry);
 
-        if (!key || seen.has(key.toLowerCase())) {
+        if (!next.key) {
             return;
         }
 
-        seen.add(key.toLowerCase());
-        items.push({
-            key,
-            metadataType,
-            metadataName,
-            severity: entry.severity || entry.category || null,
-            category: entry.category || null,
-            resolutionType: entry.resolutionType || null,
-            reason: entry.reason || entry.summary || entry.title || null,
-            recommendation:
-                entry.recommendation ||
-                entry.recommendedNextStep ||
-                entry.recommendedAction ||
-                null,
-            autoFixed: entry.autoFixed === true,
-            autoFixAvailable: entry.autoFixAvailable === true,
-            userActionRequired: entry.userActionRequired,
-            canAutoFix: entry.canAutoFix === true,
-            safeToSkip:
-                entry.safeToSkip === true
-                    ? true
-                    : entry.safeToSkip === false
-                      ? false
-                      : null
-        });
+        const mapKey = next.key.toLowerCase();
+        const existing = byKey.get(mapKey);
+
+        if (existing) {
+            mergeKnownItem(existing, next);
+            return;
+        }
+
+        byKey.set(mapKey, next);
+        items.push(next);
     };
 
     for (const failure of context.failureClassification?.failures || []) {
@@ -338,6 +410,55 @@ function deriveSafeToSkip(item) {
     return null;
 }
 
+function isFieldTypeConversion(componentFacts) {
+    return (
+        componentFacts?.comparison?.conflictType === 'FIELD_TYPE_CONVERSION'
+    );
+}
+
+/**
+ * Backend-owned resolution owner. Not LLM-decided.
+ * Does not invent ownership from raw Salesforce CLI text.
+ */
+function deriveFixOwner(item, componentFacts) {
+    if (deriveBackendCanAutoFix(item)) {
+        return FIX_OWNERS.RUNTIME_AUTOFIX;
+    }
+
+    if (isFieldTypeConversion(componentFacts)) {
+        return FIX_OWNERS.MANUAL_METADATA;
+    }
+
+    const resolutionType = String(item?.resolutionType || '').toUpperCase();
+
+    if (resolutionType === 'ENABLE_FEATURE') {
+        return FIX_OWNERS.DESTINATION_FEATURE;
+    }
+
+    return FIX_OWNERS.UNKNOWN;
+}
+
+function deriveBackendResolution(fixOwner, componentFacts) {
+    if (fixOwner !== FIX_OWNERS.MANUAL_METADATA) {
+        return null;
+    }
+
+    if (!isFieldTypeConversion(componentFacts)) {
+        return null;
+    }
+
+    const source = componentFacts.source;
+    const destination = componentFacts.destination;
+
+    return (
+        `Source field type is ${source?.type ?? 'UNKNOWN'}` +
+        ` (calculated=${String(source?.calculated)})` +
+        ` while destination field type is ${destination?.type ?? 'UNKNOWN'}` +
+        ` (calculated=${String(destination?.calculated)}).` +
+        ' Salesforce does not allow this in-place conversion.'
+    );
+}
+
 function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
     const key = failureKey(
         explanation?.metadataType,
@@ -357,6 +478,7 @@ function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
         explanation?.metadataType,
         explanation?.metadataName
     );
+    const fixOwner = deriveFixOwner(item, componentFacts);
 
     const enriched = {
         ...explanation,
@@ -367,7 +489,9 @@ function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
         skipGuidance:
             safeToSkip === true
                 ? 'Backend marked this component as safe to skip.'
-                : SKIP_GUIDANCE_DEFAULT
+                : SKIP_GUIDANCE_DEFAULT,
+        fixOwner,
+        backendResolution: deriveBackendResolution(fixOwner, componentFacts)
     };
 
     if (!componentFacts) {
@@ -597,6 +721,9 @@ function buildDeterministicExplanation(item) {
 }
 
 function buildStructuredContext(context) {
+    const factPack = sanitizeFactPackForAi(context.aiResolutionFactPack);
+    const knownItems = collectKnownItems(context);
+
     return {
         failureClassification: {
             overallStatus: context.failureClassification?.overallStatus || null,
@@ -713,9 +840,27 @@ function buildStructuredContext(context) {
                   message: context.deploymentSummary.message || null
               }
             : null,
-        aiResolutionFactPack: sanitizeFactPackForAi(
-            context.aiResolutionFactPack
-        )
+        aiResolutionFactPack: factPack,
+        backendOwnedResolution: knownItems.map((item) => {
+            const componentFacts = getComponentFactPack(
+                factPack,
+                item.metadataType,
+                item.metadataName
+            );
+            const fixOwner = deriveFixOwner(item, componentFacts);
+
+            return {
+                metadataType: item.metadataType,
+                metadataName: item.metadataName,
+                fixOwner,
+                backendResolution: deriveBackendResolution(
+                    fixOwner,
+                    componentFacts
+                ),
+                backendCanAutoFix: deriveBackendCanAutoFix(item),
+                safeToSkip: deriveSafeToSkip(item)
+            };
+        })
     };
 }
 
@@ -730,6 +875,7 @@ Rules:
 - Never invent destination field types, calculated flags, or org capabilities.
 - Treat aiResolutionFactPack.source as authoritative for source field facts.
 - Treat aiResolutionFactPack.destination as authoritative for destination field facts.
+- Treat conflict / comparison.conflictType as authoritative. Do not invent a conflict type.
 - Prefer cliProblem (original Salesforce error) over rewritten classification reasons when both are present.
 - If destination.confidence is UNKNOWN or destination.type is null, explicitly say the destination type could not be verified. Do not claim it is Formula or any other type.
 - Explain conflicts using provided source/destination facts and comparison.conflictType when present.
@@ -737,7 +883,12 @@ Rules:
 - Never recommend unsafe skips, disabling validations, or automatically modifying the deployment package.
 - Never say a component is safe to skip unless the backend context explicitly marks safeToSkip=true (it normally will not).
 - Never convert FAILURE into SAFE_SKIP or claim check-only succeeded when it failed.
+- Never claim deployment is ready, that metadata was changed, or that a backend fix was performed unless autoFixReport shows a successful include.
 - Never override backend decisions. If autoFixReport shows a successful include, explain that the backend already auto-fixed it.
+- Backend-derived fields are authoritative: fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution.action, source, destination, and conflict.
+- Use backendOwnedResolution.fixOwner and backendOwnedResolution.backendResolution when explaining who must act. They are backend-authored.
+- Do not invent a backend fix. Do not claim a problem is backend-fixable when fixOwner is UNKNOWN or absent.
+- Do not generate fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution, source, destination, or conflict. The backend attaches those after your response.
 - Do not recommend deleting or replacing production fields unless facts support that option and clearly require user review of business impact.
 - Return JSON only. No markdown.
 
@@ -803,8 +954,10 @@ function normalizeExplanation(raw, knownKeys) {
         return null;
     }
 
-    // Strip any client/model-invented decision fields; backend derives them.
-    // Also strip invented source/destination facts — fact pack is authoritative.
+    // Allowlisted prose only. Strip LLM-invented decision and fact fields;
+    // backend re-attaches fixOwner, backendResolution, backendCanAutoFix,
+    // safeToSkip, userActionRequired, resolutionCategory, resolution,
+    // source, destination, and conflict.
     return {
         metadataType,
         metadataName,
@@ -1017,5 +1170,6 @@ module.exports = {
     ALLOWED_CONTEXT_KEYS,
     DEFAULT_DISCLAIMER,
     ON_DEMAND_STUB_SUMMARY,
-    SKIP_GUIDANCE_DEFAULT
+    SKIP_GUIDANCE_DEFAULT,
+    FIX_OWNERS
 };
