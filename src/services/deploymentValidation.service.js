@@ -1691,6 +1691,31 @@ async function validateDeployment({
         }
     );
 
+    // Diagnostics only — runtime branch context for this validation.
+    // Uses the same deploymentPackage fields already consumed by discovery,
+    // artifact resolution, and workspace checkout. Does not change behavior.
+    console.log('====================================================');
+    console.log('DEPLOYMENT BRANCH CONTEXT DEBUG');
+    console.log('====================================================');
+    console.log(
+        JSON.stringify(
+            {
+                sourceBranch:
+                    deploymentPackage.sourceBranch ||
+                    deploymentPackage.branch ||
+                    null,
+                destinationBranch:
+                    deploymentPackage.destinationBranch || null,
+                deploymentMode: deploymentPackage.deploymentMode || null,
+                metadataCount:
+                    generatedDeploymentPackage?.summary?.metadataCount ?? null
+            },
+            null,
+            2
+        )
+    );
+    console.log('====================================================');
+
     // Diagnostics only — logs the manifest that will be deployed.
     console.log('====================================================');
     console.log('GENERATED PACKAGE.XML');
