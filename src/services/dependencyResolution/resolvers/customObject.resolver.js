@@ -109,14 +109,14 @@ const customObjectResolver = {
                 return createDecision({
                     name,
                     metadataType,
-                    action: ACTIONS.BLOCK,
+                    action: ACTIONS.DEPLOY,
                     required: true,
-                    selected: false,
+                    selected: true,
                     editable: true,
                     destinationState,
                     relationship,
                     reason:
-                        'Master-Detail parent object is missing in destination and was not selected for deployment.',
+                        'MasterDetail target is missing in destination; include object metadata in the deployment package.',
                     source: 'RESOLVER'
                 });
             }
