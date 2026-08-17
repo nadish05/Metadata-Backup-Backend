@@ -375,7 +375,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 9: CreateWorkBadgeDefinition → UNKNOWN and permission is not stripped',
+        'TEST 9: CreateWorkBadgeDefinition → MANUAL_METADATA and permission is not stripped',
         async () => {
             const report = await generateWithText(
                 {
@@ -419,15 +419,18 @@ async function main() {
 
             const explanation = report.explanations[0];
 
-            assert.strictEqual(explanation.fixOwner, FIX_OWNERS.UNKNOWN);
-            assert.strictEqual(explanation.backendResolution, null);
+            assert.strictEqual(explanation.fixOwner, FIX_OWNERS.MANUAL_METADATA);
             assert.strictEqual(explanation.backendCanAutoFix, false);
+            assert.match(
+                explanation.backendResolution,
+                /permission that is not recognized/
+            );
             assert.strictEqual(explanation.source, undefined);
         }
     );
 
     await runTest(
-        'TEST 10: CompactLayout failure → fixOwner UNKNOWN',
+        'TEST 10: CompactLayout failure → fixOwner MANUAL_METADATA',
         async () => {
             const report = await generateWithText(
                 {
@@ -467,9 +470,16 @@ async function main() {
 
             assert.strictEqual(
                 report.explanations[0].fixOwner,
-                FIX_OWNERS.UNKNOWN
+                FIX_OWNERS.MANUAL_METADATA
             );
-            assert.strictEqual(report.explanations[0].backendResolution, null);
+            assert.strictEqual(
+                report.explanations[0].backendCanAutoFix,
+                false
+            );
+            assert.match(
+                report.explanations[0].backendResolution,
+                /CompactLayout/
+            );
         }
     );
 

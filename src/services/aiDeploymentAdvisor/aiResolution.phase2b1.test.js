@@ -706,7 +706,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 14: CreateWorkBadgeDefinition behavior unchanged',
+        'TEST 14: CreateWorkBadgeDefinition is MANUAL_METADATA and permission is not stripped',
         async () => {
             const report = await generateWithText(
                 {
@@ -751,10 +751,12 @@ async function main() {
 
             const explanation = report.explanations[0];
 
-            assert.strictEqual(explanation.fixOwner, FIX_OWNERS.UNKNOWN);
-            assert.strictEqual(explanation.backendResolution, null);
+            assert.strictEqual(explanation.fixOwner, FIX_OWNERS.MANUAL_METADATA);
             assert.strictEqual(explanation.backendCanAutoFix, false);
-            assert.strictEqual(explanation.flowEvidence, null);
+            assert.match(
+                explanation.backendResolution,
+                /permission that is not recognized/
+            );
             assert.strictEqual(explanation.source, undefined);
         }
     );

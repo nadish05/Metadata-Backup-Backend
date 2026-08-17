@@ -32,7 +32,11 @@ const ALLOWED_CONTEXT_KEYS = Object.freeze([
     'enterpriseDeploymentReport',
     'deploymentDiagnostics',
     'deploymentSummary',
-    'aiResolutionFactPack'
+    'aiResolutionFactPack',
+    'safeSkipReport',
+    'compatibilityPackageFilter',
+    'excludedComponents',
+    'compatibilitySummary'
 ]);
 
 const SUPPORTED_PROVIDERS = Object.freeze(['gemini', 'openai']);
@@ -133,6 +137,37 @@ function sanitizeAiResolutionContext(rawContext) {
         );
     }
 
+    if (Object.prototype.hasOwnProperty.call(sanitized, 'safeSkipReport')) {
+        sanitized.safeSkipReport = sanitizeSafeSkipReport(
+            sanitized.safeSkipReport
+        );
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(
+            sanitized,
+            'compatibilityPackageFilter'
+        )
+    ) {
+        sanitized.compatibilityPackageFilter = sanitizeExcludedListContainer(
+            sanitized.compatibilityPackageFilter
+        );
+    }
+
+    if (Object.prototype.hasOwnProperty.call(sanitized, 'excludedComponents')) {
+        sanitized.excludedComponents = sanitizeExcludedComponents(
+            sanitized.excludedComponents
+        );
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(sanitized, 'compatibilitySummary')
+    ) {
+        sanitized.compatibilitySummary = sanitizeCompatibilitySummary(
+            sanitized.compatibilitySummary
+        );
+    }
+
     return sanitized;
 }
 
@@ -166,6 +201,274 @@ function failureKey(type, name) {
     }
 
     return `${type || 'Unknown'}:${name || 'Unknown'}`;
+}
+
+function identityKey(metadataType, metadataName) {
+    const key = failureKey(metadataType, metadataName);
+    return key ? key.toLowerCase() : null;
+}
+
+function autoFixIncludeTarget(metadataType, metadataName) {
+    if (metadataType === 'ExternalCredentialPrincipal' && metadataName) {
+        const parentName = String(metadataName).split('-')[0];
+
+        if (parentName) {
+            return {
+                metadataType: 'ExternalCredential',
+                metadataName: parentName
+            };
+        }
+    }
+
+    return {
+        metadataType: metadataType || null,
+        metadataName: metadataName || null
+    };
+}
+
+function componentProblemText(item) {
+    return `${item?.reason || ''} ${item?.cliProblem || ''}`.toLowerCase();
+}
+
+function isUnknownUserPermission(item) {
+    return /unknown user permission\s*:/.test(componentProblemText(item));
+}
+
+function isInvalidCompactLayout(item) {
+    return /invalid compact layout assigned/.test(componentProblemText(item));
+}
+
+function isApexTestOrCoverage(item) {
+    const text = componentProblemText(item);
+    return (
+        text.includes('code coverage') ||
+        (text.includes('apex') && text.includes('test'))
+    );
+}
+
+function sanitizeExcludedComponents(raw) {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+
+    return raw
+        .filter((item) => item && (item.metadataType || item.metadataName))
+        .map((item) => ({
+            metadataType: item.metadataType || item.type || null,
+            metadataName: item.metadataName || item.name || null,
+            category: item.category || null,
+            action: item.action || null,
+            reason: item.reason || null
+        }));
+}
+
+function sanitizeExcludedListContainer(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+
+    return {
+        excludedComponents: sanitizeExcludedComponents(raw.excludedComponents)
+    };
+}
+
+function sanitizeSafeSkipReport(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+
+    return {
+        safeSkipAvailable: raw.safeSkipAvailable === true,
+        safeSkipApplied: raw.safeSkipApplied === true,
+        decisions: Array.isArray(raw.decisions)
+            ? raw.decisions.map((decision) => ({
+                  metadataType: decision?.metadataType || null,
+                  metadataName: decision?.metadataName || null,
+                  safeToSkip:
+                      decision?.safeToSkip === true
+                          ? true
+                          : decision?.safeToSkip === false
+                            ? false
+                            : null,
+                  decision: decision?.decision || null,
+                  applied: decision?.applied === true,
+                  reason: decision?.reason || null
+              }))
+            : []
+    };
+}
+
+function sanitizeCompatibilitySummary(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+
+    return {
+        status: raw.status || null,
+        filesModified: Array.isArray(raw.filesModified)
+            ? raw.filesModified.map((entry) => ({
+                  file: entry?.file || null,
+                  ruleId: entry?.ruleId || null,
+                  summary: entry?.summary || null
+              }))
+            : []
+    };
+}
+
+function flexiPageNameFromPath(filePath) {
+    const base = String(filePath || '')
+        .replace(/\\/g, '/')
+        .split('/')
+        .pop();
+
+    if (!base) {
+        return null;
+    }
+
+    return base.replace(/\.flexipage-meta\.xml$/i, '') || null;
+}
+
+function collectSafeSkipDecisions(context) {
+    return [
+        ...(Array.isArray(context?.safeSkipReport?.decisions)
+            ? context.safeSkipReport.decisions
+            : []),
+        ...(Array.isArray(context?.enterpriseDeploymentReport?.safeSkips?.decisions)
+            ? context.enterpriseDeploymentReport.safeSkips.decisions
+            : [])
+    ];
+}
+
+function collectExcludedComponents(context) {
+    return [
+        ...(Array.isArray(context?.excludedComponents)
+            ? context.excludedComponents
+            : []),
+        ...(Array.isArray(context?.compatibilityPackageFilter?.excludedComponents)
+            ? context.compatibilityPackageFilter.excludedComponents
+            : [])
+    ];
+}
+
+function findSuccessfulIncludeFix(context, metadataType, metadataName) {
+    const candidateKeys = new Set(
+        [
+            identityKey(metadataType, metadataName),
+            identityKey(
+                autoFixIncludeTarget(metadataType, metadataName).metadataType,
+                autoFixIncludeTarget(metadataType, metadataName).metadataName
+            )
+        ].filter(Boolean)
+    );
+
+    for (const fix of context?.autoFixReport?.fixes || []) {
+        if (
+            fix?.fixType !== 'INCLUDE_DISCOVERED_DEPENDENCY' ||
+            fix.successful !== true
+        ) {
+            continue;
+        }
+
+        const fixKey = identityKey(fix.metadataType, fix.metadataName);
+
+        if (fixKey && candidateKeys.has(fixKey)) {
+            return fix;
+        }
+    }
+
+    return null;
+}
+
+function findAppliedSafeSkip(context, metadataType, metadataName) {
+    const key = identityKey(metadataType, metadataName);
+
+    if (!key) {
+        return null;
+    }
+
+    return (
+        collectSafeSkipDecisions(context).find((decision) => {
+            return (
+                decision?.applied === true &&
+                decision?.safeToSkip === true &&
+                identityKey(decision.metadataType, decision.metadataName) === key
+            );
+        }) || null
+    );
+}
+
+function findCompatibilityExclusion(context, metadataType, metadataName) {
+    const key = identityKey(metadataType, metadataName);
+
+    if (!key) {
+        return null;
+    }
+
+    return (
+        collectExcludedComponents(context).find((item) => {
+            return (
+                identityKey(
+                    item?.metadataType || item?.type,
+                    item?.metadataName || item?.name
+                ) === key
+            );
+        }) || null
+    );
+}
+
+function findFlexiPageWorkspaceModification(context, metadataType, metadataName) {
+    if (metadataType !== 'FlexiPage' || !metadataName) {
+        return null;
+    }
+
+    const files = context?.compatibilitySummary?.filesModified;
+
+    if (!Array.isArray(files)) {
+        return null;
+    }
+
+    return (
+        files.find((entry) => {
+            const fileName = flexiPageNameFromPath(entry?.file);
+            const isFlexiPageFile = /\.flexipage-meta\.xml$/i.test(
+                String(entry?.file || '')
+            );
+            const isTabsetRule =
+                !entry?.ruleId ||
+                String(entry.ruleId).includes('flexipage.remove-tabset-label');
+
+            return (
+                isFlexiPageFile &&
+                isTabsetRule &&
+                fileName === metadataName
+            );
+        }) || null
+    );
+}
+
+function getComponentExecutionEvidence(
+    context,
+    metadataType,
+    metadataName
+) {
+    return {
+        successfulInclude: findSuccessfulIncludeFix(
+            context,
+            metadataType,
+            metadataName
+        ),
+        appliedSkip: findAppliedSafeSkip(context, metadataType, metadataName),
+        compatibilityExclusion: findCompatibilityExclusion(
+            context,
+            metadataType,
+            metadataName
+        ),
+        flexiPageWorkspaceModified: findFlexiPageWorkspaceModification(
+            context,
+            metadataType,
+            metadataName
+        )
+    };
 }
 
 function extractCliProblem(entry) {
@@ -366,23 +669,23 @@ function deriveResolutionCategory(item) {
     return 'NONE';
 }
 
-function deriveBackendCanAutoFix(item) {
-    if (!item) {
-        return false;
-    }
-
-    if (item.autoFixed === true || item.canAutoFix === true) {
-        return true;
-    }
-
-    if (item.autoFixAvailable === true) {
+function deriveBackendCanAutoFix(item, evidence = null) {
+    if (evidence?.successfulInclude || evidence?.flexiPageWorkspaceModified) {
         return true;
     }
 
     return false;
 }
 
-function deriveUserActionRequired(item) {
+function deriveUserActionRequired(item, evidence = null) {
+    if (deriveBackendCanAutoFix(item, evidence)) {
+        return false;
+    }
+
+    if (evidence?.appliedSkip) {
+        return false;
+    }
+
     if (!item) {
         return true;
     }
@@ -395,17 +698,12 @@ function deriveUserActionRequired(item) {
         return item.userActionRequired;
     }
 
-    return !deriveBackendCanAutoFix(item);
+    return true;
 }
 
-function deriveSafeToSkip(item) {
-    // Phase 17.7: never invent safe-skip. Only pass through explicit backend flags.
-    if (item && item.safeToSkip === true) {
+function deriveSafeToSkip(item, evidence = null) {
+    if (evidence?.appliedSkip) {
         return true;
-    }
-
-    if (item && item.safeToSkip === false) {
-        return false;
     }
 
     return null;
@@ -443,8 +741,8 @@ function isFlowSourceMissing(dependency) {
     return dependency?.sourceArtifact?.exists === false;
 }
 
-function deriveFixOwner(item, componentFacts, flowEvidence = null) {
-    if (deriveBackendCanAutoFix(item)) {
+function deriveFixOwner(item, componentFacts, flowEvidence = null, evidence = null) {
+    if (evidence?.successfulInclude || evidence?.flexiPageWorkspaceModified) {
         return FIX_OWNERS.RUNTIME_AUTOFIX;
     }
 
@@ -467,14 +765,54 @@ function deriveFixOwner(item, componentFacts, flowEvidence = null) {
         return FIX_OWNERS.MANUAL_METADATA;
     }
 
+    if (isUnknownUserPermission(item)) {
+        return FIX_OWNERS.MANUAL_METADATA;
+    }
+
+    if (isInvalidCompactLayout(item)) {
+        return FIX_OWNERS.MANUAL_METADATA;
+    }
+
+    if (isApexTestOrCoverage(item) || resolutionType === 'MANUAL_METADATA_CHANGE') {
+        return FIX_OWNERS.MANUAL_METADATA;
+    }
+
+    if (evidence?.compatibilityExclusion) {
+        return FIX_OWNERS.MANUAL_METADATA;
+    }
+
     return FIX_OWNERS.UNKNOWN;
 }
 
 function deriveBackendResolution(
     fixOwner,
     componentFacts,
-    flowEvidence = null
+    flowEvidence = null,
+    evidence = null,
+    item = null
 ) {
+    if (evidence?.successfulInclude) {
+        const included = autoFixIncludeTarget(
+            evidence.successfulInclude.metadataType,
+            evidence.successfulInclude.metadataName
+        );
+
+        return (
+            `The backend automatically included ${included.metadataType} ${included.metadataName}` +
+            ' because it was a required deployment dependency with a resolved source artifact. ' +
+            'The deployment package was regenerated and revalidated. ' +
+            'Salesforce source and destination metadata were not changed.'
+        );
+    }
+
+    if (evidence?.flexiPageWorkspaceModified) {
+        return (
+            'The backend removed the unsupported tabset label from the temporary ' +
+            'deployment workspace copy before check-only validation. ' +
+            'Source Git metadata and Salesforce org metadata were not changed.'
+        );
+    }
+
     if (isFieldTypeConversion(componentFacts)) {
         if (fixOwner !== FIX_OWNERS.MANUAL_METADATA) {
             return null;
@@ -482,36 +820,110 @@ function deriveBackendResolution(
 
         const source = componentFacts.source;
         const destination = componentFacts.destination;
-
-        return (
+        let text =
             `Source field type is ${source?.type ?? 'UNKNOWN'}` +
             ` (calculated=${String(source?.calculated)})` +
             ` while destination field type is ${destination?.type ?? 'UNKNOWN'}` +
             ` (calculated=${String(destination?.calculated)}).` +
-            ' Salesforce does not allow this in-place conversion.'
-        );
+            ' Salesforce does not allow this in-place conversion.';
+
+        if (evidence?.compatibilityExclusion) {
+            text +=
+                ' The backend excluded this incompatible metadata member from the generated deployment package. ' +
+                'Exclusion is not a field conversion.';
+        }
+
+        return text;
     }
 
     const flowDependency = getMatchedFlowDependency(flowEvidence);
 
-    if (!flowDependency || fixOwner !== FIX_OWNERS.MANUAL_METADATA) {
-        return null;
+    if (flowDependency && fixOwner === FIX_OWNERS.MANUAL_METADATA) {
+        if (isFlowPackageGap(flowDependency)) {
+            return (
+                `The Flow references CustomField ${flowDependency.metadataName}. ` +
+                'The dependency exists in the source branch but was not included in the deployment package.'
+            );
+        }
+
+        if (isFlowSourceMissing(flowDependency)) {
+            return (
+                `The Flow references CustomField ${flowDependency.metadataName}. ` +
+                'No source artifact was resolved for that field. ' +
+                'Confirm the field metadata exists in the source branch, then re-run Deployment Review.'
+            );
+        }
     }
 
-    if (isFlowPackageGap(flowDependency)) {
+    if (isUnknownUserPermission(item)) {
         return (
-            `The Flow references CustomField ${flowDependency.metadataName}. ` +
-            'The dependency exists in the source branch but is not included in the deployment package. ' +
-            'Re-run Deployment Review so the required dependency is included before validation.'
+            'The destination/profile metadata contains a permission that is not ' +
+            'recognized or available in the target Salesforce environment.'
         );
     }
 
-    if (isFlowSourceMissing(flowDependency)) {
+    if (isInvalidCompactLayout(item)) {
         return (
-            `The Flow references CustomField ${flowDependency.metadataName}. ` +
-            'No source artifact was resolved for that field. ' +
-            'Confirm the field metadata exists in the source branch, then re-run Deployment Review.'
+            'The RecordType CompactLayout assignment is invalid. ' +
+            'The backend can discover CompactLayout dependencies but cannot rewrite CompactLayout or RecordType assignment metadata.'
         );
+    }
+
+    if (isApexTestOrCoverage(item)) {
+        return (
+            'Deployment requires passing Apex tests and coverage thresholds. ' +
+            'The backend cannot repair Apex test classes automatically.'
+        );
+    }
+
+    if (evidence?.compatibilityExclusion) {
+        return (
+            'The backend excluded this incompatible metadata member from the generated deployment package. ' +
+            'Exclusion is not a metadata conversion or Salesforce org change.'
+        );
+    }
+
+    if (evidence?.appliedSkip) {
+        return (
+            'The backend excluded this component from the deployment package after determining it was safe to skip. ' +
+            'Source metadata was not changed.'
+        );
+    }
+
+    return null;
+}
+
+function buildManualResolutionSteps(item, evidence, flowDependency) {
+    if (evidence?.successfulInclude || evidence?.flexiPageWorkspaceModified) {
+        return [
+            'Review the auto-fix report to confirm the backend operation completed.',
+            'Confirm check-only validation results for the regenerated package.',
+            'Proceed with deployment only if check-only succeeded.'
+        ];
+    }
+
+    const flowSteps = buildFlowResolutionSteps(flowDependency);
+
+    if (flowSteps) {
+        return flowSteps;
+    }
+
+    if (isUnknownUserPermission(item)) {
+        return [
+            'Open the affected Profile.',
+            'Verify whether the permission exists in the destination Salesforce release/org.',
+            'Remove or reconcile the unsupported permission in source metadata.',
+            'Re-run validation.'
+        ];
+    }
+
+    if (isInvalidCompactLayout(item)) {
+        return [
+            'Open the affected RecordType.',
+            'Assign a CompactLayout that exists in the source package and destination org.',
+            'Re-run deployment review and validation.',
+            'Confirm check-only succeeds before deploying.'
+        ];
     }
 
     return null;
@@ -539,7 +951,12 @@ function buildFlowResolutionSteps(dependency) {
     return null;
 }
 
-function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
+function attachBackendDerivedFields(
+    explanation,
+    knownItems,
+    factPack = null,
+    context = null
+) {
     const key = failureKey(
         explanation?.metadataType,
         explanation?.metadataName
@@ -552,7 +969,11 @@ function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
             )) ||
         null;
 
-    const safeToSkip = deriveSafeToSkip(item);
+    const evidence = getComponentExecutionEvidence(
+        context,
+        explanation?.metadataType,
+        explanation?.metadataName
+    );
     const componentFacts = getComponentFactPack(
         factPack,
         explanation?.metadataType,
@@ -564,24 +985,33 @@ function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
         explanation?.metadataName
     );
     const flowDependency = getMatchedFlowDependency(flowEvidence);
-    const fixOwner = deriveFixOwner(item, componentFacts, flowEvidence);
+    const fixOwner = deriveFixOwner(
+        item,
+        componentFacts,
+        flowEvidence,
+        evidence
+    );
+    const safeToSkip = deriveSafeToSkip(item, evidence);
+    const backendResolution = deriveBackendResolution(
+        fixOwner,
+        componentFacts,
+        flowEvidence,
+        evidence,
+        item
+    );
 
     const enriched = {
         ...explanation,
         resolutionCategory: deriveResolutionCategory(item),
-        backendCanAutoFix: deriveBackendCanAutoFix(item),
-        userActionRequired: deriveUserActionRequired(item),
+        backendCanAutoFix: deriveBackendCanAutoFix(item, evidence),
+        userActionRequired: deriveUserActionRequired(item, evidence),
         safeToSkip,
         skipGuidance:
             safeToSkip === true
-                ? 'Backend marked this component as safe to skip.'
+                ? 'Backend excluded this component from the deployment package. Source metadata was not changed.'
                 : SKIP_GUIDANCE_DEFAULT,
         fixOwner,
-        backendResolution: deriveBackendResolution(
-            fixOwner,
-            componentFacts,
-            flowEvidence
-        ),
+        backendResolution,
         flowEvidence: flowEvidence || null
     };
 
@@ -589,13 +1019,17 @@ function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
         enriched.resolutionCategory = 'DEPENDENCY';
     }
 
-    const flowSteps = buildFlowResolutionSteps(flowDependency);
+    const manualSteps = buildManualResolutionSteps(
+        item,
+        evidence,
+        flowDependency
+    );
 
-    if (flowSteps) {
+    if (manualSteps) {
         enriched.resolution = {
-            action: 'MANUAL',
-            steps: flowSteps,
-            reason: enriched.backendResolution
+            action: deriveBackendCanAutoFix(item, evidence) ? 'BACKEND' : 'MANUAL',
+            steps: manualSteps,
+            reason: backendResolution
         };
     }
 
@@ -624,11 +1058,14 @@ function attachBackendDerivedFields(explanation, knownItems, factPack = null) {
         cliProblem: componentFacts.cliProblem || null,
         classifiedReason: componentFacts.classifiedReason || null
     };
-    enriched.resolution = {
-        action: deriveResolutionAction(componentFacts),
-        steps: buildResolutionSteps(componentFacts),
-        reason: buildResolutionReason(componentFacts)
-    };
+
+    if (!manualSteps || isFieldTypeConversion(componentFacts)) {
+        enriched.resolution = {
+            action: deriveResolutionAction(componentFacts),
+            steps: buildResolutionSteps(componentFacts),
+            reason: backendResolution || buildResolutionReason(componentFacts)
+        };
+    }
 
     return enriched;
 }
@@ -706,14 +1143,24 @@ function buildResolutionReason(componentFacts) {
     );
 }
 
-function enrichReportExplanations(report, knownItems, factPack = null) {
+function enrichReportExplanations(
+    report,
+    knownItems,
+    factPack = null,
+    context = null
+) {
     if (!report || typeof report !== 'object') {
         return report;
     }
 
     const explanations = Array.isArray(report.explanations)
         ? report.explanations.map((explanation) =>
-              attachBackendDerivedFields(explanation, knownItems, factPack)
+              attachBackendDerivedFields(
+                  explanation,
+                  knownItems,
+                  factPack,
+                  context
+              )
           )
         : [];
 
@@ -876,6 +1323,13 @@ function buildStructuredContext(context) {
                 successful: fix.successful === true
             }))
         },
+        safeSkipReport: sanitizeSafeSkipReport(context.safeSkipReport),
+        excludedComponents: sanitizeExcludedComponents(
+            collectExcludedComponents(context)
+        ),
+        compatibilitySummary: sanitizeCompatibilitySummary(
+            context.compatibilitySummary
+        ),
         autoValidationReport: context.autoValidationReport
             ? {
                   attempts: context.autoValidationReport.attempts ?? null,
@@ -957,7 +1411,17 @@ function buildStructuredContext(context) {
                 item.metadataType,
                 item.metadataName
             );
-            const fixOwner = deriveFixOwner(item, componentFacts, flowEvidence);
+            const evidence = getComponentExecutionEvidence(
+                context,
+                item.metadataType,
+                item.metadataName
+            );
+            const fixOwner = deriveFixOwner(
+                item,
+                componentFacts,
+                flowEvidence,
+                evidence
+            );
 
             return {
                 metadataType: item.metadataType,
@@ -966,11 +1430,23 @@ function buildStructuredContext(context) {
                 backendResolution: deriveBackendResolution(
                     fixOwner,
                     componentFacts,
-                    flowEvidence
+                    flowEvidence,
+                    evidence,
+                    item
                 ),
-                backendCanAutoFix: deriveBackendCanAutoFix(item),
-                safeToSkip: deriveSafeToSkip(item),
-                flowEvidence: flowEvidence || null
+                backendCanAutoFix: deriveBackendCanAutoFix(item, evidence),
+                safeToSkip: deriveSafeToSkip(item, evidence),
+                flowEvidence: flowEvidence || null,
+                executionEvidence: {
+                    autoFixApplied: Boolean(evidence.successfulInclude),
+                    safeSkipApplied: Boolean(evidence.appliedSkip),
+                    compatibilityExcluded: Boolean(
+                        evidence.compatibilityExclusion
+                    ),
+                    workspaceModified: Boolean(
+                        evidence.flexiPageWorkspaceModified
+                    )
+                }
             };
         })
     };
@@ -998,11 +1474,14 @@ Rules:
 - Never recommend unsafe skips, disabling validations, or automatically modifying the deployment package.
 - Never say a component is safe to skip unless the backend context explicitly marks safeToSkip=true (it normally will not).
 - Never convert FAILURE into SAFE_SKIP or claim check-only succeeded when it failed.
-- Never claim deployment is ready, that metadata was changed, or that a backend fix was performed unless autoFixReport shows a successful include.
-- Never override backend decisions. If autoFixReport shows a successful include, explain that the backend already auto-fixed it.
-- Backend-derived fields are authoritative: fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution.action, source, destination, conflict, and flowEvidence.
+- Never claim deployment is ready, that metadata was changed, or that a backend fix was performed unless backendOwnedResolution.executionEvidence.autoFixApplied is true or autoFixReport shows a successful INCLUDE_DISCOVERED_DEPENDENCY for that component.
+- Never override backend decisions. If autoFixReport shows a successful include, explain that the backend already included the dependency in the package. Do not say Salesforce metadata was edited.
+- If executionEvidence.safeSkipApplied is true, explain that the backend excluded the component from the deployment package. Do not claim the metadata was fixed or converted.
+- If executionEvidence.compatibilityExcluded is true, explain that the backend excluded the incompatible member from the package. Exclusion is not a field conversion.
+- If executionEvidence.workspaceModified is true, explain that only the temporary deployment workspace copy was changed before check-only. Source Git and Salesforce org metadata were not changed.
+- Backend-derived fields are authoritative: fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution.action, source, destination, conflict, flowEvidence, and executionEvidence.
 - Use backendOwnedResolution.fixOwner and backendOwnedResolution.backendResolution when explaining who must act. They are backend-authored.
-- Use backendOwnedResolution.backendCanAutoFix only when it is true. Discovery of a Flow dependency is not an automatic fix.
+- Use backendOwnedResolution.backendCanAutoFix only when it is true. Discovery of a Flow dependency is not an automatic fix. A type on an include list is not an automatic fix.
 - Do not invent a backend fix. Do not claim a problem is backend-fixable when fixOwner is UNKNOWN or absent.
 - Do not generate fixOwner, backendResolution, backendCanAutoFix, safeToSkip, userActionRequired, resolutionCategory, resolution, source, destination, conflict, or flowEvidence. The backend attaches those after your response.
 - Do not recommend deleting or replacing production fields unless facts support that option and clearly require user review of business impact.
@@ -1192,7 +1671,8 @@ async function generateAiResolutionReport(context = {}, options = {}) {
                         'AI response was incomplete; returned deterministic resolution explanations.'
                 ),
                 knownItems,
-                factPack
+                factPack,
+                context
             );
         }
 
@@ -1217,7 +1697,8 @@ async function generateAiResolutionReport(context = {}, options = {}) {
                 disclaimer: DEFAULT_DISCLAIMER
             },
             knownItems,
-            factPack
+            factPack,
+            context
         );
     } catch (error) {
         console.error('AI RESOLUTION LAYER ERROR');
@@ -1236,7 +1717,8 @@ async function generateAiResolutionReport(context = {}, options = {}) {
                 'AI provider unavailable; returned deterministic resolution explanations.'
             ),
             knownItems,
-            factPack
+            factPack,
+            context
         );
     }
 }
