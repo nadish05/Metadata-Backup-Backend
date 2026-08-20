@@ -1,7 +1,8 @@
 const assert = require('assert');
 
 const {
-    analyzeApexContent
+    analyzeApexContent,
+    analyzeApexContentWithRepository
 } = require('./dependencyAnalyzer.service');
 
 function runTest(name, fn) {
@@ -200,6 +201,193 @@ runTest(
             result.customObjects.includes('Equipment_Maintenance_Item__c'),
             'Equipment_Maintenance_Item__c must remain CustomObject'
         );
+        assert.ok(
+            !result.customFields.includes('Product2.Maintenance_Cycle__c'),
+            'Without lookup metadata map, Product2 field must not be invented'
+        );
+    }
+);
+
+runTest(
+    'SOQL Equipment__r.Maintenance_Cycle__c resolves via Case.Equipment__c referenceTo Product2',
+    () => {
+        const lookupReferenceTargets = new Map([
+            ['Case.Equipment__c', ['Product2']]
+        ]);
+
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceRequestHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Id,
+                               Vehicle__c,
+                               Equipment__c,
+                               Equipment__r.Maintenance_Cycle__c
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'MaintenanceRequestHelper',
+            { lookupReferenceTargets }
+        );
+
+        assert.ok(
+            result.customFields.includes('Product2.Maintenance_Cycle__c'),
+            `expected Product2.Maintenance_Cycle__c, got: ${result.customFields.join(', ')}`
+        );
+        assert.ok(result.customFields.includes('Case.Equipment__c'));
+        assert.ok(result.customFields.includes('Case.Vehicle__c'));
+        assert.ok(
+            !result.customFields.includes('Equipment__c.Maintenance_Cycle__c'),
+            'must not invent Equipment__c.Maintenance_Cycle__c'
+        );
+    }
+);
+
+runTest(
+    'SOQL MIN(Equipment__r.Maintenance_Cycle__c) resolves via EMI.Equipment__c referenceTo Product2',
+    () => {
+        const lookupReferenceTargets = new Map([
+            [
+                'Equipment_Maintenance_Item__c.Equipment__c',
+                ['Product2']
+            ]
+        ]);
+
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceRequestHelper {
+                public void aggregate() {
+                    AggregateResult[] rows = [
+                        SELECT Maintenance_Request__c,
+                               MIN(Equipment__r.Maintenance_Cycle__c) cycle
+                        FROM Equipment_Maintenance_Item__c
+                        GROUP BY Maintenance_Request__c
+                    ];
+                }
+            }
+            `,
+            'MaintenanceRequestHelper',
+            { lookupReferenceTargets }
+        );
+
+        assert.ok(
+            result.customFields.includes('Product2.Maintenance_Cycle__c'),
+            `expected Product2.Maintenance_Cycle__c, got: ${result.customFields.join(', ')}`
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Equipment__c'
+            ),
+            'owning lookup field must be discovered for __r path'
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Maintenance_Request__c'
+            )
+        );
+        assert.ok(
+            !result.customFields.includes('Equipment__c.Maintenance_Cycle__c')
+        );
+    }
+);
+
+runTest(
+    'SOQL relationship field resolves custom referenceTo target',
+    () => {
+        const lookupReferenceTargets = new Map([
+            ['Enrollment__c.Course__c', ['Course__c']]
+        ]);
+
+        const result = analyzeApexContent(
+            `
+            public class EnrollmentHelper {
+                public void load() {
+                    Enrollment__c row = [
+                        SELECT Course__r.Tuition__c
+                        FROM Enrollment__c
+                    ];
+                }
+            }
+            `,
+            'EnrollmentHelper',
+            { lookupReferenceTargets }
+        );
+
+        assert.ok(result.customFields.includes('Course__c.Tuition__c'));
+        assert.ok(result.customFields.includes('Enrollment__c.Course__c'));
+        assert.ok(
+            !result.customFields.includes('Enrollment__c.Tuition__c'),
+            'must not attach related field to FROM object'
+        );
+    }
+);
+
+runTest(
+    'SOQL multiple relationship fields resolve independently via lookup metadata',
+    () => {
+        const lookupReferenceTargets = new Map([
+            ['Case.Equipment__c', ['Product2']],
+            ['Case.Account_Lookup__c', ['Account']],
+            ['Work_Order__c.Department__c', ['Department__c']]
+        ]);
+
+        const result = analyzeApexContent(
+            `
+            public class MultiRelHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Equipment__r.Maintenance_Cycle__c,
+                               Account_Lookup__r.Region_Code__c
+                        FROM Case
+                    ];
+                    Work_Order__c wo = [
+                        SELECT Department__r.Cost_Center__c
+                        FROM Work_Order__c
+                    ];
+                }
+            }
+            `,
+            'MultiRelHelper',
+            { lookupReferenceTargets }
+        );
+
+        assert.ok(result.customFields.includes('Product2.Maintenance_Cycle__c'));
+        assert.ok(result.customFields.includes('Account.Region_Code__c'));
+        assert.ok(result.customFields.includes('Department__c.Cost_Center__c'));
+        assert.ok(result.customFields.includes('Case.Equipment__c'));
+        assert.ok(result.customFields.includes('Case.Account_Lookup__c'));
+        assert.ok(result.customFields.includes('Work_Order__c.Department__c'));
+    }
+);
+
+runTest(
+    'SOQL relationship fallback does not invent target when lookup metadata missing',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MissingMetaHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Equipment__r.Maintenance_Cycle__c
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'MissingMetaHelper',
+            { lookupReferenceTargets: new Map() }
+        );
+
+        assert.ok(
+            !result.customFields.includes('Product2.Maintenance_Cycle__c')
+        );
+        assert.ok(
+            !result.customFields.includes('Equipment__c.Maintenance_Cycle__c')
+        );
+        assert.ok(result.relationshipReferences.includes('Equipment__r'));
     }
 );
 
@@ -1150,3 +1338,69 @@ runTest(
         );
     }
 );
+
+async function runAsyncTest(name, fn) {
+    try {
+        await fn();
+        console.log(`PASS: ${name}`);
+    } catch (error) {
+        console.error(`FAIL: ${name}`);
+        console.error(error);
+        process.exitCode = 1;
+    }
+}
+
+(async () => {
+    await runAsyncTest(
+        'analyzeApexContentWithRepository resolves Product2 via field-meta.xml',
+        async () => {
+            const fieldPath =
+                'force-app/main/default/objects/Case/fields/Equipment__c.field-meta.xml';
+            const fieldXml = `
+                <?xml version="1.0" encoding="UTF-8"?>
+                <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+                    <fullName>Equipment__c</fullName>
+                    <type>Lookup</type>
+                    <referenceTo>Product2</referenceTo>
+                    <relationshipName>Equipment</relationshipName>
+                </CustomField>
+            `;
+
+            const result = await analyzeApexContentWithRepository(
+                `
+                public class MaintenanceRequestHelper {
+                    public void load() {
+                        Case c = [
+                            SELECT Equipment__r.Maintenance_Cycle__c
+                            FROM Case
+                        ];
+                    }
+                }
+                `,
+                'MaintenanceRequestHelper',
+                {
+                    listRepoFiles: async () => [fieldPath],
+                    readRepoFile: async (path) => {
+                        if (path === fieldPath) {
+                            return fieldXml;
+                        }
+
+                        throw new Error(`unexpected path: ${path}`);
+                    }
+                }
+            );
+
+            assert.ok(
+                result.customFields.includes('Product2.Maintenance_Cycle__c'),
+                `expected Product2.Maintenance_Cycle__c, got: ${result.customFields.join(', ')}`
+            );
+            assert.ok(result.customFields.includes('Case.Equipment__c'));
+            assert.ok(
+                !result.customFields.includes(
+                    'Equipment__c.Maintenance_Cycle__c'
+                )
+            );
+        }
+    );
+})();
+

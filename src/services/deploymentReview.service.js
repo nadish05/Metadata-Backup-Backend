@@ -236,10 +236,12 @@ async function reviewSingleMetadataItem({
         filePath
     );
 
-    const rawDependencyAnalysis = dependencyAnalyzer.analyzeApexContent(
-        content,
-        currentClassName
-    );
+    const rawDependencyAnalysis =
+        await dependencyAnalyzer.analyzeApexContentWithRepository(
+            content,
+            currentClassName,
+            { readRepoFile, listRepoFiles }
+        );
 
     const apiValidation = await apiVersionValidator.validateApiVersion(
         metadataType,
