@@ -11,7 +11,8 @@ const RELATIONSHIP_TYPES = Object.freeze({
     Lookup: 'Lookup',
     MasterDetail: 'MasterDetail',
     Summary: 'Summary',
-    Formula: 'Formula'
+    Formula: 'Formula',
+    LookupFilter: 'LookupFilter'
 });
 
 const STANDARD_FIELDS = Object.freeze(
@@ -213,6 +214,88 @@ function isCustomObjectApiName(name) {
     return Boolean(name) && /__c$/i.test(String(name).trim());
 }
 
+/**
+ * True when name can parent a CustomField (ObjectApiName.Field__c).
+ * Accepts custom objects (__c) and PascalCase standard/platform sObjects.
+ * Rejects relationship suffixes and other metadata suffixes.
+ */
+function isFieldParentObjectApiName(name) {
+    const objectApiName = String(name || '').trim();
+
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(objectApiName)) {
+        return false;
+    }
+
+    if (/__(?:r|mdt|e|b|x|kav)$/i.test(objectApiName)) {
+        return false;
+    }
+
+    if (/__c$/i.test(objectApiName)) {
+        return true;
+    }
+
+    // Standard / built-in sObject API names are PascalCase in metadata.
+    return /^[A-Z]/.test(objectApiName);
+}
+
+/**
+ * Exact qualified CustomField reference Object.Field__c (standard or custom parent).
+ * Rejects multi-segment paths, __r parents, and non-__c fields.
+ */
+function parseExactQualifiedCustomFieldReference(value) {
+    const trimmed = String(value || '').trim();
+
+    if (!trimmed || trimmed.includes('..')) {
+        return null;
+    }
+
+    const match = trimmed.match(
+        /^([A-Za-z][A-Za-z0-9_]*)\.([A-Za-z][A-Za-z0-9_]*__c)$/
+    );
+
+    if (!match) {
+        return null;
+    }
+
+    const objectApiName = match[1];
+    const fieldApiName = match[2];
+
+    if (!isFieldParentObjectApiName(objectApiName)) {
+        return null;
+    }
+
+    if (!isCustomFieldApiToken(fieldApiName)) {
+        return null;
+    }
+
+    return `${objectApiName}.${fieldApiName}`;
+}
+
+function hasLookupFilterFieldReferences(fieldXml) {
+    for (const lookupFilterBlock of extractXmlBlocks(fieldXml, 'lookupFilter')) {
+        for (const filterItemBlock of extractXmlBlocks(
+            lookupFilterBlock,
+            'filterItems'
+        )) {
+            const fieldValue = extractXmlTagValue(filterItemBlock, 'field');
+
+            if (fieldValue && String(fieldValue).trim()) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function isLookupFilterEligibleFieldType(fieldType) {
+    return (
+        fieldType === RELATIONSHIP_TYPES.Lookup ||
+        fieldType === RELATIONSHIP_TYPES.MasterDetail ||
+        fieldType === 'ExternalLookup'
+    );
+}
+
 function uniqueStrings(values) {
     return [...new Set((values || []).filter(Boolean))];
 }
@@ -370,6 +453,29 @@ function buildRelationshipTargetMapFromFieldXmls(fieldXmlByApiName) {
     return map;
 }
 
+/**
+ * Exact <lookupFilter>/<filterItems>/<field> values only.
+ * These are whole-string Object.Field references, not formula expressions.
+ */
+function collectLookupFilterFieldTexts(fieldXml) {
+    const texts = [];
+
+    for (const lookupFilterBlock of extractXmlBlocks(fieldXml, 'lookupFilter')) {
+        for (const filterItemBlock of extractXmlBlocks(
+            lookupFilterBlock,
+            'filterItems'
+        )) {
+            const fieldValue = extractXmlTagValue(filterItemBlock, 'field');
+
+            if (fieldValue && String(fieldValue).trim()) {
+                texts.push(String(fieldValue).trim());
+            }
+        }
+    }
+
+    return texts;
+}
+
 function collectFieldExpressionTexts(fieldXml) {
     const texts = [];
     const formula = extractXmlTagValueMultiline(fieldXml, 'formula');
@@ -395,6 +501,13 @@ function shouldDiscoverExpressionFieldDependencies(fieldXml) {
     if (
         fieldType === RELATIONSHIP_TYPES.Formula ||
         fieldType === RELATIONSHIP_TYPES.Summary
+    ) {
+        return true;
+    }
+
+    if (
+        isLookupFilterEligibleFieldType(fieldType) &&
+        hasLookupFilterFieldReferences(fieldXml)
     ) {
         return true;
     }
@@ -444,8 +557,27 @@ function extractExpressionCustomFieldNames(
 
     const qualified = new Set();
 
+    // LookupFilter filterItems: accept only exact Object.Field__c strings
+    // (including standard parents like Product2). Never invent bare tokens.
+    for (const filterFieldText of collectLookupFilterFieldTexts(fieldXml)) {
+        const exactQualified =
+            parseExactQualifiedCustomFieldReference(filterFieldText);
+
+        if (exactQualified) {
+            qualified.add(exactQualified);
+        }
+    }
+
     for (const expressionText of collectFieldExpressionTexts(fieldXml)) {
         const text = String(expressionText || '');
+
+        // Exact whole-string Object.Field__c (e.g. summary filter fields).
+        const exactQualified = parseExactQualifiedCustomFieldReference(text);
+
+        if (exactQualified) {
+            qualified.add(exactQualified);
+            continue;
+        }
 
         for (const match of text.matchAll(
             /\b([A-Za-z][\w]*__r)\.([A-Za-z][\w]*__c)\b/gi
@@ -539,10 +671,20 @@ function discoverExpressionFieldDependencies({
             ? `${ownerObjectApiName}.${sourceField}`
             : null;
     const fieldType = extractXmlTagValue(fieldXml, 'type');
-    const relationship =
-        fieldType === RELATIONSHIP_TYPES.Summary
-            ? RELATIONSHIP_TYPES.Summary
-            : RELATIONSHIP_TYPES.Formula;
+    const usesLookupFilter =
+        isLookupFilterEligibleFieldType(fieldType) &&
+        hasLookupFilterFieldReferences(fieldXml);
+    let relationship = RELATIONSHIP_TYPES.Formula;
+    let reason = 'CustomField referenced by Formula expression.';
+
+    if (fieldType === RELATIONSHIP_TYPES.Summary) {
+        relationship = RELATIONSHIP_TYPES.Summary;
+        reason = 'CustomField referenced by Roll-Up Summary expression.';
+    } else if (usesLookupFilter) {
+        relationship = RELATIONSHIP_TYPES.LookupFilter;
+        reason =
+            'CustomField referenced by Lookup filter filterItems criteria.';
+    }
 
     const names = extractExpressionCustomFieldNames(
         fieldXml,
@@ -572,10 +714,7 @@ function discoverExpressionFieldDependencies({
                 depth,
                 metadataType: 'CustomField',
                 discoveryMethod: EXPRESSION_DISCOVERY_METHOD,
-                reason:
-                    relationship === RELATIONSHIP_TYPES.Summary
-                        ? 'CustomField referenced by Roll-Up Summary expression.'
-                        : 'CustomField referenced by Formula expression.'
+                reason
             })
         );
     }
