@@ -639,23 +639,71 @@ function extractSoqlFilterFieldTokens(cleanedContent) {
 }
 
 /**
+ * Extract text between a '(' at openParenIndex and its matching ')'.
+ * Nested parentheses increment depth; only depth 0 closes the span.
+ * Operates on cleaned Apex (literals/comments already stripped upstream).
+ * @returns {string|null} argument text, or null if unbalanced
+ */
+function extractBalancedParenContents(text, openParenIndex) {
+    if (
+        typeof text !== 'string' ||
+        openParenIndex < 0 ||
+        openParenIndex >= text.length ||
+        text[openParenIndex] !== '('
+    ) {
+        return null;
+    }
+
+    let depth = 1;
+
+    for (let i = openParenIndex + 1; i < text.length; i++) {
+        const ch = text[i];
+
+        if (ch === '(') {
+            depth += 1;
+        } else if (ch === ')') {
+            depth -= 1;
+
+            if (depth === 0) {
+                return text.slice(openParenIndex + 1, i);
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
  * Named field assignments inside `new SObject(Field__c = value, ...)`.
  * Supports custom objects (__c) and standard sObjects (Product2, Case, …),
  * including Apex case variants (`new product2(...)`, `lifespan_months__C`).
+ * Uses balanced-paren scan so nested calls like err.getMessage() do not
+ * truncate the constructor argument list.
  * Returns qualified CustomField identities ObjectApiName.Field__c.
  */
 function extractSObjectConstructorNamedFields(cleanedContent) {
     const qualifiedFields = new Set();
+    const text = String(cleanedContent || '');
+    const startPattern = /\bnew\s+([A-Za-z][A-Za-z0-9_]*)\s*\(/g;
+    let match;
 
-    for (const match of cleanedContent.matchAll(
-        /\bnew\s+([A-Za-z][A-Za-z0-9_]*)\s*\(([^;]*?)\)/g
-    )) {
+    while ((match = startPattern.exec(text)) !== null) {
         const rawObjectApiName = match[1];
-        const args = match[2] || '';
+        const openParenIndex = match.index + match[0].length - 1;
 
         if (!isStrongContextObjectName(rawObjectApiName)) {
             continue;
         }
+
+        const args = extractBalancedParenContents(text, openParenIndex);
+
+        if (args === null) {
+            continue;
+        }
+
+        // Resume after this constructor's closing ')' so nested scans stay
+        // independent and we do not re-enter the same argument span.
+        startPattern.lastIndex = openParenIndex + 1 + args.length + 1;
 
         const objectApiName =
             normalizeFieldParentObjectApiName(rawObjectApiName);

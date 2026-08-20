@@ -990,3 +990,163 @@ runTest(
         assert.ok(result.customObjects.includes('Maintenance_Request__c'));
     }
 );
+
+runTest(
+    'AccountService constructor nested method calls discover StackTrace__c',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class AccountService {
+                public static void createAccounts(List accList) {
+                    if(accList == null || accList.isEmpty()) return;
+                    List<Error_Log__c> logs = new List<Error_Log__c>();
+                    Database.SaveResult[] results = Database.insert(accList, false);
+                    for(Integer i = 0; i < results.size(); i++) {
+                        if(!results[i].isSuccess()) {
+                            for(Database.Error err : results[i].getErrors()) {
+                                logs.add(new Error_Log__c(
+                                    Message__c = err.getMessage(),
+                                    StackTrace__c = err.getStatusCode() + ''
+                                ));
+                            }
+                        }
+                    }
+                    if(!logs.isEmpty()) {
+                        insert logs;
+                    }
+                }
+            }
+            `,
+            'AccountService'
+        );
+
+        assert.ok(
+            result.customFields.includes('Error_Log__c.Message__c'),
+            `expected Error_Log__c.Message__c, got: ${result.customFields.join(', ')}`
+        );
+        assert.ok(
+            result.customFields.includes('Error_Log__c.StackTrace__c'),
+            `expected Error_Log__c.StackTrace__c, got: ${result.customFields.join(', ')}`
+        );
+        assert.ok(result.customObjects.includes('Error_Log__c'));
+    }
+);
+
+runTest(
+    'constructor named fields survive multiple nested method calls',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class NestedCtor {
+                public void run() {
+                    Example__c row = new Example__c(
+                        FieldA__c = foo(bar()),
+                        FieldB__c = baz(qux())
+                    );
+                }
+            }
+            `,
+            'NestedCtor'
+        );
+
+        assert.ok(result.customFields.includes('Example__c.FieldA__c'));
+        assert.ok(result.customFields.includes('Example__c.FieldB__c'));
+    }
+);
+
+runTest(
+    'constructor named fields survive deep nested method calls',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class DeepCtor {
+                public void run() {
+                    Example__c row = new Example__c(
+                        FieldA__c = outer(inner(deep(value()))),
+                        FieldB__c = another(one(two()))
+                    );
+                }
+            }
+            `,
+            'DeepCtor'
+        );
+
+        assert.ok(result.customFields.includes('Example__c.FieldA__c'));
+        assert.ok(result.customFields.includes('Example__c.FieldB__c'));
+    }
+);
+
+runTest(
+    'simple constructor named fields without nested calls still work',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class SimpleCtor {
+                public void run() {
+                    Example__c row = new Example__c(
+                        FieldA__c = value,
+                        FieldB__c = otherValue
+                    );
+                }
+            }
+            `,
+            'SimpleCtor'
+        );
+
+        assert.ok(result.customFields.includes('Example__c.FieldA__c'));
+        assert.ok(result.customFields.includes('Example__c.FieldB__c'));
+    }
+);
+
+runTest(
+    'multiple constructors are analyzed independently with nested calls',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MultiCtor {
+                public void run() {
+                    First__c a = new First__c(
+                        Name__c = foo()
+                    );
+                    Second__c b = new Second__c(
+                        Value__c = bar(baz())
+                    );
+                }
+            }
+            `,
+            'MultiCtor'
+        );
+
+        assert.ok(result.customFields.includes('First__c.Name__c'));
+        assert.ok(result.customFields.includes('Second__c.Value__c'));
+    }
+);
+
+runTest(
+    'constructor boundary does not consume a later constructor',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class BoundaryCtor {
+                public void run() {
+                    Example__c a = new Example__c(
+                        FieldA__c = foo()
+                    );
+                    someOtherCode();
+                    Another__c b = new Another__c(
+                        FieldB__c = bar()
+                    );
+                }
+            }
+            `,
+            'BoundaryCtor'
+        );
+
+        assert.ok(result.customFields.includes('Example__c.FieldA__c'));
+        assert.ok(result.customFields.includes('Another__c.FieldB__c'));
+        assert.ok(
+            !result.customFields.includes('Example__c.FieldB__c'),
+            'first constructor must not absorb second constructor fields'
+        );
+    }
+);
