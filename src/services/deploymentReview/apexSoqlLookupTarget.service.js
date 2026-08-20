@@ -100,37 +100,57 @@ function lookupTargetMapKey(fromObjectApiName, lookupFieldApiName) {
 
 /**
  * Collect SOQL FROM + Relationship__r pairs that may need metadata resolution.
- * Does not invent targets — only identifies lookup field candidates on FROM.
+ * Includes outer queries and nested child subqueries (after child Rel__r is
+ * resolved to a concrete object by the caller, pairs use that object name).
  *
  * @param {string} cleanedContent
+ * @param {Map<string, string>|null} [childRelationshipTargets]
+ * @param {(name: string) => string} [normalizeObjectApiName]
  * @returns {{ fromObjectApiName: string, lookupFieldApiName: string }[]}
  */
-function collectSoqlRelationshipLookupFields(cleanedContent) {
+function collectSoqlRelationshipLookupFields(
+    cleanedContent,
+    childRelationshipTargets = null,
+    normalizeObjectApiName = (name) => name
+) {
+    const {
+        collectSoqlSelectUnits
+    } = require('./apexSoqlQueryStructure.service');
+    const {
+        resolveChildRelationshipObject
+    } = require('./apexSoqlChildRelationship.service');
+
     const pairs = [];
     const seen = new Set();
-    const soqlBlocks = String(cleanedContent || '').matchAll(/\[([\s\S]*?)\]/g);
 
-    for (const block of soqlBlocks) {
-        const query = block[1];
+    for (const unit of collectSoqlSelectUnits(cleanedContent)) {
+        let fromObjectApiName = unit.fromObjectApiName;
 
-        if (!/\bSELECT\b/i.test(query) || !/\bFROM\b/i.test(query)) {
-            continue;
+        if (unit.kind === 'child') {
+            const parentFrom = unit.parentFromObjectApiName
+                ? normalizeObjectApiName(unit.parentFromObjectApiName)
+                : null;
+
+            if (!parentFrom) {
+                continue;
+            }
+
+            const childObject = resolveChildRelationshipObject(
+                childRelationshipTargets,
+                parentFrom,
+                unit.fromObjectApiName
+            );
+
+            if (!childObject) {
+                continue;
+            }
+
+            fromObjectApiName = normalizeObjectApiName(childObject);
+        } else {
+            fromObjectApiName = normalizeObjectApiName(fromObjectApiName);
         }
 
-        const fromMatch = query.match(/\bFROM\s+([A-Za-z][A-Za-z0-9_]*)\b/i);
-
-        if (!fromMatch) {
-            continue;
-        }
-
-        const fromObjectApiName = fromMatch[1];
-        const selectMatch = query.match(/\bSELECT\s+([\s\S]*?)\s+FROM\b/i);
-
-        if (!selectMatch) {
-            continue;
-        }
-
-        for (const match of selectMatch[1].matchAll(
+        for (const match of String(unit.selectClause || '').matchAll(
             /\b([A-Za-z0-9_]+__r)\.([A-Za-z0-9_]+__c)\b/g
         )) {
             const relationshipName = match[1];
@@ -166,7 +186,8 @@ function collectSoqlRelationshipLookupFields(cleanedContent) {
  *   cleanedContent: string,
  *   repoFiles: string[],
  *   readRepoFile: (path: string) => Promise<string>,
- *   normalizeObjectApiName?: (name: string) => string
+ *   normalizeObjectApiName?: (name: string) => string,
+ *   childRelationshipTargets?: Map<string, string>|null
  * }} options
  * @returns {Promise<Map<string, string[]>>}
  */
@@ -174,10 +195,15 @@ async function buildLookupReferenceTargetMap({
     cleanedContent,
     repoFiles,
     readRepoFile,
-    normalizeObjectApiName = (name) => name
+    normalizeObjectApiName = (name) => name,
+    childRelationshipTargets = null
 }) {
     const map = new Map();
-    const pairs = collectSoqlRelationshipLookupFields(cleanedContent);
+    const pairs = collectSoqlRelationshipLookupFields(
+        cleanedContent,
+        childRelationshipTargets,
+        normalizeObjectApiName
+    );
 
     for (const pair of pairs) {
         const fromObjectApiName = normalizeObjectApiName(

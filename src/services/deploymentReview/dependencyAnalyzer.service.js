@@ -464,68 +464,41 @@ function extractVariableObjectTypes(cleanedContent) {
  * Qualify SOQL SELECT __c fields with the correct object parent.
  *
  * - Bare fields → FROM object: Booked_Slots__c → Session__c.Booked_Slots__c
- * - Relationship fields → related object:
- *   Experience__r.Price__c → Experience__c.Price__c
- *   (never FROMObject.Price__c)
+ * - Relationship fields → related object / lookup referenceTo (P0-2)
+ * - Nested child subqueries → ChildRel__r resolved via relationshipName metadata
  *
- * Relationship__r.Field__c is rewritten to Relationship__c.Field__c when
- * Relationship__c has independent strong CustomObject evidence in the same
- * analysis unit.
- *
- * When that strong-object evidence is absent, an optional metadata-backed
- * fallback resolves FROM.LookupField__c → <referenceTo> → Target.Field__c
- * (standard or custom). Never invents Equipment__c.Maintenance_Cycle__c
- * from the relationship name alone.
+ * Outer SELECT/FROM is parsed with nested (SELECT … FROM Rel__r) masked so the
+ * first inner FROM cannot steal the outer query context.
  *
  * @param {string} cleanedContent
  * @param {Set<string>} [strongObjectNames]
  * @param {Map<string, string[]>|null} [lookupReferenceTargets]
+ * @param {Map<string, string>|null} [childRelationshipTargets]
  */
 function extractSoqlQualifiedFields(
     cleanedContent,
     strongObjectNames = new Set(),
-    lookupReferenceTargets = null
+    lookupReferenceTargets = null,
+    childRelationshipTargets = null
 ) {
     const {
         resolveLookupReferenceTargets
     } = require('./apexSoqlLookupTarget.service');
+    const {
+        collectSoqlSelectUnits
+    } = require('./apexSoqlQueryStructure.service');
+    const {
+        resolveChildRelationshipObject
+    } = require('./apexSoqlChildRelationship.service');
 
     const qualifiedFields = new Set();
-    const soqlBlocks = cleanedContent.matchAll(/\[([\s\S]*?)\]/g);
 
-    for (const block of soqlBlocks) {
-        const query = block[1];
-
-        if (!/\bSELECT\b/i.test(query) || !/\bFROM\b/i.test(query)) {
-            continue;
+    function qualifySelectClause(selectClause, objectName) {
+        if (!selectClause || !objectName) {
+            return;
         }
-
-        // Custom (__c) and standard sObjects (any Apex casing: Account / case).
-        const fromMatch = query.match(/\bFROM\s+([A-Za-z][A-Za-z0-9_]*)\b/i);
-
-        if (!fromMatch) {
-            continue;
-        }
-
-        const rawObjectName = fromMatch[1];
-
-        if (!isStrongContextObjectName(rawObjectName)) {
-            continue;
-        }
-
-        const objectName = normalizeFieldParentObjectApiName(rawObjectName);
-
-        const selectMatch = query.match(/\bSELECT\s+([\s\S]*?)\s+FROM\b/i);
-
-        if (!selectMatch) {
-            continue;
-        }
-
-        const selectClause = selectMatch[1];
 
         // 1) Relationship-qualified fields: Relationship__r.Field__c
-        //    a) Strong-object path: Relationship__c.Field__c when proven object
-        //    b) Else metadata fallback: FROM.Lookup__c → referenceTo → Target.Field
         for (const match of selectClause.matchAll(
             /\b([A-Za-z0-9_]+__r)\.([A-Za-z0-9_]+__c)\b/g
         )) {
@@ -537,8 +510,9 @@ function extractSoqlQualifiedFields(
             );
 
             if (strongObjectNames.has(relatedObjectApiName)) {
-                const qualified = `${relatedObjectApiName}.${fieldApiName}`;
-                qualifiedFields.add(qualified);
+                qualifiedFields.add(
+                    `${relatedObjectApiName}.${fieldApiName}`
+                );
                 continue;
             }
 
@@ -552,7 +526,6 @@ function extractSoqlQualifiedFields(
                 continue;
             }
 
-            // Owning lookup/MD field on the FROM object (needed for __r path).
             qualifiedFields.add(`${objectName}.${relatedObjectApiName}`);
 
             for (const referenceTo of referenceToValues) {
@@ -569,8 +542,7 @@ function extractSoqlQualifiedFields(
             }
         }
 
-        // 2) Bare SELECT fields (exclude relationship-qualified segments so
-        //    Price__c from Experience__r.Price__c is not attached to FROM).
+        // 2) Bare SELECT fields (exclude relationship-qualified segments).
         const selectWithoutRelationships = selectClause.replace(
             /\b[A-Za-z0-9_]+__r\.[A-Za-z0-9_]+__c\b/g,
             ' '
@@ -580,10 +552,46 @@ function extractSoqlQualifiedFields(
 
         for (const fieldName of fieldTokens) {
             if (fieldName.toLowerCase() !== objectName.toLowerCase()) {
-                const qualified = `${objectName}.${fieldName}`;
-                qualifiedFields.add(qualified);
+                qualifiedFields.add(`${objectName}.${fieldName}`);
             }
         }
+    }
+
+    for (const unit of collectSoqlSelectUnits(cleanedContent)) {
+        let objectName = null;
+
+        if (unit.kind === 'outer') {
+            if (!isStrongContextObjectName(unit.fromObjectApiName)) {
+                continue;
+            }
+
+            objectName = normalizeFieldParentObjectApiName(
+                unit.fromObjectApiName
+            );
+        } else {
+            // Child subquery: FROM ChildRel__r — resolve via metadata map.
+            const parentFrom = unit.parentFromObjectApiName
+                ? normalizeFieldParentObjectApiName(unit.parentFromObjectApiName)
+                : null;
+
+            if (!parentFrom || !isStrongContextObjectName(parentFrom)) {
+                continue;
+            }
+
+            const childObject = resolveChildRelationshipObject(
+                childRelationshipTargets,
+                parentFrom,
+                unit.fromObjectApiName
+            );
+
+            if (!childObject || !isStrongContextObjectName(childObject)) {
+                continue;
+            }
+
+            objectName = normalizeFieldParentObjectApiName(childObject);
+        }
+
+        qualifySelectClause(unit.selectClause, objectName);
     }
 
     return qualifiedFields;
@@ -592,26 +600,17 @@ function extractSoqlQualifiedFields(
 /**
  * Bare __c field API names appearing in SOQL SELECT clauses (before qualification).
  * Used to suppress weak-only CustomObject promotion for field tokens.
+ * Includes outer and nested child subquery SELECT lists.
  */
 function extractSoqlSelectFieldTokens(cleanedContent) {
+    const {
+        collectSoqlSelectUnits
+    } = require('./apexSoqlQueryStructure.service');
+
     const fieldTokens = new Set();
-    const soqlBlocks = cleanedContent.matchAll(/\[([\s\S]*?)\]/g);
 
-    for (const block of soqlBlocks) {
-        const query = block[1];
-
-        if (!/\bSELECT\b/i.test(query) || !/\bFROM\b/i.test(query)) {
-            continue;
-        }
-
-        const selectMatch = query.match(/\bSELECT\s+([\s\S]*?)\s+FROM\b/i);
-
-        if (!selectMatch) {
-            continue;
-        }
-
-        const selectClause = selectMatch[1];
-        const selectWithoutRelationships = selectClause.replace(
+    for (const unit of collectSoqlSelectUnits(cleanedContent)) {
+        const selectWithoutRelationships = String(unit.selectClause || '').replace(
             /\b[A-Za-z0-9_]+__r\.[A-Za-z0-9_]+__c\b/g,
             ' '
         );
@@ -782,7 +781,8 @@ function extractLocalVariableNames(cleanedContent) {
 
 function classifyCustomObjectsAndFields(
     cleanedContent,
-    lookupReferenceTargets = null
+    lookupReferenceTargets = null,
+    childRelationshipTargets = null
 ) {
     const { objectNames, strongObjectNames } =
         extractObjectContextNames(cleanedContent);
@@ -833,7 +833,8 @@ function classifyCustomObjectsAndFields(
     for (const qualifiedField of extractSoqlQualifiedFields(
         cleanedContent,
         strongObjectNames,
-        lookupReferenceTargets
+        lookupReferenceTargets,
+        childRelationshipTargets
     )) {
         customFields.add(qualifiedField);
     }
@@ -935,10 +936,9 @@ function extractCustomMetadataRecords(cleanedContent) {
  * @param {string} content
  * @param {string} [currentClassName]
  * @param {{
- *   lookupReferenceTargets?: Map<string, string[]>|null
+ *   lookupReferenceTargets?: Map<string, string[]>|null,
+ *   childRelationshipTargets?: Map<string, string>|null
  * }} [options]
- *   Optional Map of "FromObject.LookupField__c" → referenceTo API names
- *   for SOQL Relationship__r.Field__c metadata-backed resolution.
  */
 function analyzeApexContent(content, currentClassName, options = {}) {
     const cleanedContent = stripLiteralsAndComments(content);
@@ -949,6 +949,10 @@ function analyzeApexContent(content, currentClassName, options = {}) {
         options && options.lookupReferenceTargets instanceof Map
             ? options.lookupReferenceTargets
             : null;
+    const childRelationshipTargets =
+        options && options.childRelationshipTargets instanceof Map
+            ? options.childRelationshipTargets
+            : null;
 
     const internalTypesToExclude = internalDeclarations.filter(
         (name) =>
@@ -958,7 +962,8 @@ function analyzeApexContent(content, currentClassName, options = {}) {
     const { customObjects: objectTokens, customFields } =
         classifyCustomObjectsAndFields(
             cleanedContent,
-            lookupReferenceTargets
+            lookupReferenceTargets,
+            childRelationshipTargets
         );
 
     const relationshipReferences =
@@ -1266,7 +1271,8 @@ function analyzeApexContent(content, currentClassName, options = {}) {
 
 /**
  * Analyze Apex with repository field metadata so SOQL Relationship__r
- * fields can resolve Lookup/MasterDetail referenceTo targets.
+ * fields can resolve Lookup/MasterDetail referenceTo targets, and nested
+ * child relationship subqueries can resolve ChildRel__r → child object.
  */
 async function analyzeApexContentWithRepository(
     content,
@@ -1276,6 +1282,9 @@ async function analyzeApexContentWithRepository(
     const {
         buildLookupReferenceTargetMap
     } = require('./apexSoqlLookupTarget.service');
+    const {
+        buildChildRelationshipTargetMap
+    } = require('./apexSoqlChildRelationship.service');
 
     if (typeof readRepoFile !== 'function' || typeof listRepoFiles !== 'function') {
         return analyzeApexContent(content, currentClassName);
@@ -1283,15 +1292,22 @@ async function analyzeApexContentWithRepository(
 
     const repoFiles = await listRepoFiles();
     const cleanedContent = stripLiteralsAndComments(content);
-    const lookupReferenceTargets = await buildLookupReferenceTargetMap({
-        cleanedContent,
+    const childRelationshipTargets = await buildChildRelationshipTargetMap({
         repoFiles,
         readRepoFile,
         normalizeObjectApiName: normalizeFieldParentObjectApiName
     });
+    const lookupReferenceTargets = await buildLookupReferenceTargetMap({
+        cleanedContent,
+        repoFiles,
+        readRepoFile,
+        normalizeObjectApiName: normalizeFieldParentObjectApiName,
+        childRelationshipTargets
+    });
 
     return analyzeApexContent(content, currentClassName, {
-        lookupReferenceTargets
+        lookupReferenceTargets,
+        childRelationshipTargets
     });
 }
 

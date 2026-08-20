@@ -1339,6 +1339,328 @@ runTest(
     }
 );
 
+function nestedMaintenanceCaseOptions() {
+    return {
+        lookupReferenceTargets: new Map([
+            ['Case.Equipment__c', ['Product2']],
+            [
+                'Equipment_Maintenance_Item__c.Equipment__c',
+                ['Product2']
+            ]
+        ]),
+        childRelationshipTargets: new Map([
+            [
+                'Case.Equipment_Maintenance_Items__r',
+                'Equipment_Maintenance_Item__c'
+            ]
+        ])
+    };
+}
+
+runTest(
+    'nested Case subquery discovers Equipment_Maintenance_Item__c.Quantity__c',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceRequestHelper {
+                public void load() {
+                    Map<Id,Case> closedCasesM = new Map<Id,Case>([
+                        SELECT Id, Vehicle__c, Equipment__c,
+                               Equipment__r.Maintenance_Cycle__c,
+                               (SELECT Id, Equipment__c, Quantity__c
+                                FROM Equipment_Maintenance_Items__r)
+                        FROM Case
+                        WHERE Id IN :validIds
+                    ]);
+                }
+            }
+            `,
+            'MaintenanceRequestHelper',
+            nestedMaintenanceCaseOptions()
+        );
+
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Quantity__c'
+            ),
+            `expected EMI.Quantity__c, got: ${result.customFields.join(', ')}`
+        );
+        assert.ok(
+            !result.customFields.includes('Case.Quantity__c'),
+            'Quantity__c must not be parented to Case'
+        );
+        assert.ok(
+            !result.customFields.includes(
+                'Equipment_Maintenance_Items__r.Quantity__c'
+            )
+        );
+    }
+);
+
+runTest(
+    'nested Case subquery discovers Equipment_Maintenance_Item__c.Equipment__c',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceRequestHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Id,
+                               (SELECT Id, Equipment__c, Quantity__c
+                                FROM Equipment_Maintenance_Items__r)
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'MaintenanceRequestHelper',
+            nestedMaintenanceCaseOptions()
+        );
+
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Equipment__c'
+            )
+        );
+    }
+);
+
+runTest(
+    'nested Case query keeps parent Case fields on Case',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MaintenanceRequestHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Id, Vehicle__c, Equipment__c,
+                               (SELECT Quantity__c
+                                FROM Equipment_Maintenance_Items__r)
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'MaintenanceRequestHelper',
+            nestedMaintenanceCaseOptions()
+        );
+
+        assert.ok(result.customFields.includes('Case.Vehicle__c'));
+        assert.ok(result.customFields.includes('Case.Equipment__c'));
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Quantity__c'
+            )
+        );
+    }
+);
+
+runTest(
+    'unknown nested child relationship does not invent child CustomFields',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class UnknownChildHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Id,
+                               (SELECT Quantity__c FROM Unknown_Items__r)
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'UnknownChildHelper',
+            {
+                childRelationshipTargets: new Map()
+            }
+        );
+
+        assert.ok(
+            !result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Quantity__c'
+            )
+        );
+        assert.ok(!result.customFields.includes('Case.Quantity__c'));
+        assert.ok(
+            !result.customFields.some((name) =>
+                name.endsWith('.Quantity__c')
+            )
+        );
+        assert.ok(result.relationshipReferences.includes('Unknown_Items__r'));
+    }
+);
+
+runTest(
+    'multiple nested child subqueries resolve independently',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class MultiChildHelper {
+                public void load() {
+                    Parent__c row = [
+                        SELECT Id,
+                               (SELECT FieldA__c FROM Child_A_Items__r),
+                               (SELECT FieldB__c FROM Child_B_Items__r)
+                        FROM Parent__c
+                    ];
+                }
+            }
+            `,
+            'MultiChildHelper',
+            {
+                childRelationshipTargets: new Map([
+                    ['Parent__c.Child_A_Items__r', 'Child_A__c'],
+                    ['Parent__c.Child_B_Items__r', 'Child_B__c']
+                ])
+            }
+        );
+
+        assert.ok(result.customFields.includes('Child_A__c.FieldA__c'));
+        assert.ok(result.customFields.includes('Child_B__c.FieldB__c'));
+        assert.ok(!result.customFields.includes('Parent__c.FieldA__c'));
+        assert.ok(!result.customFields.includes('Parent__c.FieldB__c'));
+        assert.ok(!result.customFields.includes('Child_A__c.FieldB__c'));
+    }
+);
+
+runTest(
+    'nested child Equipment__r.Maintenance_Cycle__c resolves via child object P0-2 path',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class NestedRelHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Id,
+                               (SELECT Equipment__c,
+                                       Equipment__r.Maintenance_Cycle__c
+                                FROM Equipment_Maintenance_Items__r)
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'NestedRelHelper',
+            nestedMaintenanceCaseOptions()
+        );
+
+        assert.ok(
+            result.customFields.includes('Product2.Maintenance_Cycle__c')
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Equipment__c'
+            )
+        );
+        assert.ok(
+            !result.customFields.includes('Case.Maintenance_Cycle__c')
+        );
+        assert.ok(
+            !result.customFields.includes(
+                'Equipment__c.Maintenance_Cycle__c'
+            )
+        );
+    }
+);
+
+runTest(
+    'nested query still preserves outer P0-2 Equipment__r on Case',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class NestedOuterRelHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Equipment__r.Maintenance_Cycle__c,
+                               (SELECT Quantity__c
+                                FROM Equipment_Maintenance_Items__r)
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'NestedOuterRelHelper',
+            nestedMaintenanceCaseOptions()
+        );
+
+        assert.ok(
+            result.customFields.includes('Product2.Maintenance_Cycle__c')
+        );
+        assert.ok(result.customFields.includes('Case.Equipment__c'));
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Quantity__c'
+            )
+        );
+    }
+);
+
+runTest(
+    'nested subquery standard Id is not emitted as CustomField',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class NestedIdHelper {
+                public void load() {
+                    Case c = [
+                        SELECT Id,
+                               (SELECT Id, Quantity__c
+                                FROM Equipment_Maintenance_Items__r)
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'NestedIdHelper',
+            nestedMaintenanceCaseOptions()
+        );
+
+        assert.ok(
+            !result.customFields.some(
+                (name) => name === 'Case.Id' || name.endsWith('.Id')
+            )
+        );
+        assert.ok(
+            result.customFields.includes(
+                'Equipment_Maintenance_Item__c.Quantity__c'
+            )
+        );
+    }
+);
+
+runTest(
+    'duplicate nested Quantity__c collapses to one CustomField',
+    () => {
+        const result = analyzeApexContent(
+            `
+            public class DupNestedHelper {
+                public void load() {
+                    Case a = [
+                        SELECT (SELECT Quantity__c
+                                FROM Equipment_Maintenance_Items__r)
+                        FROM Case
+                    ];
+                    Case b = [
+                        SELECT (SELECT Quantity__c
+                                FROM Equipment_Maintenance_Items__r)
+                        FROM Case
+                    ];
+                }
+            }
+            `,
+            'DupNestedHelper',
+            nestedMaintenanceCaseOptions()
+        );
+
+        const matches = result.customFields.filter(
+            (name) =>
+                name === 'Equipment_Maintenance_Item__c.Quantity__c'
+        );
+        assert.strictEqual(matches.length, 1);
+    }
+);
+
 async function runAsyncTest(name, fn) {
     try {
         await fn();
@@ -1400,6 +1722,79 @@ async function runAsyncTest(name, fn) {
                     'Equipment__c.Maintenance_Cycle__c'
                 )
             );
+        }
+    );
+
+    await runAsyncTest(
+        'analyzeApexContentWithRepository resolves nested child via relationshipName metadata',
+        async () => {
+            const mdPath =
+                'force-app/main/default/objects/Equipment_Maintenance_Item__c/fields/Maintenance_Request__c.field-meta.xml';
+            const eqPath =
+                'force-app/main/default/objects/Case/fields/Equipment__c.field-meta.xml';
+            const mdXml = `
+                <?xml version="1.0" encoding="UTF-8"?>
+                <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+                    <fullName>Maintenance_Request__c</fullName>
+                    <type>MasterDetail</type>
+                    <referenceTo>Case</referenceTo>
+                    <relationshipName>Equipment_Maintenance_Items</relationshipName>
+                </CustomField>
+            `;
+            const eqXml = `
+                <?xml version="1.0" encoding="UTF-8"?>
+                <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+                    <fullName>Equipment__c</fullName>
+                    <type>Lookup</type>
+                    <referenceTo>Product2</referenceTo>
+                </CustomField>
+            `;
+
+            const result = await analyzeApexContentWithRepository(
+                `
+                public class MaintenanceRequestHelper {
+                    public void load() {
+                        Case c = [
+                            SELECT Vehicle__c, Equipment__c,
+                                   Equipment__r.Maintenance_Cycle__c,
+                                   (SELECT Id, Equipment__c, Quantity__c
+                                    FROM Equipment_Maintenance_Items__r)
+                            FROM Case
+                        ];
+                    }
+                }
+                `,
+                'MaintenanceRequestHelper',
+                {
+                    listRepoFiles: async () => [mdPath, eqPath],
+                    readRepoFile: async (path) => {
+                        if (path === mdPath) {
+                            return mdXml;
+                        }
+                        if (path === eqPath) {
+                            return eqXml;
+                        }
+                        throw new Error(`unexpected path: ${path}`);
+                    }
+                }
+            );
+
+            assert.ok(
+                result.customFields.includes(
+                    'Equipment_Maintenance_Item__c.Quantity__c'
+                ),
+                `expected EMI.Quantity__c, got: ${result.customFields.join(', ')}`
+            );
+            assert.ok(
+                result.customFields.includes(
+                    'Equipment_Maintenance_Item__c.Equipment__c'
+                )
+            );
+            assert.ok(result.customFields.includes('Case.Vehicle__c'));
+            assert.ok(
+                result.customFields.includes('Product2.Maintenance_Cycle__c')
+            );
+            assert.ok(!result.customFields.includes('Case.Quantity__c'));
         }
     );
 })();
