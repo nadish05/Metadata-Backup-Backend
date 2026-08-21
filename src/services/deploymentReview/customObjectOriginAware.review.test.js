@@ -60,10 +60,16 @@ async function readRepoFile(filePath) {
 }
 
 async function main() {
-    await runTest('origin model: only PRIMARY enumerates children', () => {
+    await runTest('origin model: PRIMARY and CUSTOM_METADATA_PARENT enumerate children', () => {
         assert.strictEqual(
             shouldEnumerateCustomObjectChildren(
                 METADATA_ORIGINS.PRIMARY_SELECTION
+            ),
+            true
+        );
+        assert.strictEqual(
+            shouldEnumerateCustomObjectChildren(
+                METADATA_ORIGINS.CUSTOM_METADATA_PARENT
             ),
             true
         );
@@ -92,6 +98,13 @@ async function main() {
                 METADATA_ORIGINS.PRIMARY_SELECTION
             ),
             METADATA_ORIGINS.RELATIONSHIP_TARGET
+        );
+        assert.strictEqual(
+            resolveMetadataOrigin(
+                { origin: METADATA_ORIGINS.CUSTOM_METADATA_PARENT },
+                METADATA_ORIGINS.RELATIONSHIP_TARGET
+            ),
+            METADATA_ORIGINS.CUSTOM_METADATA_PARENT
         );
     });
 
@@ -168,6 +181,42 @@ async function main() {
             assert.ok(
                 !fieldNames.includes('Session__c.Price__c'),
                 'RELATIONSHIP_TARGET must not invent Price__c'
+            );
+        }
+    );
+
+    await runTest(
+        'CUSTOM_METADATA_PARENT CustomObject review enumerates fields like PRIMARY',
+        async () => {
+            const result = await reviewDeployableMetadataItems({
+                items: [
+                    {
+                        metadataType: 'CustomObject',
+                        metadataName: 'Session__c',
+                        filePath: OBJECT_PATH,
+                        origin: METADATA_ORIGINS.CUSTOM_METADATA_PARENT
+                    }
+                ],
+                readRepoFile,
+                listRepoFiles,
+                defaultOrigin: METADATA_ORIGINS.RELATIONSHIP_TARGET
+            });
+
+            const review = result.deploymentReview[0];
+            assert.strictEqual(review.status, 'SUCCESS');
+            assert.strictEqual(review.reviewStrategy, 'FULL_OBJECT');
+            assert.strictEqual(
+                review.origin,
+                METADATA_ORIGINS.CUSTOM_METADATA_PARENT
+            );
+
+            const fieldNames = (result.requiredDependencies || [])
+                .filter((d) => d.type === 'CustomField')
+                .map((d) => d.name);
+
+            assert.ok(
+                fieldNames.includes('Session__c.Price__c'),
+                `Expected Price__c for CUSTOM_METADATA_PARENT, got: ${fieldNames.join(', ')}`
             );
         }
     );

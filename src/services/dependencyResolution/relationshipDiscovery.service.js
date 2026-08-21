@@ -130,6 +130,18 @@ function mergeDependencies(existingDependencies, discoveredRelationships) {
                 existing.reason = graphItem.reason || existing.reason;
             }
 
+            // Prefer CMDT-parent origin so field enumeration remains enabled
+            // when the same CustomObject is also discovered by another path.
+            if (
+                graphItem.origin === METADATA_ORIGINS.CUSTOM_METADATA_PARENT &&
+                existing.origin !== METADATA_ORIGINS.CUSTOM_METADATA_PARENT &&
+                existing.origin !== METADATA_ORIGINS.PRIMARY_SELECTION
+            ) {
+                existing.origin = METADATA_ORIGINS.CUSTOM_METADATA_PARENT;
+            } else if (!existing.origin && graphItem.origin) {
+                existing.origin = graphItem.origin;
+            }
+
             if (existing.depth == null && graphItem.depth != null) {
                 existing.depth = graphItem.depth;
             }

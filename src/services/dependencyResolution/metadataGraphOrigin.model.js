@@ -9,12 +9,17 @@ const METADATA_ORIGINS = Object.freeze({
     PRIMARY_SELECTION: 'PRIMARY_SELECTION',
     DIRECT_DEPENDENCY: 'DIRECT_DEPENDENCY',
     RELATIONSHIP_TARGET: 'RELATIONSHIP_TARGET',
-    SECONDARY_DEPENDENCY: 'SECONDARY_DEPENDENCY'
+    SECONDARY_DEPENDENCY: 'SECONDARY_DEPENDENCY',
+    CUSTOM_METADATA_PARENT: 'CUSTOM_METADATA_PARENT'
 });
 
 /**
- * Full CustomObject child enumeration (all fields / children) is only for
- * user-selected primary CustomObjects.
+ * Full CustomObject child enumeration (all fields / children) for:
+ * - user-selected primary CustomObjects
+ * - Custom Metadata Type parents discovered from CustomMetadata records
+ *
+ * RELATIONSHIP_TARGET / other non-primary origins remain relationship-only
+ * so ordinary dependency CustomObjects do not over-package fields.
  *
  * @param {string|null|undefined} origin
  * @returns {boolean}
@@ -22,6 +27,7 @@ const METADATA_ORIGINS = Object.freeze({
 function shouldEnumerateCustomObjectChildren(origin) {
     return (
         origin === METADATA_ORIGINS.PRIMARY_SELECTION ||
+        origin === METADATA_ORIGINS.CUSTOM_METADATA_PARENT ||
         origin == null ||
         origin === undefined
     );

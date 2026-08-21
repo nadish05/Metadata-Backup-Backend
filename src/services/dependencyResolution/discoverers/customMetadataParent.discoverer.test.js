@@ -79,6 +79,10 @@ async function main() {
                 result.relationships[0].discoveredBy,
                 'CustomMetadataParentDiscoverer'
             );
+            assert.strictEqual(
+                result.relationships[0].origin,
+                'CUSTOM_METADATA_PARENT'
+            );
         }
     );
 

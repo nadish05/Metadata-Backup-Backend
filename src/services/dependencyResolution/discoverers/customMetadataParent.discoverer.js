@@ -9,6 +9,9 @@
 const {
     parseCustomMetadataMember
 } = require('../../destinationInventory/destinationExistenceQueries');
+const {
+    METADATA_ORIGINS
+} = require('../metadataGraphOrigin.model');
 
 const DISCOVERER_ID = 'CustomMetadataParentDiscoverer';
 const DISCOVERY_METHOD = 'customMetadataParent';
@@ -47,6 +50,7 @@ function createParentCustomObjectRelationship({
         sourceField: null,
         discoveredBy: DISCOVERER_ID,
         discoveryMethod: DISCOVERY_METHOD,
+        origin: METADATA_ORIGINS.CUSTOM_METADATA_PARENT,
         required: true,
         selected: true,
         depth,

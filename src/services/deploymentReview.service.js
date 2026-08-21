@@ -389,7 +389,8 @@ async function processMetadataItem(
 
         try {
             // Context-aware CustomObject review:
-            // PRIMARY_SELECTION → full child enumeration (fields, rules, etc.)
+            // PRIMARY_SELECTION / CUSTOM_METADATA_PARENT → full child
+            // enumeration (fields, rules, etc.).
             // RELATIONSHIP_TARGET / other non-primary → preserve already-discovered
             // field deps only; do not invent artificial field dependencies.
             if (!shouldEnumerateCustomObjectChildren(origin)) {
