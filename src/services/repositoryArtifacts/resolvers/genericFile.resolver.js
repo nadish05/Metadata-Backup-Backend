@@ -118,19 +118,16 @@ const genericFileArtifactResolver = {
             );
         }
 
+        // CustomMetadata DX files are Type.Record.md-meta.xml — match the full
+        // member basename (Weather_Config.Default), not the trailing segment.
         if (metadataType === 'CustomMetadata') {
-            const recordName = name.includes('.')
-                ? name.split('.').pop()
-                : name;
-
             return (
                 repoFiles
                     .map(normalizePath)
                     .find(
                         (repoFile) =>
                             repoFile.endsWith(suffix) &&
-                            basenameWithoutSuffix(repoFile, suffix) ===
-                                recordName
+                            basenameWithoutSuffix(repoFile, suffix) === name
                     ) || null
             );
         }

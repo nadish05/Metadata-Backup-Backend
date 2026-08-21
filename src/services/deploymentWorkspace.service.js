@@ -175,15 +175,14 @@ function resolveCustomObjectPath(name, repoFiles) {
 
 function resolveCustomMetadataPath(name, repoFiles) {
     const suffix = METADATA_TYPE_RULES.CustomMetadata.extension;
-    const recordName = name.includes('.')
-        ? name.split('.').pop()
-        : name;
 
+    // DX CustomMetadata files use Type.Record.md-meta.xml — match the full
+    // member name, not name.split('.').pop().
     return (
         repoFiles.find(
             (repoFile) =>
                 repoFile.endsWith(suffix) &&
-                path.basename(repoFile, suffix) === recordName
+                path.basename(repoFile, suffix) === name
         ) || null
     );
 }
@@ -985,5 +984,7 @@ async function createRepositoryFileReader(repoUrl, sourceBranch) {
 
 module.exports = {
     buildDeploymentWorkspace,
-    createRepositoryFileReader
+    createRepositoryFileReader,
+    // Exported for focused CustomMetadata path-resolution tests.
+    resolveCustomMetadataPath
 };
