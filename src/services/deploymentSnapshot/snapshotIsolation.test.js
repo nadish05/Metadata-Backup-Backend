@@ -23,7 +23,6 @@ const SRC_ROOT = path.resolve(__dirname, '../..');
 const SNAPSHOT_DIR = path.resolve(__dirname);
 
 const PROTECTED_FILES = [
-    'services/deploymentValidation.service.js',
     'services/deploymentExecution.service.js',
     'services/checkOnlyDeployment.service.js',
     'services/deploymentPackage.service.js',
@@ -75,7 +74,7 @@ runTest('protected deployment files do not import deploymentSnapshot', () => {
     }
 });
 
-runTest('no src file outside deploymentSnapshot requires the snapshot module', () => {
+runTest('no src file outside deploymentSnapshot requires the snapshot module except validateDeployment', () => {
     const files = listJsFiles(SRC_ROOT).filter((filePath) => {
         const relative = path.relative(SNAPSHOT_DIR, filePath);
 
@@ -84,6 +83,11 @@ runTest('no src file outside deploymentSnapshot requires the snapshot module', (
 
     const offenders = files.filter((filePath) => {
         const source = fs.readFileSync(filePath, 'utf8');
+        const relative = path.relative(SRC_ROOT, filePath).replace(/\\/g, '/');
+
+        if (relative === 'services/deploymentValidation.service.js') {
+            return false;
+        }
 
         return /require\((['"])[^'"]*deploymentSnapshot/.test(source);
     });
@@ -92,4 +96,20 @@ runTest('no src file outside deploymentSnapshot requires the snapshot module', (
         offenders.map((filePath) => path.relative(SRC_ROOT, filePath)),
         []
     );
+});
+
+runTest('validateDeployment is the only deployment-engine snapshot integration', () => {
+    const filePath = path.join(
+        SRC_ROOT,
+        'services/deploymentValidation.service.js'
+    );
+    const source = fs.readFileSync(filePath, 'utf8');
+
+    assert.ok(
+        /require\(['"].*deploymentSnapshot\/destinationSnapshotCapture\.service['"]\)/.test(
+            source
+        )
+    );
+    assert.ok(source.includes('runDeployAfterOptionalSnapshot'));
+    assert.ok(source.includes('runDeploymentExecution'));
 });

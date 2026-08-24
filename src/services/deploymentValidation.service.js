@@ -25,6 +25,7 @@ const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
 const deploymentCheckOnlyGateService = require('./deploymentCheckOnlyGate.service');
 const deploymentExecutionService = require('./deploymentExecution.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
+const destinationSnapshotCaptureService = require('./deploymentSnapshot/destinationSnapshotCapture.service');
 const metadataCompatibilityService = require('./metadataCompatibility/metadataCompatibility.service');
 const dependencyResolutionService = require('./dependencyResolution/dependencyResolution.service');
 const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
@@ -1933,16 +1934,48 @@ async function validateDeployment({
                 canDeploy: deploymentReadiness?.canDeploy
             })
         ) {
-            deploymentExecution =
-                await deploymentExecutionService.runDeploymentExecution({
-                    generatedWorkspace,
-                    generatedManifest,
-                    deploymentReadiness,
-                    priorCheckOnlyDeployment: checkOnlyDeployment,
-                    refreshToken,
-                    instanceUrl,
-                    deploymentApiVersion
-                });
+            const snapshotGate =
+                await destinationSnapshotCaptureService.runDeployAfterOptionalSnapshot(
+                    {
+                        shouldDeploy: true,
+                        captureArgs: {
+                            destinationOrgId: orgId ?? null,
+                            sourceOrgId:
+                                deploymentPackage?.sourceOrgId ?? null,
+                            historyId,
+                            sourceBranch:
+                                deploymentPackage.sourceBranch ||
+                                deploymentPackage.branch ||
+                                null,
+                            destinationBranch:
+                                deploymentPackage.destinationBranch || null,
+                            generatedDeploymentPackage,
+                            refreshToken,
+                            instanceUrl,
+                            deploymentApiVersion
+                        },
+                        runDeploymentExecution: () =>
+                            deploymentExecutionService.runDeploymentExecution({
+                                generatedWorkspace,
+                                generatedManifest,
+                                deploymentReadiness,
+                                priorCheckOnlyDeployment: checkOnlyDeployment,
+                                refreshToken,
+                                instanceUrl,
+                                deploymentApiVersion
+                            })
+                    }
+                );
+
+            deploymentExecution = snapshotGate.deploymentExecution;
+
+            if (snapshotGate.snapshot?.snapshotId) {
+                runHistorySafely(() =>
+                    deploymentHistoryService.updateHistory(historyId, {
+                        snapshotId: snapshotGate.snapshot.snapshotId
+                    })
+                );
+            }
         }
     }
 
@@ -2233,7 +2266,10 @@ async function validateDeployment({
             sourceOrgId: deploymentPackage?.sourceOrgId ?? null,
             deploymentPlanId: deploymentPackage?.deploymentPlanId ?? null,
             metadataComparisonId:
-                deploymentPackage?.metadataComparisonId ?? null
+                deploymentPackage?.metadataComparisonId ?? null,
+            snapshotId:
+                deploymentHistoryService.getHistory(historyId)?.snapshotId ??
+                null
         })
     );
 

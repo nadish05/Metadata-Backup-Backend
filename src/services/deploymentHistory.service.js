@@ -252,7 +252,8 @@ function buildApiResponse(history) {
         deploymentPlanId: history.deploymentPlanId ?? null,
         metadataComparisonId: history.metadataComparisonId ?? null,
         sourceOrgId: history.sourceOrgId ?? null,
-        destinationOrgId: history.destinationOrgId ?? null
+        destinationOrgId: history.destinationOrgId ?? null,
+        snapshotId: history.snapshotId ?? null
     };
 }
 
@@ -317,7 +318,8 @@ function createHistory({
             metadataComparisonId:
                 deploymentPackage?.metadataComparisonId || null,
             sourceOrgId: deploymentPackage?.sourceOrgId || null,
-            destinationOrgId: deploymentPackage?.destinationOrgId || null
+            destinationOrgId: deploymentPackage?.destinationOrgId || null,
+            snapshotId: null
         };
 
         // Deployment Planner selections stored internally when present.
@@ -382,6 +384,7 @@ function updateHistory(historyId, updates = {}) {
             deploymentSummary,
             deploymentId,
             workspacePath,
+            snapshotId,
             errors,
             warnings
         } = updates;
@@ -414,6 +417,10 @@ function updateHistory(historyId, updates = {}) {
 
         if (deploymentId !== undefined) {
             history.deploymentId = deploymentId;
+        }
+
+        if (snapshotId !== undefined) {
+            history.snapshotId = snapshotId;
         }
 
         if (Array.isArray(errors) && errors.length) {
@@ -454,7 +461,8 @@ function completeHistory(historyId, completion = {}) {
             destinationOrgId,
             sourceOrgId,
             deploymentPlanId,
-            metadataComparisonId
+            metadataComparisonId,
+            snapshotId
         } = completion;
 
         if (deploymentMode) {
@@ -511,6 +519,10 @@ function completeHistory(historyId, completion = {}) {
 
         if (metadataComparisonId !== undefined) {
             history.metadataComparisonId = metadataComparisonId;
+        }
+
+        if (snapshotId !== undefined) {
+            history.snapshotId = snapshotId;
         }
 
         history.errors = collectErrors({
