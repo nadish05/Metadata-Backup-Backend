@@ -3,6 +3,10 @@
 const { CHANGE_CLASS, SNAPSHOT_STATUS } = require('./snapshot.types');
 const { getSharedSnapshotAccess } = require('./snapshotAccess.service');
 const {
+    isDurableSnapshotStorageReady,
+    DURABLE_STORAGE_UNAVAILABLE_MESSAGE
+} = require('./snapshotStorage.config');
+const {
     isSnapshotCaptureOnDeployEnabled
 } = require('./snapshotCapture.flag');
 const {
@@ -39,9 +43,6 @@ function fail(message, snapshot = null) {
 }
 
 function createDestinationSnapshotCaptureService(dependencies = {}) {
-    const captureService =
-        dependencies.captureService ||
-        getSharedSnapshotAccess().captureService;
     const collectExpectedAfter =
         dependencies.collectExpectedAfterArtifact ||
         collectExpectedAfterArtifact;
@@ -55,6 +56,20 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
     const isEnabled =
         dependencies.isSnapshotCaptureOnDeployEnabled ||
         isSnapshotCaptureOnDeployEnabled;
+    const isDurableReady =
+        dependencies.isDurableSnapshotStorageReady ||
+        isDurableSnapshotStorageReady;
+    const enforceDurableCapture =
+        dependencies.enforceDurableCapture !== undefined
+            ? dependencies.enforceDurableCapture
+            : !dependencies.captureService;
+
+    function resolveCaptureService() {
+        return (
+            dependencies.captureService ||
+            getSharedSnapshotAccess().captureService
+        );
+    }
 
     async function captureAndSealForDeploy({
         destinationOrgId,
@@ -72,6 +87,10 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
             return fail(
                 'Destination snapshot capture failed: destinationOrgId is required.'
             );
+        }
+
+        if (enforceDurableCapture && !isDurableReady()) {
+            return fail(DURABLE_STORAGE_UNAVAILABLE_MESSAGE);
         }
 
         const finalMembers = collectFinalDeploymentMembers(
@@ -221,6 +240,7 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
         }
 
         try {
+            const captureService = resolveCaptureService();
             const ready = await captureService.captureSnapshot({
                 deploymentContext: {
                     destinationOrgId,
@@ -277,6 +297,20 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 deploymentExecution: await runDeploymentExecution(),
                 snapshot: null,
                 snapshotBlocked: false
+            };
+        }
+
+        if (enforceDurableCapture && !isDurableReady()) {
+            return {
+                deploymentExecution: buildBlockedResult(
+                    DURABLE_STORAGE_UNAVAILABLE_MESSAGE,
+                    {
+                        mode: 'execution',
+                        executionMode: 'deploy'
+                    }
+                ),
+                snapshot: null,
+                snapshotBlocked: true
             };
         }
 

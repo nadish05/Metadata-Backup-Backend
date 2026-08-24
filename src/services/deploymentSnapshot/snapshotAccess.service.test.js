@@ -46,6 +46,8 @@ function runTest(name, fn) {
         assert.strictEqual(capability.shared, false);
         assert.strictEqual(capability.rollbackProductionReady, false);
         assert.strictEqual(capability.storageMode, 'MEMORY');
+        assert.strictEqual(capability.configured, true);
+        assert.strictEqual(capability.backend, 'MEMORY');
     });
 
     await runTest('snapshot captured through accessor can be loaded through accessor', async () => {
