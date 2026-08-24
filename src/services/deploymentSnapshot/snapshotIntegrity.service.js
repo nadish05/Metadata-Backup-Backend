@@ -38,21 +38,18 @@ function toBuffer(bytes) {
 /**
  * Canonical aggregate snapshot hash.
  *
- * Rule (documented + tested):
- * 1. Sort members by metadataType, then metadataName (UTF-16 code unit order,
- *    which is JavaScript String.prototype.localeCompare default via <).
- *    Implementation uses localeCompare with sensitivity: 'variant' on both
- *    fields for a stable lexicographic order independent of insertion.
- * 2. For each member emit one line:
- *      metadataType + '\t' + metadataName + '\t' + changeClass + '\t' + token
- *    where token is destinationBeforeHash for MODIFIED, or the literal
- *    'ABSENT' when there is no destination-before artifact (NEW / UNKNOWN).
- * 3. Join lines with '\n' (no trailing newline if empty).
- * 4. SHA-256 the UTF-8 bytes of that document.
+ * schemaVersion 1 (P0-R2):
+ *   type \t name \t changeClass \t destinationBeforeHash|ABSENT
  *
- * Insertion order of members MUST NOT affect the result.
+ * schemaVersion 2 (P0-R5.1):
+ *   type \t name \t changeClass \t destinationBeforeHash|ABSENT \t expectedAfterHash|ABSENT
+ *
+ * Members are sorted by metadataType then metadataName (localeCompare 'en').
+ * Insertion order MUST NOT affect the result.
+ * Default schemaVersion is 1 so existing P0-R2 hash documents remain stable.
  */
-function computeSnapshotIntegrityHash(members) {
+function computeSnapshotIntegrityHash(members, options = {}) {
+    const schemaVersion = options.schemaVersion || 1;
     const list = Array.isArray(members) ? [...members] : [];
 
     list.sort((left, right) => {
@@ -72,17 +69,33 @@ function computeSnapshotIntegrityHash(members) {
     });
 
     const lines = list.map((member) => {
-        const token =
+        const beforeToken =
             member.changeClass === CHANGE_CLASS.MODIFIED &&
             member.destinationBeforeHash
                 ? member.destinationBeforeHash
                 : 'ABSENT';
 
+        if (schemaVersion >= 2) {
+            const afterToken =
+                member.changeClass === CHANGE_CLASS.MODIFIED &&
+                member.expectedAfterHash
+                    ? member.expectedAfterHash
+                    : 'ABSENT';
+
+            return [
+                member.metadataType,
+                member.metadataName,
+                member.changeClass,
+                beforeToken,
+                afterToken
+            ].join('\t');
+        }
+
         return [
             member.metadataType,
             member.metadataName,
             member.changeClass,
-            token
+            beforeToken
         ].join('\t');
     });
 

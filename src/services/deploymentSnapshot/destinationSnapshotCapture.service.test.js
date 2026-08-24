@@ -57,6 +57,7 @@ function createHarness(overrides = {}) {
     });
     const events = [];
     const retrieveCalls = [];
+    const expectedAfterCalls = [];
     const inventoryCalls = [];
 
     const captureService = {
@@ -101,6 +102,21 @@ function createHarness(overrides = {}) {
                     }
                 ]);
                 return { artifactBytes: bytes, files: [] };
+            }),
+        collectExpectedAfterArtifact:
+            overrides.collectExpectedAfterArtifact ||
+            (async (args) => {
+                expectedAfterCalls.push(args);
+                const bytes = packMemberFiles([
+                    {
+                        relativePath: 'classes/AccountService.cls',
+                        bytes: Buffer.from('destination-after\n', 'utf8')
+                    }
+                ]);
+                return {
+                    artifactBytes: bytes,
+                    expectedAfterHash: hashBytes(bytes)
+                };
             })
     });
 
@@ -108,6 +124,7 @@ function createHarness(overrides = {}) {
         service,
         events,
         retrieveCalls,
+        expectedAfterCalls,
         inventoryCalls,
         blobStore,
         captureService
@@ -154,6 +171,7 @@ const BASE_ARGS = {
         assert.strictEqual(result.snapshotBlocked, false);
         assert.strictEqual(result.snapshot, null);
         assert.strictEqual(harness.retrieveCalls.length, 0);
+        assert.strictEqual(harness.expectedAfterCalls.length, 0);
         assert.strictEqual(harness.inventoryCalls.length, 0);
         assert.deepStrictEqual(result.deploymentExecution, { status: 'Succeeded' });
     });
@@ -230,6 +248,8 @@ const BASE_ARGS = {
         assert.strictEqual(member.existedBefore, true);
         assert.strictEqual(member.captureStatus, MEMBER_CAPTURE_STATUS.COMPLETE);
         assert.strictEqual(member.destinationBeforeHash, hashBytes(packed));
+        assert.ok(member.expectedAfterHash);
+        assert.notStrictEqual(member.expectedAfterHash, member.destinationBeforeHash);
         assert.strictEqual(member.artifactSize, packed.length);
         assert.ok(member.artifactId);
 
@@ -257,9 +277,11 @@ const BASE_ARGS = {
 
         assert.strictEqual(capture.ok, true);
         assert.strictEqual(harness.retrieveCalls.length, 0);
+        assert.strictEqual(harness.expectedAfterCalls.length, 0);
         assert.strictEqual(members[0].changeClass, CHANGE_CLASS.NEW);
         assert.strictEqual(members[0].existedBefore, false);
         assert.strictEqual(members[0].artifactId, null);
+        assert.strictEqual(members[0].expectedAfterHash, null);
         assert.strictEqual(capture.snapshot.rollbackEligible, false);
     });
 
@@ -396,5 +418,31 @@ const BASE_ARGS = {
         assert.strictEqual(deployed, false);
         assert.strictEqual(harness.retrieveCalls.length, 0);
         assert.strictEqual(result.deploymentExecution, undefined);
+    });
+
+    await runTest('missing expected-after workspace artifact blocks deploy', async () => {
+        const harness = createHarness({
+            collectExpectedAfterArtifact: async () => {
+                throw new Error(
+                    'Destination snapshot capture failed for ApexClass:AccountService: expected-after workspace artifact is missing.'
+                );
+            }
+        });
+        let deployed = false;
+
+        const result = await harness.service.runDeployAfterOptionalSnapshot({
+            shouldDeploy: true,
+            captureArgs: BASE_ARGS,
+            runDeploymentExecution: async () => {
+                deployed = true;
+            }
+        });
+
+        assert.strictEqual(deployed, false);
+        assert.strictEqual(result.snapshotBlocked, true);
+        assert.match(
+            result.deploymentExecution.message,
+            /expected-after workspace artifact is missing/
+        );
     });
 })();

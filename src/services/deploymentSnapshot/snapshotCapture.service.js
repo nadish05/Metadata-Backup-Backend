@@ -96,6 +96,7 @@ function membersAreIdentical(existing, incoming) {
         existing.changeClass === incoming.changeClass &&
         existing.existedBefore === incoming.existedBefore &&
         existing.destinationBeforeHash === incoming.destinationBeforeHash &&
+        existing.expectedAfterHash === incoming.expectedAfterHash &&
         existing.artifactId === incoming.artifactId
     );
 }
@@ -183,6 +184,17 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
         }
 
         const destinationBeforeHash = hashBytes(bytes);
+        let expectedAfterHash = null;
+
+        if (toBuffer(member.expectedAfterBytes)) {
+            expectedAfterHash = hashBytes(toBuffer(member.expectedAfterBytes));
+        } else if (
+            typeof member.expectedAfterHash === 'string' &&
+            member.expectedAfterHash.length > 0
+        ) {
+            expectedAfterHash = member.expectedAfterHash;
+        }
+
         const artifactId = buildArtifactId(
             snapshot.snapshotId,
             member.metadataType,
@@ -202,6 +214,7 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             changeClass: CHANGE_CLASS.MODIFIED,
             existedBefore: true,
             destinationBeforeHash,
+            expectedAfterHash,
             artifactId,
             artifactSize: stored.size,
             captureStatus: MEMBER_CAPTURE_STATUS.COMPLETE
@@ -215,6 +228,15 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             );
         }
 
+        if (
+            toBuffer(member.expectedAfterBytes) ||
+            member.expectedAfterHash
+        ) {
+            throw new SnapshotValidationError(
+                `NEW member ${member.metadataType}:${member.metadataName} must not include expected-after bytes.`
+            );
+        }
+
         return {
             snapshotId: snapshot.snapshotId,
             metadataType: member.metadataType,
@@ -223,6 +245,7 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             changeClass: CHANGE_CLASS.NEW,
             existedBefore: false,
             destinationBeforeHash: null,
+            expectedAfterHash: null,
             artifactId: null,
             artifactSize: 0,
             captureStatus: MEMBER_CAPTURE_STATUS.ABSENT_PROVEN
@@ -244,6 +267,7 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             changeClass: CHANGE_CLASS.UNKNOWN,
             existedBefore: null,
             destinationBeforeHash: null,
+            expectedAfterHash: null,
             artifactId: null,
             artifactSize: 0,
             captureStatus: MEMBER_CAPTURE_STATUS.UNKNOWN
@@ -271,10 +295,21 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             }
 
             const incomingHash = hashBytes(incomingBytes);
+            let incomingAfter = null;
+
+            if (toBuffer(memberInput.expectedAfterBytes)) {
+                incomingAfter = hashBytes(toBuffer(memberInput.expectedAfterBytes));
+            } else if (
+                typeof memberInput.expectedAfterHash === 'string' &&
+                memberInput.expectedAfterHash.length > 0
+            ) {
+                incomingAfter = memberInput.expectedAfterHash;
+            }
 
             if (
                 existing.changeClass === CHANGE_CLASS.MODIFIED &&
-                existing.destinationBeforeHash === incomingHash
+                existing.destinationBeforeHash === incomingHash &&
+                (existing.expectedAfterHash || null) === incomingAfter
             ) {
                 return existing;
             }
@@ -330,6 +365,7 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
                 member.changeClass === CHANGE_CLASS.MODIFIED &&
                 member.captureStatus === MEMBER_CAPTURE_STATUS.COMPLETE &&
                 member.destinationBeforeHash &&
+                member.expectedAfterHash &&
                 member.artifactId
         );
     }
@@ -440,7 +476,9 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
 
         await verifyMemberArtifacts(members);
 
-        const overallIntegrityHash = computeSnapshotIntegrityHash(members);
+        const overallIntegrityHash = computeSnapshotIntegrityHash(members, {
+            schemaVersion: snapshot.schemaVersion || 1
+        });
 
         return {
             ok: true,
@@ -536,6 +574,25 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
         return metadataStore.getMembers(snapshotId);
     }
 
+    async function getArtifact(snapshotId, artifactId) {
+        await requireSnapshot(snapshotId);
+
+        if (!artifactId) {
+            throw new SnapshotValidationError('artifactId is required.');
+        }
+
+        const members = await metadataStore.getMembers(snapshotId);
+        const owned = members.some((member) => member.artifactId === artifactId);
+
+        if (!owned) {
+            throw new SnapshotValidationError(
+                `Artifact ${artifactId} is not part of snapshot ${snapshotId}.`
+            );
+        }
+
+        return blobStore.getArtifact(artifactId);
+    }
+
     return {
         createSnapshot,
         addMember,
@@ -544,7 +601,8 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
         sealSnapshot,
         verifySnapshotIntegrity,
         getSnapshot,
-        getMembers
+        getMembers,
+        getArtifact
     };
 }
 

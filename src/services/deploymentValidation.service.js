@@ -1950,6 +1950,7 @@ async function validateDeployment({
                             destinationBranch:
                                 deploymentPackage.destinationBranch || null,
                             generatedDeploymentPackage,
+                            generatedWorkspace,
                             refreshToken,
                             instanceUrl,
                             deploymentApiVersion

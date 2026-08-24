@@ -6,7 +6,8 @@
  * Isolated rollback-foundation types. Not consumed by the deployment engine.
  */
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION_V1 = 1;
+const SCHEMA_VERSION = 2;
 const SNAPSHOT_VERSION = 1;
 
 const SNAPSHOT_STATUS = Object.freeze({
@@ -39,6 +40,7 @@ function memberIdentityKey(metadataType, metadataName) {
 }
 
 module.exports = {
+    SCHEMA_VERSION_V1,
     SCHEMA_VERSION,
     SNAPSHOT_VERSION,
     SNAPSHOT_STATUS,

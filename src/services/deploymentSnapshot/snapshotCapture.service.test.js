@@ -63,6 +63,10 @@ const ACCOUNT_SERVICE_BYTES = Buffer.from(
     'public class AccountService {\n    // old implementation\n}\n',
     'utf8'
 );
+const ACCOUNT_SERVICE_AFTER_BYTES = Buffer.from(
+    'public class AccountService {\n    // deployed implementation\n}\n',
+    'utf8'
+);
 
 const CONTEXT = {
     destinationOrgId: '00D000000000001',
@@ -82,7 +86,8 @@ async function captureModifiedReady() {
                 metadataName: 'AccountService',
                 filePath: 'force-app/main/default/classes/AccountService.cls',
                 changeClass: CHANGE_CLASS.MODIFIED,
-                destinationBeforeBytes: ACCOUNT_SERVICE_BYTES
+                destinationBeforeBytes: ACCOUNT_SERVICE_BYTES,
+                expectedAfterBytes: ACCOUNT_SERVICE_AFTER_BYTES
             }
         ]
     });
@@ -237,6 +242,10 @@ async function main() {
         assert.strictEqual(member.existedBefore, true);
         assert.strictEqual(member.captureStatus, MEMBER_CAPTURE_STATUS.COMPLETE);
         assert.strictEqual(member.destinationBeforeHash, expectedHash);
+        assert.strictEqual(
+            member.expectedAfterHash,
+            hashBytes(ACCOUNT_SERVICE_AFTER_BYTES)
+        );
         assert.ok(member.artifactId);
         assert.strictEqual(member.artifactSize, ACCOUNT_SERVICE_BYTES.length);
 

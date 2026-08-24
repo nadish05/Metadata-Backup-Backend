@@ -106,6 +106,52 @@ runTest('aggregate hash uses ABSENT for NEW and UNKNOWN', () => {
     assert.strictEqual(withHashes, explicit);
 });
 
+runTest('changing expectedAfterHash changes schema v2 aggregate', () => {
+    const base = [
+        {
+            metadataType: 'ApexClass',
+            metadataName: 'AccountService',
+            changeClass: CHANGE_CLASS.MODIFIED,
+            destinationBeforeHash: hashBytes(OLD_IMPL),
+            expectedAfterHash: hashBytes(NEW_IMPL)
+        }
+    ];
+    const changed = [
+        {
+            ...base[0],
+            expectedAfterHash: hashBytes(Buffer.from('other-after'))
+        }
+    ];
+
+    assert.notStrictEqual(
+        computeSnapshotIntegrityHash(base, { schemaVersion: 2 }),
+        computeSnapshotIntegrityHash(changed, { schemaVersion: 2 })
+    );
+});
+
+runTest('schema v1 ignores expectedAfterHash', () => {
+    const left = [
+        {
+            metadataType: 'ApexClass',
+            metadataName: 'AccountService',
+            changeClass: CHANGE_CLASS.MODIFIED,
+            destinationBeforeHash: hashBytes(OLD_IMPL),
+            expectedAfterHash: 'one'
+        }
+    ];
+    const right = [
+        {
+            ...left[0],
+            expectedAfterHash: 'two'
+        }
+    ];
+
+    assert.strictEqual(
+        computeSnapshotIntegrityHash(left, { schemaVersion: 1 }),
+        computeSnapshotIntegrityHash(right, { schemaVersion: 1 })
+    );
+});
+
 runTest('changing a member hash changes the aggregate', () => {
     const base = [
         {

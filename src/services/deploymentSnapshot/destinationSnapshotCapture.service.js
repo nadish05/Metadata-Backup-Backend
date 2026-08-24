@@ -1,13 +1,7 @@
 'use strict';
 
 const { CHANGE_CLASS, SNAPSHOT_STATUS } = require('./snapshot.types');
-const { createSnapshotCaptureService } = require('./snapshotCapture.service');
-const {
-    createMemorySnapshotMetadataStore
-} = require('./stores/memorySnapshotMetadataStore');
-const {
-    createMemorySnapshotBlobStore
-} = require('./stores/memorySnapshotBlobStore');
+const { getSharedSnapshotAccess } = require('./snapshotAccess.service');
 const {
     isSnapshotCaptureOnDeployEnabled
 } = require('./snapshotCapture.flag');
@@ -19,6 +13,10 @@ const {
     buildUnknownReason,
     buildMissingArtifactReason
 } = require('./destinationSnapshotMapper.service');
+const {
+    collectExpectedAfterArtifact,
+    buildMissingExpectedAfterReason
+} = require('./expectedAfterArtifact.service');
 const {
     retrieveDestinationMember
 } = require('./destinationMetadataRetriever.service');
@@ -32,13 +30,6 @@ const {
     buildBlockedResult
 } = require('../checkOnlyDeployment.service');
 
-const defaultMetadataStore = createMemorySnapshotMetadataStore();
-const defaultBlobStore = createMemorySnapshotBlobStore();
-const defaultCaptureService = createSnapshotCaptureService({
-    metadataStore: defaultMetadataStore,
-    blobStore: defaultBlobStore
-});
-
 function fail(message, snapshot = null) {
     return {
         ok: false,
@@ -49,7 +40,11 @@ function fail(message, snapshot = null) {
 
 function createDestinationSnapshotCaptureService(dependencies = {}) {
     const captureService =
-        dependencies.captureService || defaultCaptureService;
+        dependencies.captureService ||
+        getSharedSnapshotAccess().captureService;
+    const collectExpectedAfter =
+        dependencies.collectExpectedAfterArtifact ||
+        collectExpectedAfterArtifact;
     const inventoryBuilder =
         dependencies.buildDestinationInventory || buildDestinationInventory;
     const inventoryState = dependencies.getState || getState;
@@ -68,6 +63,7 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
         sourceBranch = null,
         destinationBranch = null,
         generatedDeploymentPackage,
+        generatedWorkspace,
         refreshToken,
         instanceUrl,
         deploymentApiVersion = null
@@ -159,6 +155,32 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 continue;
             }
 
+            let expectedAfter;
+
+            try {
+                expectedAfter = await collectExpectedAfter({
+                    workspacePath: generatedWorkspace?.workspacePath,
+                    member
+                });
+            } catch (error) {
+                return fail(
+                    error.message ||
+                        buildMissingExpectedAfterReason(
+                            member.metadataType,
+                            member.metadataName
+                        )
+                );
+            }
+
+            if (!expectedAfter?.expectedAfterHash) {
+                return fail(
+                    buildMissingExpectedAfterReason(
+                        member.metadataType,
+                        member.metadataName
+                    )
+                );
+            }
+
             let retrieved;
 
             try {
@@ -193,7 +215,8 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 metadataName: member.metadataName,
                 filePath: member.filePath,
                 changeClass: CHANGE_CLASS.MODIFIED,
-                destinationBeforeBytes: retrieved.artifactBytes
+                destinationBeforeBytes: retrieved.artifactBytes,
+                expectedAfterHash: expectedAfter.expectedAfterHash
             });
         }
 
