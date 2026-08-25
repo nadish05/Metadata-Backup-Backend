@@ -63,6 +63,23 @@ const {
     CHECK_ONLY_STATUS,
     ROLLBACK_OPERATION_STATUS
 } = require('./rollbackOperation.types');
+const {
+    ROLLBACK_AUTHORIZATION_ACTION,
+    ROLLBACK_AUTHORIZATION_DECISION
+} = require('./rollbackAuthorization.types');
+const { resolveActorContext } = require('./rollbackActor.context');
+const {
+    getSharedRollbackAuthorizationService,
+    logAuthorizationDecision
+} = require('./rollbackAuthorization.service');
+const { buildRollbackAuditContext } = require('./rollbackAudit.context');
+const { createRollbackRecoveryContract } = require('./rollbackRecovery.contract');
+const {
+    createUnavailableSalesforceDeployStatusService
+} = require('./salesforceDeployStatus.contract');
+const {
+    createAuthorizedRollbackReconciliation
+} = require('./authorizedRollbackReconciliation.service');
 
 function block(code, message, extra = {}) {
     return {
@@ -203,6 +220,25 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
         dependencies.rollbackOperationService ||
         createRollbackOperationService({
             getStore: resolveOperationStore
+        });
+    const resolveAuthorizationService =
+        dependencies.getRollbackAuthorizationService ||
+        getSharedRollbackAuthorizationService;
+    const resolveActor =
+        dependencies.resolveTrustedActor ||
+        (() => null);
+    const recoveryContract =
+        dependencies.recoveryContract ||
+        createRollbackRecoveryContract({
+            authorizationService: resolveAuthorizationService(),
+            deployStatusService:
+                dependencies.salesforceDeployStatusService ||
+                createUnavailableSalesforceDeployStatusService()
+        });
+    const authorizedReconciliation =
+        createAuthorizedRollbackReconciliation({
+            operationService,
+            recoveryContract
         });
 
     function resolveCapture() {
@@ -430,6 +466,74 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             );
         }
 
+        let verifiedOrgId;
+
+        try {
+            verifiedOrgId = await resolveIdentity({
+                refreshToken: args.refreshToken,
+                instanceUrl: args.instanceUrl,
+                requestedOrgId:
+                    args.destinationOrgId || snapshot.destinationOrgId
+            });
+        } catch (error) {
+            if (error instanceof OrgLockIdentityError) {
+                return block(
+                    ROLLBACK_CODE.IDENTITY_FAILURE,
+                    error.message,
+                    { snapshotId }
+                );
+            }
+
+            return block(
+                ROLLBACK_CODE.IDENTITY_FAILURE,
+                error.message ||
+                    'Destination org identity verification failed.',
+                { snapshotId }
+            );
+        }
+
+        if (!orgIdsMatch(verifiedOrgId, snapshot.destinationOrgId)) {
+            return block(
+                ROLLBACK_CODE.DESTINATION_MISMATCH,
+                'Verified destination org does not match the sealed snapshot destination org.',
+                { snapshotId }
+            );
+        }
+
+        const actor = resolveActorContext(resolveActor(args));
+        const authorization = await resolveAuthorizationService().authorize({
+            actor,
+            action: ROLLBACK_AUTHORIZATION_ACTION.ROLLBACK,
+            destinationOrgId: verifiedOrgId,
+            snapshotId: snapshot.snapshotId,
+            historyId: args.historyId || null
+        });
+        logAuthorizationDecision(authorization);
+        void buildRollbackAuditContext({
+            actor,
+            action: ROLLBACK_AUTHORIZATION_ACTION.ROLLBACK,
+            destinationOrgId: verifiedOrgId,
+            snapshotId: snapshot.snapshotId,
+            authorizationDecision: authorization.decision
+        });
+
+        if (
+            authorization.decision !== ROLLBACK_AUTHORIZATION_DECISION.AUTHORIZED
+        ) {
+            const code =
+                authorization.decision ===
+                ROLLBACK_AUTHORIZATION_DECISION.UNAVAILABLE
+                    ? ROLLBACK_CODE.AUTHORIZATION_UNAVAILABLE
+                    : ROLLBACK_CODE.AUTHORIZATION_DENIED;
+
+            return block(
+                code,
+                authorization.message ||
+                    'Rollback is not authorized for this actor and destination org.',
+                { snapshotId }
+            );
+        }
+
         let claim;
 
         try {
@@ -539,59 +643,6 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
 
                     throw error;
                 }
-            }
-
-            let verifiedOrgId;
-
-            try {
-                verifiedOrgId = await resolveIdentity({
-                    refreshToken: args.refreshToken,
-                    instanceUrl: args.instanceUrl,
-                    requestedOrgId:
-                        args.destinationOrgId || snapshot.destinationOrgId
-                });
-            } catch (error) {
-                operation = await persistFailed(operation, {
-                    errorCode: ROLLBACK_CODE.IDENTITY_FAILURE,
-                    errorMessage: error.message
-                });
-
-                if (error instanceof OrgLockIdentityError) {
-                    return withOperation(
-                        block(
-                            ROLLBACK_CODE.IDENTITY_FAILURE,
-                            error.message,
-                            { snapshotId }
-                        ),
-                        operation
-                    );
-                }
-
-                return withOperation(
-                    block(
-                        ROLLBACK_CODE.IDENTITY_FAILURE,
-                        error.message ||
-                            'Destination org identity verification failed.',
-                        { snapshotId }
-                    ),
-                    operation
-                );
-            }
-
-            if (!orgIdsMatch(verifiedOrgId, snapshot.destinationOrgId)) {
-                operation = await persistFailed(operation, {
-                    errorCode: ROLLBACK_CODE.DESTINATION_MISMATCH,
-                    errorMessage:
-                        'Verified destination org does not match the sealed snapshot destination org.'
-                });
-                return withOperation(
-                    block(
-                        ROLLBACK_CODE.DESTINATION_MISMATCH,
-                        'Verified destination org does not match the sealed snapshot destination org.',
-                        { snapshotId }
-                    ),
-                    operation
-                );
             }
 
             if (!isLockEnabled()) {
@@ -1177,7 +1228,9 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     return {
         runRollback,
         reconcileUnknownOperation: (input) =>
-            operationService.reconcileUnknownOperation(input)
+            operationService.reconcileUnknownOperation(input),
+        reconcileUnknownOperationAuthorized:
+            authorizedReconciliation.reconcileUnknownOperationAuthorized
     };
 }
 

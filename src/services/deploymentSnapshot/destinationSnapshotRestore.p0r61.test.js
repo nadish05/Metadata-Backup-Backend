@@ -45,6 +45,13 @@ const {
 const {
     createMemoryRollbackOperationStore
 } = require('./stores/memoryRollbackOperationStore');
+const {
+    createRollbackAuthorizationService
+} = require('./rollbackAuthorization.service');
+const {
+    createTestRollbackAuthorizationProvider,
+    createTestTrustedActor
+} = require('./rollbackAuthorization.testProvider');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -129,6 +136,13 @@ function createRestore({
         isDeploymentOrgLockEnabled: () => lockEnabled,
         getOrgLockService: () => lockService,
         createOwnerId: () => 'rollback-owner',
+        getRollbackAuthorizationService: () =>
+            createRollbackAuthorizationService({
+                provider: createTestRollbackAuthorizationProvider({
+                    rollback: true
+                })
+            }),
+        resolveTrustedActor: () => createTestTrustedActor(),
         resolveVerifiedDestinationOrgId: async () => {
             if (identityError) {
                 throw identityError;

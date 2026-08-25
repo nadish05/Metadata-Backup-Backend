@@ -54,6 +54,25 @@ const { isSnapshotRollbackEnabled } = require('./snapshotRollback.flag');
 const {
     LOCK_PRODUCTION_DISTRIBUTED_READY
 } = require('../deploymentOrgLock/deploymentOrgLock.types');
+const {
+    createRollbackAuthorizationService
+} = require('./rollbackAuthorization.service');
+const {
+    createTestRollbackAuthorizationProvider,
+    createTestTrustedActor
+} = require('./rollbackAuthorization.testProvider');
+
+function allowRollbackAuthz() {
+    return {
+        getRollbackAuthorizationService: () =>
+            createRollbackAuthorizationService({
+                provider: createTestRollbackAuthorizationProvider({
+                    rollback: true
+                })
+            }),
+        resolveTrustedActor: () => createTestTrustedActor()
+    };
+}
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -261,6 +280,7 @@ function op(status, extras = {}) {
             getOrgLockService: () =>
                 createOrgLockService({ store: createMemoryOrgLockStore() }),
             createOwnerId: () => 'rollback-owner',
+            ...allowRollbackAuthz(),
             resolveVerifiedDestinationOrgId: async () => '00D000000000001',
             startLockHeartbeat: () => () => {},
             retrieveDestinationMember: async () => ({
@@ -318,6 +338,7 @@ function op(status, extras = {}) {
             getOrgLockService: () =>
                 createOrgLockService({ store: createMemoryOrgLockStore() }),
             createOwnerId: () => 'rollback-owner',
+            ...allowRollbackAuthz(),
             resolveVerifiedDestinationOrgId: async () => '00D000000000001',
             startLockHeartbeat: () => () => {},
             retrieveDestinationMember: async () => ({
@@ -364,6 +385,7 @@ function op(status, extras = {}) {
             getOrgLockService: () =>
                 createOrgLockService({ store: createMemoryOrgLockStore() }),
             createOwnerId: () => 'rollback-owner',
+            ...allowRollbackAuthz(),
             resolveVerifiedDestinationOrgId: async () => '00D000000000001',
             startLockHeartbeat: () => () => {},
             runDeploymentExecution: async () => {

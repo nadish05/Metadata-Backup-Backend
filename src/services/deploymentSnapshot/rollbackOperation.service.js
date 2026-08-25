@@ -450,7 +450,7 @@ function createRollbackOperationService({ getStore } = {}) {
                 salesforceStatus: status,
                 success: nextStatus === ROLLBACK_OPERATION_STATUS.SUCCEEDED,
                 reconciledAt: nowIso(),
-                reconciledBy: actor || 'operator',
+                reconciledBy: actor || null,
                 reconciliationReason: reason || null
             },
             { allowReconciliation: true }
@@ -458,7 +458,7 @@ function createRollbackOperationService({ getStore } = {}) {
 
         logRollbackOperationEvent('ROLLBACK_OPERATION_RECONCILED', {
             ...next,
-            actor: actor || 'operator',
+            actor: actor || null,
             reason: reason || null
         });
 

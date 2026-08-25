@@ -40,6 +40,13 @@ const {
     createUnavailableRollbackOperationStore
 } = require('./stores/unavailableRollbackOperationStore');
 const {
+    createRollbackAuthorizationService
+} = require('./rollbackAuthorization.service');
+const {
+    createTestRollbackAuthorizationProvider,
+    createTestTrustedActor
+} = require('./rollbackAuthorization.testProvider');
+const {
     RollbackOperationPersistenceError
 } = require('./rollbackOperation.errors');
 const {
@@ -148,6 +155,13 @@ function createRestore({
         isDeploymentOrgLockEnabled: () => true,
         getOrgLockService: () => orgLock,
         createOwnerId: () => 'rollback-owner',
+        getRollbackAuthorizationService: () =>
+            createRollbackAuthorizationService({
+                provider: createTestRollbackAuthorizationProvider({
+                    rollback: true
+                })
+            }),
+        resolveTrustedActor: () => createTestTrustedActor(),
         resolveVerifiedDestinationOrgId: async () => '00D000000000001',
         startLockHeartbeat: () => () => {},
         retrieveDestinationMember: async () => {
