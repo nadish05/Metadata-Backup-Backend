@@ -1,0 +1,30 @@
+'use strict';
+
+const OPERATION_TYPE = Object.freeze({
+    DEPLOY: 'DEPLOY',
+    ROLLBACK: 'ROLLBACK'
+});
+
+const LOCK_STATUS = Object.freeze({
+    HELD: 'HELD',
+    RELEASED: 'RELEASED'
+});
+
+const LOCK_STORE_BACKEND = Object.freeze({
+    FILESYSTEM: 'FILESYSTEM',
+    UNCONFIGURED: 'UNCONFIGURED'
+});
+
+const DEFAULT_HEARTBEAT_MS = 30 * 1000;
+const DEFAULT_LEASE_MS = 5 * 60 * 1000;
+
+const LOCK_PRODUCTION_DISTRIBUTED_READY = false;
+
+module.exports = {
+    OPERATION_TYPE,
+    LOCK_STATUS,
+    LOCK_STORE_BACKEND,
+    DEFAULT_HEARTBEAT_MS,
+    DEFAULT_LEASE_MS,
+    LOCK_PRODUCTION_DISTRIBUTED_READY
+};

@@ -33,6 +33,28 @@ const {
     refreshAccessToken,
     buildBlockedResult
 } = require('../checkOnlyDeployment.service');
+const {
+    isDeploymentOrgLockEnabled
+} = require('../deploymentOrgLock/deploymentOrgLock.flag');
+const {
+    getSharedOrgLockService
+} = require('../deploymentOrgLock/deploymentOrgLock.resolver');
+const {
+    createOwnerId
+} = require('../deploymentOrgLock/deploymentOrgLock.service');
+const { startLockHeartbeat } = require('../deploymentOrgLock/deploymentOrgLock.heartbeat');
+const {
+    resolveVerifiedDestinationOrgId
+} = require('../deploymentOrgLock/destinationOrgIdentity.service');
+const {
+    OrgLockBusyError,
+    OrgLockStoreUnavailableError,
+    OrgLockIdentityError,
+    OrgLockFenceError,
+    OrgLockOwnershipError
+} = require('../deploymentOrgLock/deploymentOrgLock.errors');
+const { OPERATION_TYPE } = require('../deploymentOrgLock/deploymentOrgLock.types');
+const { logLockEvent } = require('../deploymentOrgLock/deploymentOrgLock.log');
 
 function fail(message, snapshot = null) {
     return {
@@ -59,6 +81,17 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
     const isDurableReady =
         dependencies.isDurableSnapshotStorageReady ||
         isDurableSnapshotStorageReady;
+    const isLockEnabled =
+        dependencies.isDeploymentOrgLockEnabled ||
+        isDeploymentOrgLockEnabled;
+    const resolveLockService =
+        dependencies.getOrgLockService || getSharedOrgLockService;
+    const resolveIdentity =
+        dependencies.resolveVerifiedDestinationOrgId ||
+        resolveVerifiedDestinationOrgId;
+    const startHeartbeat =
+        dependencies.startLockHeartbeat || startLockHeartbeat;
+    const createLockOwnerId = dependencies.createOwnerId || createOwnerId;
     const enforceDurableCapture =
         dependencies.enforceDurableCapture !== undefined
             ? dependencies.enforceDurableCapture
@@ -279,10 +312,18 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
         }
     }
 
+    function blockExecution(message) {
+        return buildBlockedResult(message, {
+            mode: 'execution',
+            executionMode: 'deploy'
+        });
+    }
+
     async function runDeployAfterOptionalSnapshot({
         shouldDeploy,
         captureArgs,
-        runDeploymentExecution
+        runDeploymentExecution,
+        afterLockedExecution = null
     }) {
         if (!shouldDeploy) {
             return {
@@ -292,46 +333,177 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
             };
         }
 
-        if (!isEnabled()) {
+        if (!isLockEnabled()) {
+            if (!isEnabled()) {
+                return {
+                    deploymentExecution: await runDeploymentExecution(),
+                    snapshot: null,
+                    snapshotBlocked: false
+                };
+            }
+
+            if (enforceDurableCapture && !isDurableReady()) {
+                return {
+                    deploymentExecution: blockExecution(
+                        DURABLE_STORAGE_UNAVAILABLE_MESSAGE
+                    ),
+                    snapshot: null,
+                    snapshotBlocked: true
+                };
+            }
+
+            const capture = await captureAndSealForDeploy(captureArgs);
+
+            if (!capture.ok) {
+                return {
+                    deploymentExecution: blockExecution(capture.message),
+                    snapshot: capture.snapshot || null,
+                    snapshotBlocked: true
+                };
+            }
+
+            const deploymentExecution = await runDeploymentExecution();
+
+            if (typeof afterLockedExecution === 'function') {
+                await afterLockedExecution({
+                    snapshot: capture.snapshot || null,
+                    deploymentExecution
+                });
+            }
+
             return {
-                deploymentExecution: await runDeploymentExecution(),
-                snapshot: null,
+                deploymentExecution,
+                snapshot: capture.snapshot || null,
                 snapshotBlocked: false
             };
         }
 
-        if (enforceDurableCapture && !isDurableReady()) {
-            return {
-                deploymentExecution: buildBlockedResult(
-                    DURABLE_STORAGE_UNAVAILABLE_MESSAGE,
-                    {
-                        mode: 'execution',
-                        executionMode: 'deploy'
-                    }
-                ),
-                snapshot: null,
-                snapshotBlocked: true
+        let lockHandle = null;
+        let stopHeartbeat = () => {};
+
+        try {
+            const verifiedOrgId = await resolveIdentity({
+                refreshToken: captureArgs?.refreshToken,
+                instanceUrl: captureArgs?.instanceUrl,
+                requestedOrgId: captureArgs?.destinationOrgId ?? null
+            });
+
+            const lockService = resolveLockService();
+            lockHandle = lockService.acquire({
+                destinationOrgId: verifiedOrgId,
+                ownerId: createLockOwnerId(),
+                operationType: OPERATION_TYPE.DEPLOY,
+                historyId: captureArgs?.historyId ?? null,
+                snapshotId: null
+            });
+
+            stopHeartbeat = startHeartbeat({
+                lockService,
+                destinationOrgId: lockHandle.destinationOrgId,
+                ownerId: lockHandle.ownerId,
+                leaseGeneration: lockHandle.leaseGeneration
+            });
+
+            const lockedCaptureArgs = {
+                ...captureArgs,
+                destinationOrgId: verifiedOrgId
             };
-        }
 
-        const capture = await captureAndSealForDeploy(captureArgs);
+            let snapshot = null;
 
-        if (!capture.ok) {
+            if (isEnabled()) {
+                if (enforceDurableCapture && !isDurableReady()) {
+                    return {
+                        deploymentExecution: blockExecution(
+                            DURABLE_STORAGE_UNAVAILABLE_MESSAGE
+                        ),
+                        snapshot: null,
+                        snapshotBlocked: true
+                    };
+                }
+
+                const capture = await captureAndSealForDeploy(lockedCaptureArgs);
+
+                if (!capture.ok) {
+                    return {
+                        deploymentExecution: blockExecution(capture.message),
+                        snapshot: capture.snapshot || null,
+                        snapshotBlocked: true
+                    };
+                }
+
+                snapshot = capture.snapshot || null;
+            }
+
+            lockService.assertHeld({
+                destinationOrgId: lockHandle.destinationOrgId,
+                ownerId: lockHandle.ownerId,
+                leaseGeneration: lockHandle.leaseGeneration
+            });
+
+            const deploymentExecution = await runDeploymentExecution();
+
+            if (typeof afterLockedExecution === 'function') {
+                await afterLockedExecution({
+                    snapshot,
+                    deploymentExecution
+                });
+            }
+
             return {
-                deploymentExecution: buildBlockedResult(capture.message, {
-                    mode: 'execution',
-                    executionMode: 'deploy'
-                }),
-                snapshot: capture.snapshot || null,
-                snapshotBlocked: true
+                deploymentExecution,
+                snapshot,
+                snapshotBlocked: false
             };
-        }
+        } catch (error) {
+            if (error instanceof OrgLockBusyError) {
+                logLockEvent('LOCK_BUSY', {
+                    destinationOrgId: captureArgs?.destinationOrgId ?? null,
+                    operationType: OPERATION_TYPE.DEPLOY
+                });
 
-        return {
-            deploymentExecution: await runDeploymentExecution(),
-            snapshot: capture.snapshot || null,
-            snapshotBlocked: false
-        };
+                return {
+                    deploymentExecution: blockExecution(error.message),
+                    snapshot: null,
+                    snapshotBlocked: true,
+                    lockBusy: true
+                };
+            }
+
+            if (
+                error instanceof OrgLockStoreUnavailableError ||
+                error instanceof OrgLockIdentityError ||
+                error instanceof OrgLockFenceError ||
+                error instanceof OrgLockOwnershipError
+            ) {
+                return {
+                    deploymentExecution: blockExecution(error.message),
+                    snapshot: null,
+                    snapshotBlocked: true
+                };
+            }
+
+            throw error;
+        } finally {
+            stopHeartbeat();
+
+            if (lockHandle) {
+                try {
+                    resolveLockService().release({
+                        destinationOrgId: lockHandle.destinationOrgId,
+                        ownerId: lockHandle.ownerId,
+                        leaseGeneration: lockHandle.leaseGeneration
+                    });
+                } catch (releaseError) {
+                    logLockEvent('LOCK_RELEASE_FAILED', {
+                        destinationOrgId: lockHandle.destinationOrgId,
+                        ownerId: lockHandle.ownerId,
+                        leaseGeneration: lockHandle.leaseGeneration
+                    });
+                    void releaseError;
+                }
+            }
+        }
     }
 
     return {

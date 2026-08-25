@@ -1964,19 +1964,23 @@ async function validateDeployment({
                                 refreshToken,
                                 instanceUrl,
                                 deploymentApiVersion
-                            })
+                            }),
+                        afterLockedExecution: async ({ snapshot }) => {
+                            if (snapshot?.snapshotId) {
+                                runHistorySafely(() =>
+                                    deploymentHistoryService.updateHistory(
+                                        historyId,
+                                        {
+                                            snapshotId: snapshot.snapshotId
+                                        }
+                                    )
+                                );
+                            }
+                        }
                     }
                 );
 
             deploymentExecution = snapshotGate.deploymentExecution;
-
-            if (snapshotGate.snapshot?.snapshotId) {
-                runHistorySafely(() =>
-                    deploymentHistoryService.updateHistory(historyId, {
-                        snapshotId: snapshotGate.snapshot.snapshotId
-                    })
-                );
-            }
         }
     }
 
