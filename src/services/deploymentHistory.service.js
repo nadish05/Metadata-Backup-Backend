@@ -417,7 +417,10 @@ function createDeploymentHistoryService({ store } = {}) {
         deploymentReadiness,
         metadataValidation,
         dependencyValidation,
-        deploymentSelections
+        deploymentSelections,
+        operationType = null,
+        rollbackOfHistoryId = null,
+        rollbackOfSnapshotId = null
     } = {}) {
         try {
             logSection('Deployment History Started');
@@ -474,7 +477,10 @@ function createDeploymentHistoryService({ store } = {}) {
                     deploymentPackage?.metadataComparisonId || null,
                 sourceOrgId: deploymentPackage?.sourceOrgId || null,
                 destinationOrgId: deploymentPackage?.destinationOrgId || null,
-                snapshotId: null
+                snapshotId: null,
+                operationType: operationType || null,
+                rollbackOfHistoryId: rollbackOfHistoryId || null,
+                rollbackOfSnapshotId: rollbackOfSnapshotId || null
             });
 
             if (
