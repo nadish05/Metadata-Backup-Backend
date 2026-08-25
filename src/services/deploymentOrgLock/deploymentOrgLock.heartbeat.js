@@ -8,13 +8,15 @@ function startLockHeartbeat({
     destinationOrgId,
     ownerId,
     leaseGeneration,
-    heartbeatMs = DEFAULT_HEARTBEAT_MS
+    heartbeatMs = DEFAULT_HEARTBEAT_MS,
+    setIntervalFn = setInterval,
+    clearIntervalFn = clearInterval
 }) {
     if (!lockService || typeof lockService.renew !== 'function') {
         return () => {};
     }
 
-    const interval = setInterval(() => {
+    const interval = setIntervalFn(() => {
         try {
             lockService.renew({
                 destinationOrgId,
@@ -30,12 +32,12 @@ function startLockHeartbeat({
         }
     }, heartbeatMs);
 
-    if (typeof interval.unref === 'function') {
+    if (interval && typeof interval.unref === 'function') {
         interval.unref();
     }
 
     return function stopLockHeartbeat() {
-        clearInterval(interval);
+        clearIntervalFn(interval);
     };
 }
 

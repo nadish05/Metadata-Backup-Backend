@@ -4,6 +4,7 @@ const crypto = require('crypto');
 
 const { LOCK_STATUS, DEFAULT_LEASE_MS } = require('./deploymentOrgLock.types');
 const {
+    OrgLockBusyError,
     OrgLockFenceError,
     OrgLockOwnershipError
 } = require('./deploymentOrgLock.errors');
@@ -33,7 +34,18 @@ function createOrgLockService({
     function acquire(args) {
         logLockEvent('LOCK_ACQUIRE_REQUESTED', args);
 
-        const record = store.acquire(args);
+        let record;
+
+        try {
+            record = store.acquire(args);
+        } catch (error) {
+            if (error instanceof OrgLockBusyError) {
+                logLockEvent('LOCK_BUSY', args);
+            }
+
+            throw error;
+        }
+
         const held = withExpiry(record);
         const renewed = store.renew({
             destinationOrgId: held.destinationOrgId,
