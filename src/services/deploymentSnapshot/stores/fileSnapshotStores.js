@@ -11,31 +11,31 @@ const {
     SnapshotStateError,
     SnapshotMemberConflictError
 } = require('../snapshot.errors');
+const {
+    assertSafeStorageKey,
+    pathExists,
+    atomicWrite
+} = require('../../../utils/durableFileStore');
 
 const mkdir = util.promisify(fs.mkdir);
 const readFile = util.promisify(fs.readFile);
 const writeFile = util.promisify(fs.writeFile);
 const readdir = util.promisify(fs.readdir);
-const rename = util.promisify(fs.rename);
 const stat = util.promisify(fs.stat);
-const unlink = util.promisify(fs.unlink);
 
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
 function assertSafeSnapshotId(snapshotId) {
-    if (!snapshotId || typeof snapshotId !== 'string') {
-        throw new SnapshotStateError('snapshotId is required.');
-    }
-
-    if (
-        snapshotId.includes('..') ||
-        snapshotId.includes('/') ||
-        snapshotId.includes('\\') ||
-        !/^[A-Za-z0-9._-]+$/.test(snapshotId)
-    ) {
-        throw new SnapshotStateError('snapshotId is not a safe storage key.');
+    try {
+        assertSafeStorageKey(snapshotId, 'snapshotId');
+    } catch (error) {
+        throw new SnapshotStateError(
+            snapshotId
+                ? 'snapshotId is not a safe storage key.'
+                : 'snapshotId is required.'
+        );
     }
 }
 
@@ -55,44 +55,6 @@ function assertSafeArtifactId(artifactId) {
     }
 
     return posix;
-}
-
-async function pathExists(targetPath) {
-    try {
-        await stat(targetPath);
-        return true;
-    } catch (error) {
-        return false;
-    }
-}
-
-async function atomicWrite(filePath, contents, { exclusive = false } = {}) {
-    await mkdir(path.dirname(filePath), { recursive: true });
-    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-
-    try {
-        await writeFile(tempPath, contents);
-
-        if (exclusive) {
-            await writeFile(filePath, contents, { flag: 'wx' });
-            await unlink(tempPath);
-            return;
-        }
-
-        if (await pathExists(filePath)) {
-            await unlink(filePath);
-        }
-
-        await rename(tempPath, filePath);
-    } catch (error) {
-        try {
-            await unlink(tempPath);
-        } catch (cleanupError) {
-            void cleanupError;
-        }
-
-        throw error;
-    }
 }
 
 function createFileSnapshotStores({ rootDir } = {}) {
