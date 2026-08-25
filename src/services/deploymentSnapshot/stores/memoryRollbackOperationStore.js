@@ -7,6 +7,7 @@ const {
 const {
     TERMINAL_ROLLBACK_OPERATION_STATUSES
 } = require('../rollbackOperation.types');
+const { parseRollbackScopeKey } = require('../rollbackOperation.scope');
 
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -14,6 +15,8 @@ function clone(value) {
 
 function createMemoryRollbackOperationStore() {
     const records = new Map();
+    const scopes = new Map();
+    const scopeTails = new Map();
 
     async function createOperation(record) {
         if (!record?.operationId) {
@@ -99,6 +102,43 @@ function createMemoryRollbackOperationStore() {
         );
     }
 
+    async function getScope(rollbackScopeKey) {
+        parseRollbackScopeKey(rollbackScopeKey);
+        const stored = scopes.get(rollbackScopeKey);
+
+        return stored ? clone(stored) : null;
+    }
+
+    async function withExclusiveScope(rollbackScopeKey, worker) {
+        parseRollbackScopeKey(rollbackScopeKey);
+
+        const previous = scopeTails.get(rollbackScopeKey) || Promise.resolve();
+        let release = () => {};
+        const held = new Promise((resolve) => {
+            release = resolve;
+        });
+
+        scopeTails.set(
+            rollbackScopeKey,
+            previous.then(() => held).catch(() => held)
+        );
+
+        await previous.catch(() => {});
+
+        try {
+            const current = scopes.get(rollbackScopeKey) || null;
+            const result = await worker(current ? clone(current) : null);
+
+            if (result && result.scope) {
+                scopes.set(rollbackScopeKey, clone(result.scope));
+            }
+
+            return result;
+        } finally {
+            release();
+        }
+    }
+
     return {
         createOperation,
         getOperation,
@@ -106,7 +146,9 @@ function createMemoryRollbackOperationStore() {
         findBySnapshotId,
         findByOperationId,
         findBySalesforceDeploymentId,
-        findByDestinationAndSnapshot
+        findByDestinationAndSnapshot,
+        getScope,
+        withExclusiveScope
     };
 }
 

@@ -50,13 +50,14 @@ const { runCheckOnlyDeployment } = require('../checkOnlyDeployment.service');
 const { isCheckOnlySuccess } = require('../deploymentCheckOnlyGate.service');
 const { runDeploymentExecution } = require('../deploymentExecution.service');
 const {
-    RollbackOperationPersistenceError
+    RollbackOperationPersistenceError,
+    RollbackOperationScopeBusyError,
+    RollbackOperationScopeAmbiguousError
 } = require('./rollbackOperation.errors');
 const { logRollbackOperationEvent } = require('./rollbackOperation.log');
 const { getSharedRollbackOperationStore } = require('./rollbackOperation.resolver');
 const {
-    createRollbackOperationService,
-    evaluateExistingOperation
+    createRollbackOperationService
 } = require('./rollbackOperation.service');
 const {
     CHECK_ONLY_STATUS,
@@ -429,14 +430,34 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             );
         }
 
-        let existing;
+        let claim;
 
         try {
-            existing = await operationService.findLatestForSnapshot(
-                snapshot.destinationOrgId,
-                snapshot.snapshotId
-            );
+            claim = await operationService.claimOperation({
+                snapshotId: snapshot.snapshotId,
+                destinationOrgId: snapshot.destinationOrgId,
+                sourceDeploymentId: args.sourceDeploymentId || null,
+                rollbackOfHistoryId: args.rollbackOfHistoryId || null
+            });
         } catch (error) {
+            if (error instanceof RollbackOperationScopeBusyError) {
+                return block(
+                    ROLLBACK_CODE.SCOPE_BUSY,
+                    error.message ||
+                        'Another rollback is already claiming this destination and snapshot.',
+                    { snapshotId }
+                );
+            }
+
+            if (error instanceof RollbackOperationScopeAmbiguousError) {
+                return block(
+                    ROLLBACK_CODE.SCOPE_AMBIGUOUS,
+                    error.message ||
+                        'Rollback operation scope is ambiguous; Salesforce execution is blocked.',
+                    { snapshotId }
+                );
+            }
+
             return block(
                 ROLLBACK_CODE.OPERATION_STORE_UNAVAILABLE,
                 error.message || 'Rollback operation store is unavailable.',
@@ -444,7 +465,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             );
         }
 
-        const decision = evaluateExistingOperation(existing);
+        const decision = claim.decision;
+        const existing = claim.operation || null;
 
         if (decision.action === 'BLOCK_IN_PROGRESS') {
             logRollbackOperationEvent('ROLLBACK_OPERATION_DUPLICATE', existing);
@@ -482,7 +504,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             );
         }
 
-        let operation = null;
+        let operation = claim.operation || null;
         let lockHandle = null;
         let stopHeartbeat = () => {};
         let generatedWorkspace = null;
@@ -490,50 +512,33 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
         let executionStarted = false;
 
         try {
-            if (decision.action === 'RESUME') {
-                operation = existing;
-            } else {
+            if (!operation?.operationId) {
+                return block(
+                    ROLLBACK_CODE.SCOPE_AMBIGUOUS,
+                    'Rollback operation could not be claimed for this destination and snapshot.',
+                    { snapshotId }
+                );
+            }
+
+            if (operation.status === ROLLBACK_OPERATION_STATUS.NOT_STARTED) {
                 try {
-                    operation = await operationService.createOperation({
-                        snapshotId: snapshot.snapshotId,
-                        destinationOrgId: snapshot.destinationOrgId,
-                        sourceDeploymentId: args.sourceDeploymentId || null,
-                        rollbackOfHistoryId: args.rollbackOfHistoryId || null,
-                        retryOfOperationId:
-                            decision.action === 'RETRY'
-                                ? existing.operationId
-                                : null
-                    });
+                    operation = await operationService.transitionToInProgress(
+                        operation.operationId
+                    );
                 } catch (error) {
                     if (error instanceof RollbackOperationPersistenceError) {
-                        return block(
-                            ROLLBACK_CODE.OPERATION_STORE_UNAVAILABLE,
-                            error.message,
-                            { snapshotId }
+                        return withOperation(
+                            block(
+                                ROLLBACK_CODE.OPERATION_STORE_UNAVAILABLE,
+                                error.message,
+                                { snapshotId }
+                            ),
+                            operation
                         );
                     }
 
                     throw error;
                 }
-            }
-
-            try {
-                operation = await operationService.transitionToInProgress(
-                    operation.operationId
-                );
-            } catch (error) {
-                if (error instanceof RollbackOperationPersistenceError) {
-                    return withOperation(
-                        block(
-                            ROLLBACK_CODE.OPERATION_STORE_UNAVAILABLE,
-                            error.message,
-                            { snapshotId }
-                        ),
-                        operation
-                    );
-                }
-
-                throw error;
             }
 
             let verifiedOrgId;

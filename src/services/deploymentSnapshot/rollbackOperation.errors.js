@@ -43,10 +43,34 @@ class RollbackOperationSchemaError extends RollbackOperationError {
     }
 }
 
+class RollbackOperationScopeBusyError extends RollbackOperationError {
+    constructor(message) {
+        super(
+            message ||
+                'Another rollback operation is mutating the same destination and snapshot scope.',
+            'ROLLBACK_OPERATION_SCOPE_BUSY'
+        );
+        this.name = 'RollbackOperationScopeBusyError';
+    }
+}
+
+class RollbackOperationScopeAmbiguousError extends RollbackOperationError {
+    constructor(message) {
+        super(
+            message ||
+                'Rollback scope state is ambiguous and cannot be used to start Salesforce execution.',
+            'ROLLBACK_OPERATION_SCOPE_AMBIGUOUS'
+        );
+        this.name = 'RollbackOperationScopeAmbiguousError';
+    }
+}
+
 module.exports = {
     RollbackOperationError,
     RollbackOperationStateError,
     RollbackOperationNotFoundError,
     RollbackOperationPersistenceError,
-    RollbackOperationSchemaError
+    RollbackOperationSchemaError,
+    RollbackOperationScopeBusyError,
+    RollbackOperationScopeAmbiguousError
 };

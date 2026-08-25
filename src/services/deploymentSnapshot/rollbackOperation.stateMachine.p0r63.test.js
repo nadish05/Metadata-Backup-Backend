@@ -84,25 +84,33 @@ function service() {
         assert.strictEqual(evaluateExistingOperation(null).action, 'CREATE');
         assert.strictEqual(
             evaluateExistingOperation({
-                status: ROLLBACK_OPERATION_STATUS.IN_PROGRESS
+                status: ROLLBACK_OPERATION_STATUS.IN_PROGRESS,
+                destinationOrgId: '00D1',
+                snapshotId: 'snap-eval'
             }).action,
             'BLOCK_IN_PROGRESS'
         );
         assert.strictEqual(
             evaluateExistingOperation({
-                status: ROLLBACK_OPERATION_STATUS.SUCCEEDED
+                status: ROLLBACK_OPERATION_STATUS.SUCCEEDED,
+                destinationOrgId: '00D1',
+                snapshotId: 'snap-eval'
             }).action,
             'BLOCK_COMPLETED'
         );
         assert.strictEqual(
             evaluateExistingOperation({
-                status: ROLLBACK_OPERATION_STATUS.FAILED
+                status: ROLLBACK_OPERATION_STATUS.FAILED,
+                destinationOrgId: '00D1',
+                snapshotId: 'snap-eval'
             }).action,
             'RETRY'
         );
         assert.strictEqual(
             evaluateExistingOperation({
-                status: ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT
+                status: ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT,
+                destinationOrgId: '00D1',
+                snapshotId: 'snap-eval'
             }).action,
             'BLOCK_UNKNOWN'
         );

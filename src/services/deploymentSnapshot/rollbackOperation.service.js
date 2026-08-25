@@ -5,10 +5,17 @@ const crypto = require('crypto');
 const { sanitizeHistoryRecord } = require('../deploymentHistory.sanitize');
 const {
     RollbackOperationPersistenceError,
-    RollbackOperationStateError
+    RollbackOperationStateError,
+    RollbackOperationScopeBusyError,
+    RollbackOperationScopeAmbiguousError
 } = require('./rollbackOperation.errors');
 const { logRollbackOperationEvent } = require('./rollbackOperation.log');
 const { getSharedRollbackOperationStore } = require('./rollbackOperation.resolver');
+const {
+    buildRollbackScopeKey,
+    evaluateExistingOperation,
+    evaluateExistingOperations
+} = require('./rollbackOperation.scope');
 const {
     CHECK_ONLY_STATUS,
     ROLLBACK_OPERATION_SCHEMA_VERSION,
@@ -35,15 +42,6 @@ function generateOperationId() {
     return `rbo-${crypto.randomBytes(8).toString('hex')}`;
 }
 
-function pickLatest(records) {
-    return [...(records || [])].sort((left, right) => {
-        const leftTime = Date.parse(left.updatedAt || left.createdAt || 0);
-        const rightTime = Date.parse(right.updatedAt || right.createdAt || 0);
-
-        return rightTime - leftTime;
-    })[0] || null;
-}
-
 function sanitizeOperation(record) {
     return sanitizeHistoryRecord(record);
 }
@@ -56,34 +54,6 @@ function assertAutomaticTransition(fromStatus, toStatus) {
             `Invalid rollback operation transition: ${fromStatus} -> ${toStatus}`
         );
     }
-}
-
-function evaluateExistingOperation(existing) {
-    if (!existing) {
-        return { action: 'CREATE' };
-    }
-
-    if (existing.status === ROLLBACK_OPERATION_STATUS.NOT_STARTED) {
-        return { action: 'RESUME', existing };
-    }
-
-    if (existing.status === ROLLBACK_OPERATION_STATUS.IN_PROGRESS) {
-        return { action: 'BLOCK_IN_PROGRESS', existing };
-    }
-
-    if (existing.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED) {
-        return { action: 'BLOCK_COMPLETED', existing };
-    }
-
-    if (existing.status === ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT) {
-        return { action: 'BLOCK_UNKNOWN', existing };
-    }
-
-    if (existing.status === ROLLBACK_OPERATION_STATUS.FAILED) {
-        return { action: 'RETRY', existing };
-    }
-
-    return { action: 'BLOCK_UNKNOWN', existing };
 }
 
 function classifyExecutionResult(mappedResult) {
@@ -152,17 +122,49 @@ function createRollbackOperationService({ getStore } = {}) {
             destinationOrgId,
             snapshotId
         );
+        const decision = evaluateExistingOperations(records);
 
-        return pickLatest(records);
+        return decision.existing || null;
+    }
+
+    async function findOperationsForSnapshot(destinationOrgId, snapshotId) {
+        return resolveStore().findByDestinationAndSnapshot(
+            destinationOrgId,
+            snapshotId
+        );
+    }
+
+    function buildScopeRecord(rollbackScopeKey, input, operation, previous, records) {
+        const operationIds = [
+            ...((previous && previous.operationIds) || []),
+            ...(records || []).map((record) => record.operationId),
+            operation.operationId
+        ].filter(Boolean);
+
+        return {
+            schemaVersion: 1,
+            rollbackScopeKey,
+            destinationOrgId: input.destinationOrgId,
+            snapshotId: input.snapshotId,
+            activeOperationId: operation.operationId,
+            operationIds: [...new Set(operationIds)],
+            status: operation.status,
+            updatedAt: nowIso()
+        };
     }
 
     async function createOperation(input) {
         const createdAt = nowIso();
+        const rollbackScopeKey = buildRollbackScopeKey(
+            input.destinationOrgId,
+            input.snapshotId
+        );
         const record = sanitizeOperation({
             schemaVersion: ROLLBACK_OPERATION_SCHEMA_VERSION,
             operationId: input.operationId || generateOperationId(),
             operationType: ROLLBACK_OPERATION_TYPE,
             snapshotId: input.snapshotId,
+            rollbackScopeKey,
             rollbackOfHistoryId: input.rollbackOfHistoryId || null,
             retryOfOperationId: input.retryOfOperationId || null,
             destinationOrgId: input.destinationOrgId,
@@ -202,6 +204,104 @@ function createRollbackOperationService({ getStore } = {}) {
         );
 
         return stored;
+    }
+
+    async function claimOperation(input, attempt = 0) {
+        const rollbackScopeKey = buildRollbackScopeKey(
+            input.destinationOrgId,
+            input.snapshotId
+        );
+        const store = resolveStore();
+
+        async function decideAndMaybeCreate(previousScope) {
+            const records = await store.findByDestinationAndSnapshot(
+                input.destinationOrgId,
+                input.snapshotId
+            );
+            const decision = evaluateExistingOperations(records);
+
+            if (
+                decision.action === 'BLOCK_COMPLETED' ||
+                decision.action === 'BLOCK_UNKNOWN' ||
+                decision.action === 'BLOCK_IN_PROGRESS'
+            ) {
+                return {
+                    decision,
+                    operation: decision.existing,
+                    scope:
+                        decision.existing && !previousScope
+                            ? buildScopeRecord(
+                                  rollbackScopeKey,
+                                  input,
+                                  decision.existing,
+                                  previousScope,
+                                  records
+                              )
+                            : undefined
+                };
+            }
+
+            let operation = decision.existing;
+
+            if (decision.action !== 'RESUME') {
+                operation = await createOperation({
+                    ...input,
+                    rollbackOfHistoryId: input.rollbackOfHistoryId || null,
+                    retryOfOperationId:
+                        decision.action === 'RETRY'
+                            ? decision.existing?.operationId
+                            : null
+                });
+            }
+
+            operation = await transitionToInProgress(operation.operationId);
+
+            return {
+                decision,
+                operation,
+                scope: buildScopeRecord(
+                    rollbackScopeKey,
+                    input,
+                    operation,
+                    previousScope,
+                    records
+                )
+            };
+        }
+
+        try {
+            return await store.withExclusiveScope(
+                rollbackScopeKey,
+                decideAndMaybeCreate
+            );
+        } catch (error) {
+            if (!(error instanceof RollbackOperationScopeBusyError)) {
+                throw error;
+            }
+
+            const records = await store.findByDestinationAndSnapshot(
+                input.destinationOrgId,
+                input.snapshotId
+            );
+            const decision = evaluateExistingOperations(records);
+
+            if (decision.action !== 'CREATE') {
+                return {
+                    decision,
+                    operation: decision.existing
+                };
+            }
+
+            if (attempt >= 25) {
+                throw new RollbackOperationScopeAmbiguousError(
+                    'Rollback scope is busy and no durable operation could be confirmed.'
+                );
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, 20));
+
+            return claimOperation(input, attempt + 1);
+        }
     }
 
     async function transitionToInProgress(operationId) {
@@ -367,8 +467,11 @@ function createRollbackOperationService({ getStore } = {}) {
 
     return {
         findLatestForSnapshot,
+        findOperationsForSnapshot,
         evaluateExistingOperation,
+        evaluateExistingOperations,
         createOperation,
+        claimOperation,
         transitionToInProgress,
         markExecutionStarted,
         markTerminal,
@@ -385,6 +488,7 @@ module.exports = {
     classifyExecutionResult,
     createRollbackOperationService,
     evaluateExistingOperation,
+    evaluateExistingOperations,
     generateOperationId,
     RollbackOperationPersistenceError
 };

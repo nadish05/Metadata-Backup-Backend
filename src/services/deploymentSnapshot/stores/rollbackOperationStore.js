@@ -7,7 +7,9 @@ const ROLLBACK_OPERATION_STORE_METHODS = Object.freeze([
     'findBySnapshotId',
     'findByOperationId',
     'findBySalesforceDeploymentId',
-    'findByDestinationAndSnapshot'
+    'findByDestinationAndSnapshot',
+    'getScope',
+    'withExclusiveScope'
 ]);
 
 function assertRollbackOperationStore(store) {

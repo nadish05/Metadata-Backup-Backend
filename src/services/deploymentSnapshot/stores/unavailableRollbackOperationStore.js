@@ -14,7 +14,9 @@ function createUnavailableRollbackOperationStore(message) {
         findBySnapshotId: fail,
         findByOperationId: fail,
         findBySalesforceDeploymentId: fail,
-        findByDestinationAndSnapshot: fail
+        findByDestinationAndSnapshot: fail,
+        getScope: fail,
+        withExclusiveScope: fail
     };
 }
 
