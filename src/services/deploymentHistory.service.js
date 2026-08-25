@@ -175,6 +175,13 @@ function resolveHistoryStatus({
     deploymentResult
 }) {
     if (
+        deploymentResult?.status === 'UNKNOWN_RESULT' ||
+        deploymentResult?.operationStatus === 'UNKNOWN_RESULT'
+    ) {
+        return 'UNKNOWN_RESULT';
+    }
+
+    if (
         deploymentReadiness?.canDeploy === false ||
         generatedWorkspace?.status === 'BLOCKED' ||
         deploymentResult?.status === 'BLOCKED'

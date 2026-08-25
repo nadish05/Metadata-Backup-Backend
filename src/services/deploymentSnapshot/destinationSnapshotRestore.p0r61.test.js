@@ -42,6 +42,9 @@ const {
 const {
     createMemoryDeploymentHistoryStore
 } = require('../deploymentHistoryStores/memoryDeploymentHistoryStore');
+const {
+    createMemoryRollbackOperationStore
+} = require('./stores/memoryRollbackOperationStore');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -110,7 +113,8 @@ function createRestore({
     rollbackEnabled = true,
     lockEnabled = true,
     historyService = null,
-    startLockHeartbeat
+    startLockHeartbeat,
+    operationStore = createMemoryRollbackOperationStore()
 } = {}) {
     const events = [];
     let executions = 0;
@@ -118,6 +122,7 @@ function createRestore({
     let checkOnlyCalls = 0;
 
     const service = createDestinationSnapshotRestoreService({
+        getRollbackOperationStore: () => operationStore,
         captureService: capture,
         isSnapshotRollbackEnabled: () => rollbackEnabled,
         isDurableSnapshotStorageReady: () => durable,
@@ -166,6 +171,7 @@ function createRestore({
     return {
         service,
         events,
+        operationStore,
         counts: () => ({ executions, retrieves, checkOnlyCalls })
     };
 }
@@ -453,9 +459,8 @@ function createRestore({
     });
 
     await runTest('C === B proceeds; C === A DRIFTED UNKNOWN and mixed block entirely', async () => {
-        const { capture, sealed } = await sealEligible();
-
-        async function driftCase(bytes, expectedCode) {
+        async function driftCase(bytes) {
+            const { capture, sealed } = await sealEligible();
             const restore = createRestore({
                 capture,
                 lockService: createOrgLockService({
@@ -499,15 +504,16 @@ function createRestore({
             DRIFT_CLASSIFICATION.DRIFTED
         );
 
+        const missingSealed = await sealEligible();
         const missingC = createRestore({
-            capture,
+            capture: missingSealed.capture,
             lockService: createOrgLockService({
                 store: createMemoryOrgLockStore()
             }),
             retrieveBytes: Buffer.alloc(0)
         });
         const missing = await missingC.service.runRollback({
-            snapshotId: sealed.snapshotId,
+            snapshotId: missingSealed.sealed.snapshotId,
             refreshToken: 'refresh',
             instanceUrl: 'https://dest.example.com'
         });
@@ -599,7 +605,7 @@ function createRestore({
             refreshToken: 'refresh',
             instanceUrl: 'https://dest.example.com'
         });
-        assert.strictEqual(thrown.code, ROLLBACK_CODE.EXECUTION_FAILED);
+        assert.strictEqual(thrown.code, ROLLBACK_CODE.RESULT_UNKNOWN);
         assert.strictEqual(
             throwLock.get({ destinationOrgId: '00D000000000001' }).status,
             LOCK_STATUS.RELEASED
