@@ -125,6 +125,7 @@ function fromSalesforceOperation(record) {
             toText(sfField(record, 'Snapshot_Id__c', 'snapshotId')) ||
             (parsedScope && parsedScope.snapshotId),
         rollbackScopeKey: parsedScope ? parsedScope.nodeKey : null,
+        activeScopeKey: mapActiveScopeKey(record),
         status: toText(sfField(record, 'Status__c', 'status')),
         retryOfOperationId: toText(
             sfField(record, 'Retry_Of_Operation_Id__c', 'retryOfOperationId')
@@ -141,6 +142,18 @@ function fromSalesforceOperation(record) {
         resultCode: toText(sfField(record, 'Result_Code__c', 'resultCode')),
         resultMessage: toText(sfField(record, 'Result_Message__c', 'resultMessage'))
     };
+}
+
+function mapActiveScopeKey(record) {
+    const salesforceActive = toText(
+        sfField(record, 'Active_Scope_Key__c', 'activeScopeKey')
+    );
+
+    if (!salesforceActive) {
+        return null;
+    }
+
+    return fromSalesforceRollbackScopeKey(salesforceActive).nodeKey;
 }
 
 function isTerminalStatus(status) {

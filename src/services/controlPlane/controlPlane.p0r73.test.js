@@ -590,6 +590,58 @@ function createClient(httpRequest, extras = {}) {
         );
     });
 
+    await runTest('11b. Active_Scope_Key mapping and historical list', async () => {
+        const failed = operationRecord({
+            Operation_Id__c: 'rbo-1',
+            Status__c: 'FAILED',
+            Active_Scope_Key__c: null
+        });
+        const retry = operationRecord({
+            Operation_Id__c: 'rbo-2',
+            Status__c: 'NOT_STARTED',
+            Active_Scope_Key__c: '00Ddest|snapshot_1',
+            Retry_Of_Operation_Id__c: 'rbo-1'
+        });
+        const { httpRequest } = createMockHttp((config) => {
+            const method = String(config.method || 'GET').toUpperCase();
+            if (method === 'GET' && String(config.url).endsWith('/operations')) {
+                return {
+                    status: 200,
+                    data: { success: true, records: [failed, retry] }
+                };
+            }
+            return fail(409, 'DUPLICATE_VALUE', 'Duplicate value rejected.', {
+                field: 'Active_Scope_Key__c'
+            });
+        });
+        const store = createSalesforceControlPlaneRollbackOperationStore({
+            client: createClient(httpRequest)
+        });
+        const rows = await store.findByDestinationAndSnapshot(
+            '00Ddest',
+            'snapshot_1'
+        );
+        assert.strictEqual(rows.length, 2);
+        assert.strictEqual(
+            rows.find((row) => row.operationId === 'rbo-1').activeScopeKey,
+            null
+        );
+        assert.strictEqual(
+            rows.find((row) => row.operationId === 'rbo-2').activeScopeKey,
+            '00Ddest::snapshot_1'
+        );
+        await assert.rejects(
+            () =>
+                store.createOperation({
+                    operationId: 'rbo-3',
+                    destinationOrgId: '00Ddest',
+                    snapshotId: 'snapshot_1',
+                    rollbackScopeKey: '00Ddest::snapshot_1'
+                }),
+            /Duplicate rollback scope rejected/
+        );
+    });
+
     await runTest('12-16. lock acquire, busy, renew, release, generation mismatch', async () => {
         const { httpRequest } = createMockHttp((config) => {
             const key = routeKey(config);

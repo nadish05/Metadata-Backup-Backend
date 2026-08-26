@@ -49,7 +49,10 @@ function mapOperationError(error, operationId) {
         error instanceof ControlPlaneError &&
         error.code === CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_CONFLICT
     ) {
-        if (error.field === 'Rollback_Scope_Key__c') {
+        if (
+            error.field === 'Rollback_Scope_Key__c' ||
+            error.field === 'Active_Scope_Key__c'
+        ) {
             return new ControlPlaneError(
                 CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_CONFLICT,
                 'Duplicate rollback scope rejected.',
@@ -216,7 +219,13 @@ function createSalesforceControlPlaneRollbackOperationStore(options = {}) {
                 }
             });
 
-            return [fromSalesforceOperation(envelope.record)];
+            const rows = Array.isArray(envelope.records) && envelope.records.length
+                ? envelope.records
+                : envelope.record
+                    ? [envelope.record]
+                    : [];
+
+            return rows.map((row) => fromSalesforceOperation(row));
         } catch (error) {
             if (
                 error instanceof ControlPlaneError &&
@@ -255,21 +264,22 @@ function createSalesforceControlPlaneRollbackOperationStore(options = {}) {
             parsed.destinationOrgId,
             parsed.snapshotId
         );
-        const existing = records[0];
-
-        if (!existing) {
+        if (!records.length) {
             return null;
         }
+
+        const active =
+            records.find((row) => row.activeScopeKey) || records[0];
 
         return {
             schemaVersion: 1,
             rollbackScopeKey,
             destinationOrgId: parsed.destinationOrgId,
             snapshotId: parsed.snapshotId,
-            activeOperationId: existing.operationId,
-            operationIds: [existing.operationId],
-            status: existing.status,
-            updatedAt: existing.updatedAt
+            activeOperationId: active.operationId,
+            operationIds: records.map((row) => row.operationId),
+            status: active.status,
+            updatedAt: active.updatedAt
         };
     }
 
