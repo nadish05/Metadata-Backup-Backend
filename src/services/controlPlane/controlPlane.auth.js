@@ -24,11 +24,34 @@ function createAuthUnavailableError() {
     );
 }
 
+function isNonEmptyString(value) {
+    return typeof value === 'string' && value.trim() !== '';
+}
+
+function isUsableAuthResult(resolved) {
+    return (
+        resolved &&
+        typeof resolved === 'object' &&
+        resolved.ok === true &&
+        isNonEmptyString(resolved.accessToken) &&
+        isNonEmptyString(resolved.instanceUrl)
+    );
+}
+
 function resolveControlPlaneAuth({ provider } = {}) {
     if (typeof provider === 'function') {
-        const resolved = provider();
+        let resolved;
 
-        if (resolved && resolved.ok === true && resolved.accessToken && resolved.instanceUrl) {
+        try {
+            resolved = provider();
+        } catch (error) {
+            return {
+                ok: false,
+                error: createAuthUnavailableError()
+            };
+        }
+
+        if (isUsableAuthResult(resolved)) {
             return {
                 ok: true,
                 accessToken: resolved.accessToken,
@@ -39,7 +62,10 @@ function resolveControlPlaneAuth({ provider } = {}) {
 
         return {
             ok: false,
-            error: resolved?.error || createAuthUnavailableError()
+            error:
+                resolved && resolved.error instanceof ControlPlaneError
+                    ? resolved.error
+                    : createAuthUnavailableError()
         };
     }
 

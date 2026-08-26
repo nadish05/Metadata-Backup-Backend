@@ -7,8 +7,10 @@ const {
     ControlPlaneError
 } = require('../controlPlane.errors');
 const { createAuthUnavailableError } = require('../controlPlane.auth');
-const { toSalesforceHistoryPayload } = require('../controlPlane.historyMapping');
-const { MISSING_CONTROL_PLANE_ENDPOINTS } = require('../controlPlane.missingEndpoints');
+const {
+    fromSalesforceHistoryRecord,
+    toSalesforceHistoryPayload
+} = require('../controlPlane.historyMapping');
 
 function resolveClient(options = {}) {
     if (options.client) {
@@ -22,15 +24,32 @@ function resolveClient(options = {}) {
     throw createAuthUnavailableError();
 }
 
-function missingHistoryEndpoint(endpointKey) {
-    return new ControlPlaneError(
-        CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_UNAVAILABLE,
-        MISSING_CONTROL_PLANE_ENDPOINTS[endpointKey]
-    );
-}
-
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
+}
+
+function mapHistoryReadError(error) {
+    if (
+        error instanceof ControlPlaneError &&
+        error.code === CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_NOT_FOUND
+    ) {
+        return null;
+    }
+
+    return error;
+}
+
+function requireHistorySuccess(result, fallbackMessage) {
+    const data = result && result.data;
+
+    if (!data || data.success !== true) {
+        throw new ControlPlaneError(
+            CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_UNAVAILABLE,
+            String((data && data.message) || fallbackMessage)
+        );
+    }
+
+    return data;
 }
 
 function createSalesforceControlPlaneDeploymentHistoryStore(options = {}) {
@@ -63,34 +82,128 @@ function createSalesforceControlPlaneDeploymentHistoryStore(options = {}) {
         });
     }
 
-    async function get() {
-        resolveClient(options);
-        throw missingHistoryEndpoint('historyGet');
+    async function get(historyId) {
+        const client = resolveClient(options);
+
+        try {
+            const result = await client.deploymentHistory('GET', {
+                path: `/${encodeURIComponent(historyId)}`
+            });
+            const data = requireHistorySuccess(result, 'Unable to read deployment history.');
+
+            return fromSalesforceHistoryRecord(data.record);
+        } catch (error) {
+            const mapped = mapHistoryReadError(error);
+
+            if (mapped === null) {
+                return null;
+            }
+
+            throw mapped;
+        }
     }
 
-    async function exists() {
-        resolveClient(options);
-        throw missingHistoryEndpoint('historyGet');
+    async function exists(historyId) {
+        return (await get(historyId)) != null;
     }
 
-    async function update() {
-        resolveClient(options);
-        throw missingHistoryEndpoint('historyUpdate');
+    async function update(historyId, record) {
+        const client = resolveClient(options);
+
+        try {
+            const result = await client.deploymentHistory('PATCH', {
+                path: `/${encodeURIComponent(historyId)}`,
+                body: toSalesforceHistoryPayload(record)
+            });
+            const data = requireHistorySuccess(
+                result,
+                'Unable to update deployment history.'
+            );
+
+            return (
+                fromSalesforceHistoryRecord(data.record) ||
+                sanitizeHistoryRecord({
+                    ...clone(record),
+                    historyId,
+                    salesforceRecordId: data.recordId || null
+                })
+            );
+        } catch (error) {
+            const mapped = mapHistoryReadError(error);
+
+            if (mapped === null) {
+                return null;
+            }
+
+            throw mapped;
+        }
     }
 
     async function list() {
-        resolveClient(options);
-        throw missingHistoryEndpoint('historyList');
+        const client = resolveClient(options);
+        const result = await client.deploymentHistory('GET', { path: '' });
+        const data = requireHistorySuccess(result, 'Unable to list deployment history.');
+        const records = Array.isArray(data.records) ? data.records : [];
+
+        return records.map((row) => fromSalesforceHistoryRecord(row)).filter(Boolean);
     }
 
-    async function findBySnapshotId() {
-        resolveClient(options);
-        throw missingHistoryEndpoint('historyList');
+    async function findBySnapshotId(snapshotId) {
+        if (!snapshotId) {
+            return null;
+        }
+
+        const client = resolveClient(options);
+
+        try {
+            const result = await client.deploymentHistory('GET', {
+                path: '',
+                query: { snapshotId }
+            });
+            const data = requireHistorySuccess(
+                result,
+                'Unable to find deployment history.'
+            );
+
+            return fromSalesforceHistoryRecord(data.record);
+        } catch (error) {
+            const mapped = mapHistoryReadError(error);
+
+            if (mapped === null) {
+                return null;
+            }
+
+            throw mapped;
+        }
     }
 
-    async function findBySalesforceDeploymentId() {
-        resolveClient(options);
-        throw missingHistoryEndpoint('historyList');
+    async function findBySalesforceDeploymentId(salesforceDeploymentId) {
+        if (!salesforceDeploymentId) {
+            return null;
+        }
+
+        const client = resolveClient(options);
+
+        try {
+            const result = await client.deploymentHistory('GET', {
+                path: '',
+                query: { salesforceDeploymentId }
+            });
+            const data = requireHistorySuccess(
+                result,
+                'Unable to find deployment history.'
+            );
+
+            return fromSalesforceHistoryRecord(data.record);
+        } catch (error) {
+            const mapped = mapHistoryReadError(error);
+
+            if (mapped === null) {
+                return null;
+            }
+
+            throw mapped;
+        }
     }
 
     return {

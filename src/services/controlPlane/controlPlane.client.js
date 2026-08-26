@@ -32,7 +32,7 @@ function parseJsonBody(data) {
         return null;
     }
 
-    if (typeof data === 'object') {
+    if (typeof data === 'object' && !Buffer.isBuffer(data) && !(data instanceof ArrayBuffer) && !(data instanceof Uint8Array)) {
         return data;
     }
 
@@ -45,6 +45,40 @@ function parseJsonBody(data) {
     } catch (error) {
         return null;
     }
+}
+
+function bufferFromUnknown(data) {
+    if (Buffer.isBuffer(data)) {
+        return data;
+    }
+
+    if (data instanceof ArrayBuffer) {
+        return Buffer.from(data);
+    }
+
+    if (data instanceof Uint8Array) {
+        return Buffer.from(data);
+    }
+
+    if (typeof data === 'string') {
+        return Buffer.from(data, 'binary');
+    }
+
+    return null;
+}
+
+function jsonFromMaybeBinary(data) {
+    if (data && typeof data === 'object' && !Buffer.isBuffer(data) && !(data instanceof ArrayBuffer) && !(data instanceof Uint8Array)) {
+        return parseJsonBody(data);
+    }
+
+    const buffer = bufferFromUnknown(data);
+
+    if (!buffer) {
+        return parseJsonBody(data);
+    }
+
+    return parseJsonBody(buffer.toString('utf8'));
 }
 
 function salesforceFaultCode(data) {
@@ -149,8 +183,18 @@ function createSalesforceControlPlaneClient({
                 validateStatus: () => true
             }));
 
-    async function send({ method, path, body, query, apexRoot = CONTROL_PLANE_ROOT }) {
+    async function send({
+        method,
+        path,
+        body,
+        query,
+        apexRoot = CONTROL_PLANE_ROOT,
+        contentType,
+        headers,
+        responseKind = 'json'
+    }) {
         const url = `${baseUrl}${apexRoot}${path || ''}`;
+        const binary = responseKind === 'binary';
 
         let response;
 
@@ -162,9 +206,11 @@ function createSalesforceControlPlaneClient({
                 params: query,
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json'
+                    'Content-Type': contentType || 'application/json',
+                    ...(headers || {})
                 },
                 timeout: timeoutMs,
+                responseType: binary ? 'arraybuffer' : 'json',
                 validateStatus: () => true
             });
         } catch (error) {
@@ -183,7 +229,6 @@ function createSalesforceControlPlaneClient({
         }
 
         const status = response && response.status;
-        const data = parseJsonBody(response && response.data);
 
         if (status === 408) {
             throw new ControlPlaneError(
@@ -192,6 +237,28 @@ function createSalesforceControlPlaneClient({
                 { status }
             );
         }
+
+        if (binary && status < 400) {
+            const bytes = bufferFromUnknown(response && response.data);
+
+            if (!bytes) {
+                throw new ControlPlaneError(
+                    CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_INVALID_RESPONSE,
+                    'Control-plane artifact response was not binary.',
+                    { status }
+                );
+            }
+
+            return {
+                status,
+                data: bytes,
+                headers: (response && response.headers) || {}
+            };
+        }
+
+        const data = binary
+            ? jsonFromMaybeBinary(response && response.data)
+            : parseJsonBody(response && response.data);
 
         if (data === null) {
             throw new ControlPlaneError(
@@ -216,8 +283,15 @@ function createSalesforceControlPlaneClient({
             method,
             path: path.startsWith('/') ? path : `/${path}`,
             body: options.body,
-            query: options.query
+            query: options.query,
+            contentType: options.contentType,
+            headers: options.headers,
+            responseKind: options.responseKind || 'json'
         });
+
+        if (options.responseKind === 'binary') {
+            return result.data;
+        }
 
         const envelope = result.data;
 
@@ -235,10 +309,17 @@ function createSalesforceControlPlaneClient({
         return envelope;
     }
 
+    async function controlPlaneBinary(method, path, options = {}) {
+        return controlPlane(method, path, {
+            ...options,
+            responseKind: 'binary'
+        });
+    }
+
     async function deploymentHistory(method, options = {}) {
         return send({
             method,
-            path: '',
+            path: options.path || '',
             body: options.body,
             query: options.query,
             apexRoot: HISTORY_ROOT
@@ -247,6 +328,7 @@ function createSalesforceControlPlaneClient({
 
     return {
         controlPlane,
+        controlPlaneBinary,
         deploymentHistory,
         timeoutMs
     };

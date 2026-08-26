@@ -43,7 +43,6 @@ const {
     createSalesforceControlPlaneOrgLockStore
 } = require('./stores/salesforceControlPlaneOrgLockStore');
 const { OrgLockBusyError, OrgLockOwnershipError } = require('../deploymentOrgLock/deploymentOrgLock.errors');
-const { MISSING_CONTROL_PLANE_ENDPOINTS } = require('./controlPlane.missingEndpoints');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -413,19 +412,36 @@ function createClient(httpRequest, extras = {}) {
         assert.strictEqual(added.VersionData, undefined);
     });
 
-    await runTest('7. missing blob endpoint fails closed', async () => {
-        const store = createSalesforceControlPlaneSnapshotBlobStore({
-            client: createClient(async () => ok({}))
+    await runTest('7. blob store routes to snapshot artifact REST', async () => {
+        const artifactId =
+            'snapshots/snapshot_1/destination-before/ApexClass/AccountService';
+        const bytes = Buffer.from('packed-bytes');
+        let posted = null;
+        const { httpRequest } = createMockHttp((config) => {
+            posted = config;
+            const key = routeKey(config);
+            if (key.endsWith('/artifacts') && config.method === 'POST') {
+                assert.ok(Buffer.isBuffer(config.body) || Buffer.isBuffer(config.data));
+                return {
+                    status: 200,
+                    data: {
+                        success: true,
+                        artifactId,
+                        size: bytes.length,
+                        contentDocumentId: '069xx0000000001'
+                    }
+                };
+            }
+            return fail(404, 'NOT_FOUND', 'Unknown');
         });
-        await assert.rejects(
-            () => store.putArtifact({ artifactId: 'a', bytes: Buffer.from('x') }),
-            (error) =>
-                error.code === CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_UNAVAILABLE &&
-                error.message === MISSING_CONTROL_PLANE_ENDPOINTS.snapshotArtifactPut
-        );
-        await assert.rejects(() => store.getArtifact('a'), ControlPlaneError);
-        await assert.rejects(() => store.exists('a'), ControlPlaneError);
-        await assert.rejects(() => store.getMetadata('a'), ControlPlaneError);
+        const store = createSalesforceControlPlaneSnapshotBlobStore({
+            client: createClient(httpRequest)
+        });
+        const stored = await store.putArtifact({ artifactId, bytes });
+        assert.strictEqual(stored.artifactId, artifactId);
+        assert.strictEqual(stored.size, bytes.length);
+        assert.ok(String(posted.url).includes('/control-plane/snapshots/'));
+        assert.ok(String(posted.url).includes('/artifacts'));
     });
 
     await runTest('8. history mapping persists historyId snapshotId rollbackOfHistoryId', async () => {
@@ -461,7 +477,6 @@ function createClient(httpRequest, extras = {}) {
             deploymentId: '0Af1'
         });
         assert.strictEqual(mapped.historyId, 'hist-001');
-        await assert.rejects(() => store.get('hist-001'), ControlPlaneError);
     });
 
     await runTest('9. operation create/read/update', async () => {
