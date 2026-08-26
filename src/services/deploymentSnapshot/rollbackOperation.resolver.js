@@ -4,12 +4,17 @@ const {
     isDurableSnapshotStorageReady,
     resolveSnapshotStorageConfig
 } = require('./snapshotStorage.config');
+const { STORAGE_MODE } = require('./snapshotStorageCapability');
 const {
     createFileRollbackOperationStore
 } = require('./stores/fileRollbackOperationStore');
 const {
     createUnavailableRollbackOperationStore
 } = require('./stores/unavailableRollbackOperationStore');
+const {
+    createSalesforceControlPlaneRollbackOperationStore
+} = require('../controlPlane/stores/salesforceControlPlaneRollbackOperationStore');
+const { getSharedControlPlaneClient } = require('../controlPlane/controlPlane.runtime');
 
 const UNAVAILABLE_MESSAGE =
     'Durable rollback operation storage is not configured.';
@@ -18,15 +23,19 @@ let cachedKey = null;
 let cachedStore = null;
 
 function getSharedRollbackOperationStore() {
-    const ready = isDurableSnapshotStorageReady();
     const config = resolveSnapshotStorageConfig();
-    const key = `${ready}:${config.rootDir || ''}`;
+    const ready = isDurableSnapshotStorageReady();
+    const key = `${config.storageMode}:${ready}:${config.rootDir || ''}`;
 
     if (cachedStore && cachedKey === key) {
         return cachedStore;
     }
 
-    if (ready && config.rootDir) {
+    if (config.storageMode === STORAGE_MODE.CONTROL_ORG) {
+        cachedStore = createSalesforceControlPlaneRollbackOperationStore({
+            getClient: () => getSharedControlPlaneClient()
+        });
+    } else if (ready && config.rootDir) {
         cachedStore = createFileRollbackOperationStore({
             rootDir: config.rootDir
         });

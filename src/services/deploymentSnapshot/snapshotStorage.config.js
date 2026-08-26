@@ -7,7 +7,8 @@ const STORAGE_MODE_ENV = 'SNAPSHOT_STORAGE_MODE';
 const DURABLE_ROOT_ENV = 'SNAPSHOT_DURABLE_ROOT';
 const STORAGE_BACKEND = Object.freeze({
     MEMORY: 'MEMORY',
-    FILESYSTEM: 'FILESYSTEM'
+    FILESYSTEM: 'FILESYSTEM',
+    CONTROL_ORG: 'CONTROL_ORG'
 });
 
 const DURABLE_STORAGE_UNAVAILABLE_MESSAGE =
@@ -17,11 +18,21 @@ function resolveSnapshotStorageConfig(env = process.env) {
     const rawMode = String(env[STORAGE_MODE_ENV] || STORAGE_MODE.MEMORY)
         .trim()
         .toUpperCase();
+    const rootDir = String(env[DURABLE_ROOT_ENV] || '').trim();
+
+    if (rawMode === STORAGE_MODE.CONTROL_ORG) {
+        return {
+            storageMode: STORAGE_MODE.CONTROL_ORG,
+            rootDir: rootDir || null,
+            backend: STORAGE_BACKEND.CONTROL_ORG,
+            configured: true
+        };
+    }
+
     const storageMode =
         rawMode === STORAGE_MODE.DURABLE
             ? STORAGE_MODE.DURABLE
             : STORAGE_MODE.MEMORY;
-    const rootDir = String(env[DURABLE_ROOT_ENV] || '').trim();
 
     return {
         storageMode,

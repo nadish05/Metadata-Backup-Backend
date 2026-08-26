@@ -18,11 +18,21 @@ function startLockHeartbeat({
 
     const interval = setIntervalFn(() => {
         try {
-            lockService.renew({
+            const result = lockService.renew({
                 destinationOrgId,
                 ownerId,
                 leaseGeneration
             });
+
+            if (result && typeof result.then === 'function') {
+                result.catch(() => {
+                    logLockEvent('LOCK_HEARTBEAT_FAILED', {
+                        destinationOrgId,
+                        ownerId,
+                        leaseGeneration
+                    });
+                });
+            }
         } catch (error) {
             logLockEvent('LOCK_HEARTBEAT_FAILED', {
                 destinationOrgId,

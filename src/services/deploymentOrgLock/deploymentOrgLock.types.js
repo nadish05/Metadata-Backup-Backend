@@ -12,6 +12,7 @@ const LOCK_STATUS = Object.freeze({
 
 const LOCK_STORE_BACKEND = Object.freeze({
     FILESYSTEM: 'FILESYSTEM',
+    CONTROL_ORG: 'CONTROL_ORG',
     UNCONFIGURED: 'UNCONFIGURED'
 });
 

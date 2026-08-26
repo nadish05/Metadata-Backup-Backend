@@ -6,6 +6,10 @@ const {
 const {
     createFileDeploymentHistoryStore
 } = require('./deploymentHistoryStores/fileDeploymentHistoryStore');
+const {
+    createSalesforceControlPlaneDeploymentHistoryStore
+} = require('./controlPlane/stores/salesforceControlPlaneDeploymentHistoryStore');
+const { getSharedControlPlaneClient } = require('./controlPlane/controlPlane.runtime');
 
 const CAPTURE_FLAG_ENV = 'SNAPSHOT_CAPTURE_ON_DEPLOY';
 const STORAGE_MODE_ENV = 'SNAPSHOT_STORAGE_MODE';
@@ -48,8 +52,23 @@ const sharedMemoryStore = createMemoryDeploymentHistoryStore();
 
 let cachedDurableKey = null;
 let cachedDurableStore = null;
+let cachedControlOrgStore = null;
 
 function resolveDefaultHistoryStore(env = process.env) {
+    const storageMode = String(env[STORAGE_MODE_ENV] || 'MEMORY')
+        .trim()
+        .toUpperCase();
+
+    if (storageMode === 'CONTROL_ORG') {
+        if (!cachedControlOrgStore) {
+            cachedControlOrgStore = createSalesforceControlPlaneDeploymentHistoryStore({
+                getClient: () => getSharedControlPlaneClient()
+            });
+        }
+
+        return cachedControlOrgStore;
+    }
+
     if (!shouldUseDurableDeploymentHistory(env)) {
         return sharedMemoryStore;
     }
@@ -71,6 +90,7 @@ function resetDefaultHistoryStoreForTests() {
     sharedMemoryStore.clear();
     cachedDurableKey = null;
     cachedDurableStore = null;
+    cachedControlOrgStore = null;
 }
 
 module.exports = {

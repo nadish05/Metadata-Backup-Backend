@@ -25,10 +25,35 @@ function createOrgLockService({
         throw new Error('Org lock store is required.');
     }
 
+    function isThenable(value) {
+        return Boolean(value && typeof value.then === 'function');
+    }
+
     function withExpiry(record) {
         const expiresAt = new Date(now() + leaseMs).toISOString();
 
         return { ...record, expiresAt };
+    }
+
+    function finishAcquire(record) {
+        const held = withExpiry(record);
+        const renewed = store.renew({
+            destinationOrgId: held.destinationOrgId,
+            ownerId: held.ownerId,
+            leaseGeneration: held.leaseGeneration,
+            expiresAt: held.expiresAt
+        });
+
+        if (isThenable(renewed)) {
+            return renewed.then((next) => {
+                logLockEvent('LOCK_ACQUIRED', next);
+                return next;
+            });
+        }
+
+        logLockEvent('LOCK_ACQUIRED', renewed);
+
+        return renewed;
     }
 
     function acquire(args) {
@@ -46,17 +71,20 @@ function createOrgLockService({
             throw error;
         }
 
-        const held = withExpiry(record);
-        const renewed = store.renew({
-            destinationOrgId: held.destinationOrgId,
-            ownerId: held.ownerId,
-            leaseGeneration: held.leaseGeneration,
-            expiresAt: held.expiresAt
-        });
+        if (isThenable(record)) {
+            return record.then(
+                (resolved) => finishAcquire(resolved),
+                (error) => {
+                    if (error instanceof OrgLockBusyError) {
+                        logLockEvent('LOCK_BUSY', args);
+                    }
 
-        logLockEvent('LOCK_ACQUIRED', renewed);
+                    throw error;
+                }
+            );
+        }
 
-        return renewed;
+        return finishAcquire(record);
     }
 
     function renew(args) {

@@ -7,7 +7,8 @@
 
 const STORAGE_MODE = Object.freeze({
     MEMORY: 'MEMORY',
-    DURABLE: 'DURABLE'
+    DURABLE: 'DURABLE',
+    CONTROL_ORG: 'CONTROL_ORG'
 });
 
 const MEMORY_SNAPSHOT_STORAGE_CAPABILITY = Object.freeze({
@@ -40,11 +41,25 @@ const DURABLE_UNCONFIGURED_SNAPSHOT_STORAGE_CAPABILITY = Object.freeze({
     rollbackProductionReady: false
 });
 
+const CONTROL_ORG_SNAPSHOT_STORAGE_CAPABILITY = Object.freeze({
+    storageMode: STORAGE_MODE.CONTROL_ORG,
+    backend: 'CONTROL_ORG',
+    durable: true,
+    shared: true,
+    processLocal: false,
+    configured: true,
+    rollbackProductionReady: false
+});
+
 function isRollbackProductionReady(capability) {
     return capability?.rollbackProductionReady === true;
 }
 
 function buildSnapshotStorageCapability(config) {
+    if (config?.storageMode === STORAGE_MODE.CONTROL_ORG) {
+        return { ...CONTROL_ORG_SNAPSHOT_STORAGE_CAPABILITY };
+    }
+
     if (config?.storageMode === STORAGE_MODE.DURABLE && config?.rootDir) {
         return { ...DURABLE_SNAPSHOT_STORAGE_CAPABILITY };
     }
@@ -61,6 +76,7 @@ module.exports = {
     MEMORY_SNAPSHOT_STORAGE_CAPABILITY,
     DURABLE_SNAPSHOT_STORAGE_CAPABILITY,
     DURABLE_UNCONFIGURED_SNAPSHOT_STORAGE_CAPABILITY,
+    CONTROL_ORG_SNAPSHOT_STORAGE_CAPABILITY,
     isRollbackProductionReady,
     buildSnapshotStorageCapability
 };

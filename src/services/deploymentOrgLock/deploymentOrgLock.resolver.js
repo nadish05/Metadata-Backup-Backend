@@ -21,6 +21,10 @@ const { createFileOrgLockStore } = require('./stores/fileOrgLockStore');
 const {
     createUnavailableOrgLockStore
 } = require('./stores/unavailableOrgLockStore');
+const {
+    createSalesforceControlPlaneOrgLockStore
+} = require('../controlPlane/stores/salesforceControlPlaneOrgLockStore');
+const { getSharedControlPlaneClient } = require('../controlPlane/controlPlane.runtime');
 
 const UNCONFIGURED_MESSAGE =
     'Destination org lock store is not configured. Set DEPLOYMENT_LOCK_STORE=FILESYSTEM and DEPLOYMENT_LOCK_ROOT.';
@@ -38,6 +42,7 @@ function resolveLockConfig(env = process.env) {
     const leaseMs = parsePositiveInt(env[LEASE_MS_ENV], DEFAULT_LEASE_MS);
     const filesystemReady =
         storeName === LOCK_STORE_BACKEND.FILESYSTEM && Boolean(rootDir);
+    const controlOrgSelected = storeName === LOCK_STORE_BACKEND.CONTROL_ORG;
 
     return {
         storeName: storeName || LOCK_STORE_BACKEND.UNCONFIGURED,
@@ -45,6 +50,7 @@ function resolveLockConfig(env = process.env) {
         heartbeatMs,
         leaseMs,
         filesystemReady,
+        controlOrgSelected,
         productionDistributedReady: LOCK_PRODUCTION_DISTRIBUTED_READY
     };
 }
@@ -54,6 +60,12 @@ function isApprovedLockStoreReady(env = process.env) {
 }
 
 function createStoreForConfig(config) {
+    if (config.controlOrgSelected) {
+        return createSalesforceControlPlaneOrgLockStore({
+            getClient: () => getSharedControlPlaneClient()
+        });
+    }
+
     if (config.filesystemReady) {
         return createFileOrgLockStore({ rootDir: config.rootDir });
     }

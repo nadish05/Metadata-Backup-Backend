@@ -20,6 +20,13 @@ const {
     isDurableSnapshotStorageReady,
     DURABLE_STORAGE_UNAVAILABLE_MESSAGE
 } = require('./snapshotStorage.config');
+const {
+    createSalesforceControlPlaneSnapshotMetadataStore
+} = require('../controlPlane/stores/salesforceControlPlaneSnapshotMetadataStore');
+const {
+    createSalesforceControlPlaneSnapshotBlobStore
+} = require('../controlPlane/stores/salesforceControlPlaneSnapshotBlobStore');
+const { getSharedControlPlaneClient } = require('../controlPlane/controlPlane.runtime');
 
 let cachedKey = null;
 let cachedAccess = null;
@@ -78,6 +85,27 @@ function buildDurableAccess(rootDir) {
     });
 }
 
+function buildControlOrgAccess() {
+    const getClient = () => getSharedControlPlaneClient();
+    const metadataStore = createSalesforceControlPlaneSnapshotMetadataStore({
+        getClient
+    });
+    const blobStore = createSalesforceControlPlaneSnapshotBlobStore({
+        getClient
+    });
+    const captureService = createSnapshotCaptureService({
+        metadataStore,
+        blobStore
+    });
+
+    return wrapAccess({
+        captureService,
+        capability: buildSnapshotStorageCapability({
+            storageMode: STORAGE_MODE.CONTROL_ORG
+        })
+    });
+}
+
 function wrapAccess({ captureService, capability }) {
     return Object.freeze({
         captureService,
@@ -103,7 +131,9 @@ function getSharedSnapshotAccess() {
         return cachedAccess;
     }
 
-    if (config.storageMode === STORAGE_MODE.DURABLE && config.rootDir) {
+    if (config.storageMode === STORAGE_MODE.CONTROL_ORG) {
+        cachedAccess = buildControlOrgAccess();
+    } else if (config.storageMode === STORAGE_MODE.DURABLE && config.rootDir) {
         cachedAccess = buildDurableAccess(config.rootDir);
     } else if (config.storageMode === STORAGE_MODE.DURABLE) {
         cachedAccess = buildUnconfiguredDurableAccess();
