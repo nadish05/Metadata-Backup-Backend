@@ -9,6 +9,8 @@ const deploymentController =
         '../controllers/deployment.controller'
     );
 
+const deploymentRollbackController = require('../controllers/deploymentRollback.controller');
+
 const deploymentAiResolutionController = require('../controllers/deploymentAiResolution.controller');
 const deploymentSupportBundleController = require('../controllers/deploymentSupportBundle.controller');
 
@@ -33,6 +35,11 @@ router.get(
 router.post(
     '/validate',
     deploymentController.validateDeployment
+);
+
+router.post(
+    '/rollback',
+    deploymentRollbackController.rollbackDeployment
 );
 
 router.post(

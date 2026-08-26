@@ -74,18 +74,24 @@ runTest('protected deployment files do not import deploymentSnapshot', () => {
     }
 });
 
-runTest('no src file outside deploymentSnapshot requires the snapshot module except validateDeployment', () => {
+runTest('no src file outside deploymentSnapshot requires the snapshot module except validateDeployment and rollback', () => {
     const files = listJsFiles(SRC_ROOT).filter((filePath) => {
         const relative = path.relative(SNAPSHOT_DIR, filePath);
 
         return relative.startsWith('..');
     });
 
+    const allowedSnapshotIntegrations = new Set([
+        'services/deploymentValidation.service.js',
+        'services/deploymentRollback.service.js',
+        'services/deploymentRollback.p0r78.test.js'
+    ]);
+
     const offenders = files.filter((filePath) => {
         const source = fs.readFileSync(filePath, 'utf8');
         const relative = path.relative(SRC_ROOT, filePath).replace(/\\/g, '/');
 
-        if (relative === 'services/deploymentValidation.service.js') {
+        if (allowedSnapshotIntegrations.has(relative)) {
             return false;
         }
 
@@ -98,7 +104,7 @@ runTest('no src file outside deploymentSnapshot requires the snapshot module exc
     );
 });
 
-runTest('validateDeployment is the only deployment-engine snapshot integration', () => {
+runTest('validateDeployment is the only deployment-engine snapshot capture integration', () => {
     const filePath = path.join(
         SRC_ROOT,
         'services/deploymentValidation.service.js'
@@ -112,4 +118,26 @@ runTest('validateDeployment is the only deployment-engine snapshot integration',
     );
     assert.ok(source.includes('runDeployAfterOptionalSnapshot'));
     assert.ok(source.includes('runDeploymentExecution'));
+    assert.ok(!source.includes('runRollback'));
+});
+
+runTest('deploymentRollback is the restore HTTP adapter and does not add destructive delete', () => {
+    const filePath = path.join(SRC_ROOT, 'services/deploymentRollback.service.js');
+    const source = fs.readFileSync(filePath, 'utf8');
+
+    assert.ok(
+        /require\(['"].*deploymentSnapshot\/destinationSnapshotRestore\.service['"]\)/.test(
+            source
+        )
+    );
+    assert.ok(source.includes('runRollback'));
+    assert.ok(!source.includes('destructiveChanges'));
+    assert.ok(
+        !fs
+            .readFileSync(
+                path.join(SRC_ROOT, 'controllers/deployment.controller.js'),
+                'utf8'
+            )
+            .includes('deploymentSnapshot')
+    );
 });
