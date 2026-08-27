@@ -26,6 +26,9 @@ const deploymentCheckOnlyGateService = require('./deploymentCheckOnlyGate.servic
 const deploymentExecutionService = require('./deploymentExecution.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
 const destinationSnapshotCaptureService = require('./deploymentSnapshot/destinationSnapshotCapture.service');
+const {
+    maybeAttachSnapshotExport
+} = require('./deploymentSnapshot/snapshotExport.service');
 const metadataCompatibilityService = require('./metadataCompatibility/metadataCompatibility.service');
 const dependencyResolutionService = require('./dependencyResolution/dependencyResolution.service');
 const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
@@ -1890,6 +1893,7 @@ async function validateDeployment({
 
     let checkOnlyDeployment = null;
     let deploymentExecution;
+    let deployCapturedSnapshot = null;
 
     // TEMP (Phase 15.3.1) — PersonAccount trace step 7 and final report.
     personAccountTrace.logDeploymentStep({
@@ -1981,6 +1985,7 @@ async function validateDeployment({
                 );
 
             deploymentExecution = snapshotGate.deploymentExecution;
+            deployCapturedSnapshot = snapshotGate.snapshot || null;
         }
     }
 
@@ -2282,6 +2287,10 @@ async function validateDeployment({
         response.deploymentHistory = deploymentHistory;
     }
 
+    if (deployCapturedSnapshot) {
+        await maybeAttachSnapshotExport(response, deployCapturedSnapshot);
+    }
+
     // Phase 17.4 — Auto Validation Loop (additive).
     // At most one re-validation via existing validateDeployment. Never
     // retries DEPLOY execution (revalidation package forces VALIDATE).
@@ -2303,6 +2312,14 @@ async function validateDeployment({
         },
         runValidation: (args) => validateDeployment(args)
     });
+
+    if (!finalResponse.snapshotExport && response.snapshotExport) {
+        finalResponse.snapshotExport = response.snapshotExport;
+    }
+
+    if (!finalResponse.snapshotExportError && response.snapshotExportError) {
+        finalResponse.snapshotExportError = response.snapshotExportError;
+    }
 
     // Preserve SAFE_SKIP report across revalidation response merge.
     if (!finalResponse.safeSkipReport) {

@@ -10,6 +10,7 @@ const deploymentController =
     );
 
 const deploymentRollbackController = require('../controllers/deploymentRollback.controller');
+const deploymentSnapshotArtifactController = require('../controllers/deploymentSnapshotArtifact.controller');
 
 const deploymentAiResolutionController = require('../controllers/deploymentAiResolution.controller');
 const deploymentSupportBundleController = require('../controllers/deploymentSupportBundle.controller');
@@ -40,6 +41,11 @@ router.post(
 router.post(
     '/rollback',
     deploymentRollbackController.rollbackDeployment
+);
+
+router.get(
+    '/snapshot-artifact',
+    deploymentSnapshotArtifactController.getSnapshotArtifact
 );
 
 router.post(

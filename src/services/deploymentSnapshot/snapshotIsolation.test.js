@@ -31,8 +31,7 @@ const PROTECTED_FILES = [
     'services/deploymentPlanner/deploymentPlanner.service.js',
     'services/deploymentReview.service.js',
     'services/deploymentHistory.service.js',
-    'controllers/deployment.controller.js',
-    'routes/deployment.routes.js'
+    'controllers/deployment.controller.js'
 ];
 
 function listJsFiles(dir, acc = []) {
@@ -84,7 +83,9 @@ runTest('no src file outside deploymentSnapshot requires the snapshot module exc
     const allowedSnapshotIntegrations = new Set([
         'services/deploymentValidation.service.js',
         'services/deploymentRollback.service.js',
-        'services/deploymentRollback.p0r78.test.js'
+        'services/deploymentRollback.p0r78.test.js',
+        'controllers/deploymentSnapshotArtifact.controller.js',
+        'routes/deployment.routes.js'
     ]);
 
     const offenders = files.filter((filePath) => {
