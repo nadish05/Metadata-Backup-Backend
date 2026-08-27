@@ -301,6 +301,10 @@ async function completeWithAutoValidationLoop({
             initialResponse.resolutionReport || null;
     }
 
+    if (!finalResponse.deploymentHistory && initialResponse.deploymentHistory) {
+        finalResponse.deploymentHistory = initialResponse.deploymentHistory;
+    }
+
     finalResponse.autoValidationReport = buildAutoValidationReport({
         attempts: MAX_VALIDATION_ATTEMPTS,
         autoValidationExecuted: true,

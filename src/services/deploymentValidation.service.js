@@ -2321,6 +2321,10 @@ async function validateDeployment({
         finalResponse.snapshotExportError = response.snapshotExportError;
     }
 
+    if (!finalResponse.deploymentHistory && response.deploymentHistory) {
+        finalResponse.deploymentHistory = response.deploymentHistory;
+    }
+
     // Preserve SAFE_SKIP report across revalidation response merge.
     if (!finalResponse.safeSkipReport) {
         finalResponse.safeSkipReport = response.safeSkipReport;

@@ -14,6 +14,7 @@ const { getSharedControlPlaneClient } = require('./controlPlane/controlPlane.run
 const CAPTURE_FLAG_ENV = 'SNAPSHOT_CAPTURE_ON_DEPLOY';
 const STORAGE_MODE_ENV = 'SNAPSHOT_STORAGE_MODE';
 const DURABLE_ROOT_ENV = 'SNAPSHOT_DURABLE_ROOT';
+const HISTORY_CONTROL_ORG_ENV = 'DEPLOYMENT_HISTORY_CONTROL_ORG_ENABLED';
 
 function parseEnvBool(value, defaultValue) {
     if (value === undefined || value === null || value === '') {
@@ -54,12 +55,19 @@ let cachedDurableKey = null;
 let cachedDurableStore = null;
 let cachedControlOrgStore = null;
 
-function resolveDefaultHistoryStore(env = process.env) {
+function shouldUseControlOrgDeploymentHistory(env = process.env) {
     const storageMode = String(env[STORAGE_MODE_ENV] || 'MEMORY')
         .trim()
         .toUpperCase();
 
-    if (storageMode === 'CONTROL_ORG') {
+    return (
+        storageMode === 'CONTROL_ORG' &&
+        parseEnvBool(env[HISTORY_CONTROL_ORG_ENV], false)
+    );
+}
+
+function resolveDefaultHistoryStore(env = process.env) {
+    if (shouldUseControlOrgDeploymentHistory(env)) {
         if (!cachedControlOrgStore) {
             cachedControlOrgStore = createSalesforceControlPlaneDeploymentHistoryStore({
                 getClient: () => getSharedControlPlaneClient()
@@ -97,8 +105,10 @@ module.exports = {
     CAPTURE_FLAG_ENV,
     STORAGE_MODE_ENV,
     DURABLE_ROOT_ENV,
+    HISTORY_CONTROL_ORG_ENV,
     parseEnvBool,
     shouldUseDurableDeploymentHistory,
+    shouldUseControlOrgDeploymentHistory,
     resolveDefaultHistoryStore,
     resetDefaultHistoryStoreForTests,
     getSharedMemoryHistoryStore: () => sharedMemoryStore

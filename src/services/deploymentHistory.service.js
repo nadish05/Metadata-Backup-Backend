@@ -350,11 +350,13 @@ function buildApiResponse(history) {
         return null;
     }
 
+    const deploymentId =
+        history.deploymentId ?? history.salesforceDeploymentId ?? null;
+
     return {
         historyId: history.historyId ?? null,
-        deploymentId: history.deploymentId ?? null,
-        salesforceDeploymentId:
-            history.salesforceDeploymentId ?? history.deploymentId ?? null,
+        deploymentId,
+        salesforceDeploymentId: deploymentId,
         deploymentMode: history.deploymentMode ?? null,
         executionMode: history.executionMode ?? null,
         status: history.status ?? null,

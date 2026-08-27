@@ -36,7 +36,8 @@ const {
 } = require('./rollbackOperation.resolver');
 const {
     resolveDefaultHistoryStore,
-    resetDefaultHistoryStoreForTests
+    resetDefaultHistoryStoreForTests,
+    HISTORY_CONTROL_ORG_ENV
 } = require('../deploymentHistory.persistence');
 const { createMemorySnapshotMetadataStore } = require('./stores/memorySnapshotMetadataStore');
 const { createFileSnapshotStores } = require('./stores/fileSnapshotStores');
@@ -74,11 +75,13 @@ function restoreEnv(previous) {
         const previous = {
             [STORAGE_MODE_ENV]: process.env[STORAGE_MODE_ENV],
             [DURABLE_ROOT_ENV]: process.env[DURABLE_ROOT_ENV],
+            [HISTORY_CONTROL_ORG_ENV]: process.env[HISTORY_CONTROL_ORG_ENV],
             DEPLOYMENT_LOCK_STORE: process.env.DEPLOYMENT_LOCK_STORE,
             DEPLOYMENT_LOCK_ROOT: process.env.DEPLOYMENT_LOCK_ROOT
         };
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p0r73-control-org-'));
         process.env[STORAGE_MODE_ENV] = 'CONTROL_ORG';
+        process.env[HISTORY_CONTROL_ORG_ENV] = 'true';
         process.env[DURABLE_ROOT_ENV] = root;
         process.env.DEPLOYMENT_LOCK_STORE = 'CONTROL_ORG';
         process.env.DEPLOYMENT_LOCK_ROOT = root;

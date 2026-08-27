@@ -379,6 +379,41 @@ async function main() {
     });
 
     await runTest(
+        'Preserves deploymentHistory when revalidation omits it',
+        async () => {
+            const blockedHistory = {
+                historyId: 'history_blocked_001',
+                status: 'BLOCKED',
+                snapshotId: null,
+                deploymentId: '0AfCHECK'
+            };
+
+            const final = await completeWithAutoValidationLoop({
+                initialResponse: {
+                    deploymentHistory: blockedHistory,
+                    deploymentExecution: { success: false, status: 'BLOCKED' },
+                    autoFixReport: {
+                        autoFixApplied: true,
+                        fixes: [{ successful: true }]
+                    },
+                    safeSkipReport: { safeSkipApplied: false }
+                },
+                autoFixResult: {
+                    autoFixApplied: true,
+                    generatedDeploymentPackage: { metadata: [] }
+                },
+                deploymentPackage: { deploymentMode: 'DEPLOY' },
+                validationArgs: {},
+                runValidation: async () => ({
+                    checkOnlyDeployment: { success: true }
+                })
+            });
+
+            assert.deepStrictEqual(final.deploymentHistory, blockedHistory);
+        }
+    );
+
+    await runTest(
         'Revalidation package forces VALIDATE and never DEPLOY',
         () => {
             const pkg = buildRevalidationPackage(
