@@ -412,10 +412,12 @@ function createDeploymentHistoryService({ store } = {}) {
 
         historySequence += 1;
 
-        const sequentialId = `history_${dateKey}_${String(historySequence).padStart(3, '0')}`;
+        const sequencePart = String(historySequence).padStart(3, '0');
+        const entropy = crypto.randomBytes(4).toString('hex');
+        const historyId = `history_${dateKey}_${sequencePart}_${entropy}`;
 
-        if (!getStore().exists(sequentialId)) {
-            return sequentialId;
+        if (!getStore().exists(historyId)) {
+            return historyId;
         }
 
         return `history_${crypto.randomUUID()}`;
