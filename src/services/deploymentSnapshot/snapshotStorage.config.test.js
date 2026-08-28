@@ -20,6 +20,7 @@ const {
 const {
     createDestinationSnapshotCaptureService
 } = require('./destinationSnapshotCapture.service');
+const { hashBytes } = require('./snapshotIntegrity.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -106,46 +107,112 @@ function restoreEnv(previousMode, previousRoot) {
         }
     });
 
-    await runTest('capture ON without durable storage blocks deploy', async () => {
-        let deployed = false;
-        let captured = false;
-        const service = createDestinationSnapshotCaptureService({
-            isSnapshotCaptureOnDeployEnabled: () => true,
-            enforceDurableCapture: true,
-            isDurableSnapshotStorageReady: () => false,
-            captureService: {
-                captureSnapshot: async () => {
-                    captured = true;
+    await runTest(
+        'capture ON without durable storage allows deploy by default (Salesforce-authoritative)',
+        async () => {
+            let deployed = false;
+            const service = createDestinationSnapshotCaptureService({
+                isSnapshotCaptureOnDeployEnabled: () => true,
+                isDurableSnapshotStorageReady: () => false,
+                refreshAccessToken: async () => ({
+                    accessToken: 'token',
+                    instanceUrl: 'https://dest.example.com'
+                }),
+                buildDestinationInventory: async ({ items }) => ({
+                    inventory: new Map(
+                        items.map((item) => [
+                            `${item.metadataType}:${item.metadataName}`,
+                            { state: 'EXISTS' }
+                        ])
+                    )
+                }),
+                retrieveDestinationMember: async () => ({
+                    artifactBytes: Buffer.from('class Old {}')
+                }),
+                collectExpectedAfterArtifact: async () => ({
+                    expectedAfterHash: hashBytes(Buffer.from('class New {}'))
+                }),
+                captureService: {
+                    captureSnapshot: async () => ({
+                        snapshotId: 'snap-memory-001',
+                        status: 'READY'
+                    }),
+                    sealSnapshot: async () => ({
+                        snapshotId: 'snap-memory-001',
+                        status: 'SEALED'
+                    })
                 }
-            }
-        });
+            });
 
-        const result = await service.runDeployAfterOptionalSnapshot({
-            shouldDeploy: true,
-            captureArgs: {
-                destinationOrgId: '00D1',
-                generatedDeploymentPackage: {
-                    metadata: [
-                        {
-                            metadataType: 'ApexClass',
-                            metadataName: 'AccountService',
-                            filePath: 'classes/AccountService.cls'
-                        }
-                    ]
+            const result = await service.runDeployAfterOptionalSnapshot({
+                shouldDeploy: true,
+                captureArgs: {
+                    destinationOrgId: '00D1',
+                    generatedDeploymentPackage: {
+                        metadata: [
+                            {
+                                metadataType: 'ApexClass',
+                                metadataName: 'AccountService',
+                                filePath: 'classes/AccountService.cls'
+                            }
+                        ]
+                    }
+                },
+                runDeploymentExecution: async () => {
+                    deployed = true;
+                    return { status: 'Succeeded' };
                 }
-            },
-            runDeploymentExecution: async () => {
-                deployed = true;
-                return { status: 'Succeeded' };
-            }
-        });
+            });
 
-        assert.strictEqual(deployed, false);
-        assert.strictEqual(captured, false);
-        assert.strictEqual(result.snapshotBlocked, true);
-        assert.match(
-            result.deploymentExecution.message,
-            /durable snapshot storage is not configured/
-        );
-    });
+            assert.strictEqual(deployed, true);
+            assert.strictEqual(result.snapshotBlocked, false);
+            assert.strictEqual(result.snapshot.status, 'SEALED');
+        }
+    );
+
+    await runTest(
+        'enforceDurableCapture=true still blocks deploy without durable storage',
+        async () => {
+            let deployed = false;
+            let captured = false;
+            const service = createDestinationSnapshotCaptureService({
+                isSnapshotCaptureOnDeployEnabled: () => true,
+                enforceDurableCapture: true,
+                isDurableSnapshotStorageReady: () => false,
+                captureService: {
+                    captureSnapshot: async () => {
+                        captured = true;
+                    }
+                }
+            });
+
+            const result = await service.runDeployAfterOptionalSnapshot({
+                shouldDeploy: true,
+                captureArgs: {
+                    destinationOrgId: '00D1',
+                    generatedDeploymentPackage: {
+                        metadata: [
+                            {
+                                metadataType: 'ApexClass',
+                                metadataName: 'AccountService',
+                                filePath: 'classes/AccountService.cls'
+                            }
+                        ]
+                    }
+                },
+                runDeploymentExecution: async () => {
+                    deployed = true;
+                    return { status: 'Succeeded' };
+                }
+            });
+
+            assert.strictEqual(deployed, false);
+            assert.strictEqual(captured, false);
+            assert.strictEqual(result.snapshotBlocked, true);
+            assert.match(
+                result.deploymentExecution.message,
+                /durable snapshot storage is not configured/
+            );
+        }
+    );
 })();

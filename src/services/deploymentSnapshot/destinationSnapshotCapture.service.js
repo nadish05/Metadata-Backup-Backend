@@ -92,10 +92,13 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
     const startHeartbeat =
         dependencies.startLockHeartbeat || startLockHeartbeat;
     const createLockOwnerId = dependencies.createOwnerId || createOwnerId;
+    // P0-R7.15.10: DEPLOY capture for Application Org persistence uses temporary
+    // Node storage (MEMORY by default). Rollback still requires durable Node
+    // storage via isDurableSnapshotStorageReady() in restore paths.
     const enforceDurableCapture =
         dependencies.enforceDurableCapture !== undefined
             ? dependencies.enforceDurableCapture
-            : !dependencies.captureService;
+            : false;
 
     function resolveCaptureService() {
         return (
