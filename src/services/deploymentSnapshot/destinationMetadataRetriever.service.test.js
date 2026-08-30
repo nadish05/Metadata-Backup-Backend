@@ -11,6 +11,7 @@ const {
     buildRetrieveDiagnosticRecord,
     summarizeRetrieveCliOutput
 } = require('./destinationMetadataRetriever.service');
+const { ensureSfdxProject } = require('../sfdxProject.service');
 const { unpackMemberFiles } = require('./destinationMemberArtifact.service');
 
 function runTest(name, fn) {
@@ -86,6 +87,99 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
 }
 
 (async () => {
+    await runTest('bootstrap creates the force-app package directory referenced by sfdx-project.json', async () => {
+        const workRoot = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'p0r1512-bootstrap-')
+        );
+        const workspacePath = path.join(workRoot, 'dest-snapshot-bootstrap');
+
+        await fs.promises.mkdir(workspacePath, { recursive: true });
+
+        const bootstrap = await ensureSfdxProject(workspacePath, {
+            sourceApiVersion: '67.0'
+        });
+
+        assert.strictEqual(bootstrap.success, true);
+        assert.ok(
+            fs.existsSync(path.join(workspacePath, 'force-app')),
+            'force-app package directory must exist after bootstrap'
+        );
+        assert.ok(
+            fs.statSync(path.join(workspacePath, 'force-app')).isDirectory()
+        );
+        assert.ok(
+            !fs.existsSync(
+                path.join(
+                    workspacePath,
+                    'force-app',
+                    'main',
+                    'default',
+                    'classes'
+                )
+            ),
+            'nested source directories are not required before retrieve'
+        );
+
+        await fs.promises.rm(workRoot, { recursive: true, force: true });
+    });
+
+    await runTest('retrieve uses real bootstrap and creates force-app before CLI retrieve', async () => {
+        const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'p0r1512-retr-bootstrap-'));
+        const clsBytes = Buffer.from('public class DemoModifiedClass {\n}\n', 'utf8');
+        let retrieveCommand = '';
+        let forceAppExistedBeforeRetrieve = false;
+
+        const retriever = createDestinationMetadataRetriever({
+            tmpdir: () => workRoot,
+            refreshAccessToken: async () => ({
+                accessToken: 'access-token-not-for-logs',
+                instanceUrl: 'https://example.my.salesforce.com'
+            }),
+            loginSfOrg: async () => {},
+            execAsync: async (command) => {
+                if (String(command).includes('logout')) {
+                    return { stdout: '', stderr: '' };
+                }
+
+                const workspaces = listSnapshotWorkspaces(workRoot);
+                assert.strictEqual(workspaces.length, 1);
+                forceAppExistedBeforeRetrieve = fs.existsSync(
+                    path.join(workspaces[0], 'force-app')
+                );
+
+                retrieveCommand = String(command);
+                await writeMemberFile(
+                    workRoot,
+                    'force-app/main/default/classes/DemoModifiedClass.cls',
+                    clsBytes
+                );
+
+                return {
+                    stdout: JSON.stringify({ status: 0, result: { files: [] } }),
+                    stderr: ''
+                };
+            }
+        });
+
+        const result = await retriever.retrieveDestinationMember({
+            refreshToken: 'refresh-secret',
+            instanceUrl: 'https://example.my.salesforce.com',
+            metadataType: 'ApexClass',
+            metadataName: 'DemoModifiedClass',
+            sourceApiVersion: '67.0'
+        });
+
+        assert.strictEqual(forceAppExistedBeforeRetrieve, true);
+        assert.ok(retrieveCommand.includes('ApexClass:DemoModifiedClass'));
+        assert.deepStrictEqual(
+            unpackMemberFiles(result.artifactBytes)[0].bytes,
+            clsBytes
+        );
+        assert.deepStrictEqual(listSnapshotWorkspaces(workRoot), []);
+
+        await fs.promises.rm(workRoot, { recursive: true, force: true });
+    });
+
     await runTest('retriever source does not use retrieveMetadataInternal', () => {
         const source = fs.readFileSync(
             path.join(__dirname, 'destinationMetadataRetriever.service.js'),

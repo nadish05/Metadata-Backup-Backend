@@ -5,6 +5,8 @@ const util = require('util');
 const { DEFAULT_API_VERSION } = require('../config/salesforce');
 
 const writeFile = util.promisify(fs.writeFile);
+const readFile = util.promisify(fs.readFile);
+const mkdir = util.promisify(fs.mkdir);
 const access = util.promisify(fs.access);
 
 function logSection(title) {
@@ -39,6 +41,31 @@ async function projectFileExists(projectPath) {
     }
 }
 
+async function readProjectDefinition(workspacePath) {
+    const projectPath = getSfdxProjectPath(workspacePath);
+
+    try {
+        const raw = await readFile(projectPath, 'utf8');
+        return JSON.parse(raw);
+    } catch (error) {
+        return null;
+    }
+}
+
+async function ensurePackageDirectories(workspacePath, projectDefinition) {
+    const packageDirectories = projectDefinition?.packageDirectories || [];
+
+    for (const entry of packageDirectories) {
+        const packagePath = entry?.path;
+
+        if (!packagePath) {
+            continue;
+        }
+
+        await mkdir(path.join(workspacePath, packagePath), { recursive: true });
+    }
+}
+
 async function ensureSfdxProject(workspacePath, options = {}) {
     logSection('SFDX Project Bootstrap Started');
     logSection('Checking project structure');
@@ -58,6 +85,13 @@ async function ensureSfdxProject(workspacePath, options = {}) {
 
     if (await projectFileExists(projectPath)) {
         console.log('Project already exists');
+
+        const existingDefinition = await readProjectDefinition(workspacePath);
+
+        if (existingDefinition) {
+            await ensurePackageDirectories(workspacePath, existingDefinition);
+        }
+
         logSection('Project bootstrap complete');
 
         return {
@@ -79,6 +113,7 @@ async function ensureSfdxProject(workspacePath, options = {}) {
             `${JSON.stringify(projectDefinition, null, 4)}\n`,
             { encoding: 'utf8', flag: 'wx' }
         );
+        await ensurePackageDirectories(workspacePath, projectDefinition);
 
         logSection('Project bootstrap complete');
 
@@ -92,6 +127,12 @@ async function ensureSfdxProject(workspacePath, options = {}) {
     } catch (error) {
         if (error.code === 'EEXIST') {
             console.log('Project already exists');
+
+            const existingDefinition =
+                (await readProjectDefinition(workspacePath)) ||
+                buildSfdxProjectDefinition(sourceApiVersion);
+
+            await ensurePackageDirectories(workspacePath, existingDefinition);
             logSection('Project bootstrap complete');
 
             return {
@@ -115,5 +156,7 @@ async function ensureSfdxProject(workspacePath, options = {}) {
 }
 
 module.exports = {
-    ensureSfdxProject
+    ensureSfdxProject,
+    ensurePackageDirectories,
+    buildSfdxProjectDefinition
 };
