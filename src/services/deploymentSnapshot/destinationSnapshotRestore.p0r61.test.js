@@ -422,11 +422,30 @@ function createRestore({
         assert.strictEqual(mismatch.counts().retrieves, 0);
     });
 
-    await runTest('lock flag OFF lock unavailable and LOCK_BUSY block before retrieve', async () => {
+    await runTest('lock flag OFF skips lock and reaches drift/deploy path', async () => {
         const { capture, sealed } = await sealEligible();
         const off = createRestore({
             capture,
-            lockService: createOrgLockService({ store: createMemoryOrgLockStore() }),
+            lockService: {
+                acquire() {
+                    throw new Error('lock acquire must not run when lock is disabled');
+                },
+                renew() {
+                    throw new Error('lock renew must not run when lock is disabled');
+                },
+                release() {
+                    throw new Error('lock release must not run when lock is disabled');
+                },
+                get() {
+                    throw new Error('lock get must not run when lock is disabled');
+                },
+                assertHeld() {
+                    throw new Error('lock assertHeld must not run when lock is disabled');
+                },
+                adminRelease() {
+                    throw new Error('lock adminRelease must not run when lock is disabled');
+                }
+            },
             lockEnabled: false
         });
         const offResult = await off.service.runRollback({
@@ -434,14 +453,25 @@ function createRestore({
             refreshToken: 'refresh',
             instanceUrl: 'https://dest.example.com'
         });
-        assert.strictEqual(offResult.code, ROLLBACK_CODE.LOCK_DISABLED);
-        assert.strictEqual(off.counts().retrieves, 0);
+
+        assert.notStrictEqual(offResult.code, ROLLBACK_CODE.LOCK_DISABLED);
+        assert.strictEqual(offResult.blocked, false);
+        assert.strictEqual(offResult.success, true);
+        assert.strictEqual(off.counts().retrieves, 1);
+        assert.strictEqual(off.counts().checkOnlyCalls, 1);
+        assert.strictEqual(off.counts().executions, 1);
+        assert.ok(!off.events.includes('heartbeat-start'));
+    });
+
+    await runTest('lock ON unavailable and LOCK_BUSY block before retrieve', async () => {
+        const { capture, sealed } = await sealEligible();
 
         const unavailable = createRestore({
             capture,
             lockService: createOrgLockService({
                 store: createUnavailableOrgLockStore()
-            })
+            }),
+            lockEnabled: true
         });
         const unavailableResult = await unavailable.service.runRollback({
             snapshotId: sealed.snapshotId,
@@ -457,7 +487,7 @@ function createRestore({
             ownerId: 'deploy-owner',
             operationType: OPERATION_TYPE.DEPLOY
         });
-        const busy = createRestore({ capture, lockService });
+        const busy = createRestore({ capture, lockService, lockEnabled: true });
         const busyResult = await busy.service.runRollback({
             snapshotId: sealed.snapshotId,
             refreshToken: 'refresh',
@@ -469,6 +499,57 @@ function createRestore({
         assert.strictEqual(
             lockService.get({ destinationOrgId: '00D000000000001' }).ownerId,
             'deploy-owner'
+        );
+    });
+
+    await runTest('lock ON acquires heartbeat assertHeld and releases', async () => {
+        const { capture, sealed } = await sealEligible();
+        const store = createMemoryOrgLockStore();
+        const lockCalls = { acquire: 0, assertHeld: 0, release: 0 };
+        const inner = createOrgLockService({ store });
+        const lockService = {
+            acquire(args) {
+                lockCalls.acquire += 1;
+                return inner.acquire(args);
+            },
+            renew(args) {
+                return inner.renew(args);
+            },
+            release(args) {
+                lockCalls.release += 1;
+                return inner.release(args);
+            },
+            get(args) {
+                return inner.get(args);
+            },
+            assertHeld(args) {
+                lockCalls.assertHeld += 1;
+                return inner.assertHeld(args);
+            },
+            adminRelease(args) {
+                return inner.adminRelease(args);
+            }
+        };
+        const restore = createRestore({
+            capture,
+            lockService,
+            lockEnabled: true
+        });
+        const result = await restore.service.runRollback({
+            snapshotId: sealed.snapshotId,
+            refreshToken: 'refresh',
+            instanceUrl: 'https://dest.example.com'
+        });
+
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(lockCalls.acquire, 1);
+        assert.strictEqual(lockCalls.assertHeld, 1);
+        assert.strictEqual(lockCalls.release, 1);
+        assert.ok(restore.events.includes('heartbeat-start'));
+        assert.ok(restore.events.includes('heartbeat-stop'));
+        assert.strictEqual(
+            lockService.get({ destinationOrgId: '00D000000000001' })?.status,
+            LOCK_STATUS.RELEASED
         );
     });
 

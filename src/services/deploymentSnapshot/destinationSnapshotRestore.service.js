@@ -645,49 +645,36 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 }
             }
 
-            if (!isLockEnabled()) {
-                operation = await persistFailed(operation, {
-                    errorCode: ROLLBACK_CODE.LOCK_DISABLED,
-                    errorMessage: 'Rollback requires DEPLOYMENT_ORG_LOCK_ENABLED=true.'
+            if (isLockEnabled()) {
+                const lockService = resolveLockService();
+                lockHandle = lockService.acquire({
+                    destinationOrgId: verifiedOrgId,
+                    ownerId: createLockOwnerId(),
+                    operationType: OPERATION_TYPE.ROLLBACK,
+                    historyId: args.historyId || null,
+                    snapshotId: snapshot.snapshotId
                 });
-                return withOperation(
-                    block(
-                        ROLLBACK_CODE.LOCK_DISABLED,
-                        'Rollback requires DEPLOYMENT_ORG_LOCK_ENABLED=true.',
-                        { snapshotId }
-                    ),
-                    operation
-                );
-            }
 
-            const lockService = resolveLockService();
-            lockHandle = lockService.acquire({
-                destinationOrgId: verifiedOrgId,
-                ownerId: createLockOwnerId(),
-                operationType: OPERATION_TYPE.ROLLBACK,
-                historyId: args.historyId || null,
-                snapshotId: snapshot.snapshotId
-            });
+                stopHeartbeat = startHeartbeat({
+                    lockService,
+                    destinationOrgId: lockHandle.destinationOrgId,
+                    ownerId: lockHandle.ownerId,
+                    leaseGeneration: lockHandle.leaseGeneration
+                });
 
-            stopHeartbeat = startHeartbeat({
-                lockService,
-                destinationOrgId: lockHandle.destinationOrgId,
-                ownerId: lockHandle.ownerId,
-                leaseGeneration: lockHandle.leaseGeneration
-            });
-
-            try {
-                operation = await resolveOperationStore().updateOperation(
-                    operation.operationId,
-                    {
-                        lockOwner: lockHandle.ownerId,
-                        leaseGeneration: lockHandle.leaseGeneration,
-                        lockAcquiredAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString()
-                    }
-                );
-            } catch (error) {
-                void error;
+                try {
+                    operation = await resolveOperationStore().updateOperation(
+                        operation.operationId,
+                        {
+                            lockOwner: lockHandle.ownerId,
+                            leaseGeneration: lockHandle.leaseGeneration,
+                            lockAcquiredAt: new Date().toISOString(),
+                            updatedAt: new Date().toISOString()
+                        }
+                    );
+                } catch (error) {
+                    void error;
+                }
             }
 
             const drift = [];
@@ -862,11 +849,13 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 void error;
             }
 
-            resolveLockService().assertHeld({
-                destinationOrgId: lockHandle.destinationOrgId,
-                ownerId: lockHandle.ownerId,
-                leaseGeneration: lockHandle.leaseGeneration
-            });
+            if (isLockEnabled() && lockHandle) {
+                resolveLockService().assertHeld({
+                    destinationOrgId: lockHandle.destinationOrgId,
+                    ownerId: lockHandle.ownerId,
+                    leaseGeneration: lockHandle.leaseGeneration
+                });
+            }
 
             try {
                 operation = await operationService.markExecutionStarted(
