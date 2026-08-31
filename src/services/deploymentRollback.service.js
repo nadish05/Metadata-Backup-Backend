@@ -11,6 +11,10 @@ const {
 } = require('./deploymentSnapshot/destinationSnapshotRestore.service');
 const { ROLLBACK_CODE } = require('./deploymentSnapshot/snapshotRestore.errors');
 const { ROLLBACK_OPERATION_STATUS } = require('./deploymentSnapshot/rollbackOperation.types');
+const {
+    SalesforceRollbackSnapshotContextError,
+    createSalesforceRollbackSnapshotContext
+} = require('./deploymentSnapshot/salesforceRollbackSnapshotContext.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
 const { orgIdsMatch } = require('./deploymentOrgLock/destinationOrgIdentity.service');
 
@@ -20,7 +24,8 @@ const INPUT_CODE = Object.freeze({
     DESTINATION_CREDENTIALS_REQUIRED:
         'ROLLBACK_DESTINATION_CREDENTIALS_REQUIRED',
     HISTORY_SNAPSHOT_MISMATCH: 'ROLLBACK_HISTORY_SNAPSHOT_MISMATCH',
-    HISTORY_DESTINATION_MISMATCH: 'ROLLBACK_HISTORY_DESTINATION_MISMATCH'
+    HISTORY_DESTINATION_MISMATCH: 'ROLLBACK_HISTORY_DESTINATION_MISMATCH',
+    SNAPSHOT_EXPORT_MISMATCH: 'ROLLBACK_SNAPSHOT_EXPORT_MISMATCH'
 });
 
 function text(value) {
@@ -29,6 +34,17 @@ function text(value) {
     }
 
     return String(value).trim();
+}
+
+function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasSalesforceRollbackContext(request = {}) {
+    return (
+        isPlainObject(request.snapshotExport) &&
+        isPlainObject(request.artifacts)
+    );
 }
 
 function inputRejected(code, message) {
@@ -99,11 +115,15 @@ function classifyRestoreResult(result) {
 function createDeploymentRollbackService(dependencies = {}) {
     const historyService =
         dependencies.historyService || deploymentHistoryService;
+    const createRestoreService =
+        dependencies.createRestoreService ||
+        ((overrides = {}) =>
+            createDestinationSnapshotRestoreService({
+                historyService,
+                ...overrides
+            }));
     const restoreService =
-        dependencies.restoreService ||
-        createDestinationSnapshotRestoreService({
-            historyService
-        });
+        dependencies.restoreService || createRestoreService();
 
     async function executeRollback(request = {}) {
         const historyId = text(request.historyId);
@@ -162,7 +182,45 @@ function createDeploymentRollbackService(dependencies = {}) {
             );
         }
 
-        const restoreResult = await restoreService.runRollback({
+        let activeRestoreService = restoreService;
+
+        if (hasSalesforceRollbackContext(request)) {
+            const exportSnapshotId = text(request.snapshotExport.snapshotId);
+
+            if (!exportSnapshotId) {
+                return inputRejected(
+                    INPUT_CODE.SNAPSHOT_ID_REQUIRED,
+                    'snapshotExport.snapshotId is required.'
+                );
+            }
+
+            if (exportSnapshotId !== snapshotId) {
+                return inputRejected(
+                    INPUT_CODE.SNAPSHOT_EXPORT_MISMATCH,
+                    'snapshotId does not match snapshotExport.snapshotId.'
+                );
+            }
+
+            try {
+                const context = await createSalesforceRollbackSnapshotContext(
+                    request.snapshotExport,
+                    request.artifacts
+                );
+
+                activeRestoreService = createRestoreService({
+                    captureService: context.captureService,
+                    isDurableSnapshotStorageReady: () => true
+                });
+            } catch (error) {
+                if (error instanceof SalesforceRollbackSnapshotContextError) {
+                    return inputRejected(error.code, error.message);
+                }
+
+                throw error;
+            }
+        }
+
+        const restoreResult = await activeRestoreService.runRollback({
             snapshotId,
             refreshToken,
             instanceUrl,
