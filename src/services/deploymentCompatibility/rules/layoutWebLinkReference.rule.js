@@ -8,39 +8,31 @@ const {
     canScheduleMissingDependency
 } = require('./layoutDependencyState.util');
 
-const RULE_ID = 'layout.fieldReference';
+const RULE_ID = 'layout.webLinkReference';
 
-const LAYOUT_CUSTOM_FIELD_REFERENCE_TYPES = new Set([
-    'Field',
-    'RelatedList',
-    'RelatedListField',
-    'RelatedObject'
-]);
-
-function isLayoutFieldReference(reference) {
+function isLayoutWebLinkReference(reference) {
     return (
         reference?.discoveryMethod === 'layoutReference' &&
-        reference?.metadataType === 'CustomField' &&
-        LAYOUT_CUSTOM_FIELD_REFERENCE_TYPES.has(reference?.referenceType)
+        reference?.metadataType === 'WebLink' &&
+        reference?.referenceType === 'CustomButton'
     );
 }
 
 /**
- * Verify Layout custom field references are satisfied in the deployment graph
- * or destination org before deployment.
+ * Verify Layout custom button (WebLink) references are satisfied before deployment.
  */
-const layoutFieldReferenceRule = {
+const layoutWebLinkReferenceRule = {
     id: RULE_ID,
-    metadataTypes: ['Layout', 'CustomField'],
+    metadataTypes: ['Layout', 'WebLink'],
 
     applies(context) {
-        return (context.discoveredReferences || []).some(isLayoutFieldReference);
+        return (context.discoveredReferences || []).some(isLayoutWebLinkReference);
     },
 
     analyze(context) {
         const findings = [];
         const references = (context.discoveredReferences || []).filter(
-            isLayoutFieldReference
+            isLayoutWebLinkReference
         );
 
         for (const reference of references) {
@@ -49,12 +41,12 @@ const layoutFieldReferenceRule = {
             }
 
             const decision = context.availability.getDecision(
-                'CustomField',
+                'WebLink',
                 reference.name
             );
             const destinationState = resolveEffectiveDestinationState(
                 decision,
-                'CustomField',
+                'WebLink',
                 reference.name,
                 context
             );
@@ -63,10 +55,10 @@ const layoutFieldReferenceRule = {
                 findings.push(
                     createPassFinding({
                         metadataName: reference.name,
-                        metadataType: 'CustomField',
+                        metadataType: 'WebLink',
                         ruleId: RULE_ID,
                         reason:
-                            'Referenced field exists in the destination org.',
+                            'Referenced WebLink exists in the destination org.',
                         requiredBy: reference.sourceMetadata
                             ? `Layout:${reference.sourceMetadata}`
                             : null
@@ -82,10 +74,10 @@ const layoutFieldReferenceRule = {
                 findings.push(
                     createPassFinding({
                         metadataName: reference.name,
-                        metadataType: 'CustomField',
+                        metadataType: 'WebLink',
                         ruleId: RULE_ID,
                         reason:
-                            'Referenced field is missing in destination and scheduled for deployment.',
+                            'Referenced WebLink is missing in destination and scheduled for deployment.',
                         requiredBy: reference.sourceMetadata
                             ? `Layout:${reference.sourceMetadata}`
                             : null
@@ -98,16 +90,16 @@ const layoutFieldReferenceRule = {
                 findings.push(
                     createBlockFinding({
                         metadataName: reference.name,
-                        metadataType: 'CustomField',
+                        metadataType: 'WebLink',
                         ruleId: RULE_ID,
                         reason:
                             decision.reason ||
-                            'Referenced field is blocked by dependency resolution.',
+                            'Referenced WebLink is blocked by dependency resolution.',
                         requiredBy: reference.sourceMetadata
                             ? `Layout:${reference.sourceMetadata}`
                             : null,
                         recommendedAction:
-                            'Resolve the blocked CustomField dependency before deployment.'
+                            'Resolve the blocked WebLink dependency before deployment.'
                     })
                 );
                 continue;
@@ -117,15 +109,15 @@ const layoutFieldReferenceRule = {
                 findings.push(
                     createBlockFinding({
                         metadataName: reference.name,
-                        metadataType: 'CustomField',
+                        metadataType: 'WebLink',
                         ruleId: RULE_ID,
                         reason:
-                            'Referenced field is missing from the destination org and is not scheduled for deployment.',
+                            'Referenced WebLink is missing from the destination org and is not scheduled for deployment.',
                         requiredBy: reference.sourceMetadata
                             ? `Layout:${reference.sourceMetadata}`
                             : null,
                         recommendedAction:
-                            'Add the CustomField to the deployment selection, ensure it exists in the destination org, or remove it from the Layout.'
+                            'Add the WebLink to the deployment selection, ensure it exists in the destination org, or remove it from the Layout.'
                     })
                 );
             }
@@ -135,4 +127,4 @@ const layoutFieldReferenceRule = {
     }
 };
 
-module.exports = layoutFieldReferenceRule;
+module.exports = layoutWebLinkReferenceRule;

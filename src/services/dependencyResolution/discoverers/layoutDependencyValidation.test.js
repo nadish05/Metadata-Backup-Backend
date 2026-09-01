@@ -31,6 +31,109 @@ const ACCOUNT_GYM_LAYOUT_PATH =
 const WORKACCESS_LAYOUT_PATH =
     'force-app/main/default/layouts/WorkAccess-Access Layout.layout-meta.xml';
 
+function buildProductionAccountGymLayoutXml() {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Layout xmlns="http://soap.sforce.com/2006/04/metadata">
+    <excludeButtons>Submit</excludeButtons>
+    <layoutSections>
+        <customLabel>true</customLabel>
+        <detailHeading>false</detailHeading>
+        <editHeading>false</editHeading>
+        <label>Fields</label>
+        <layoutColumns>
+            <layoutItems>
+                <behavior>Required</behavior>
+                <field>Name</field>
+            </layoutItems>
+            <layoutItems>
+                <behavior>Edit</behavior>
+                <field>ParentId</field>
+            </layoutItems>
+            <layoutItems>
+                <behavior>Edit</behavior>
+                <field>Phone</field>
+            </layoutItems>
+            <layoutItems>
+                <behavior>Edit</behavior>
+                <field>DOB__c</field>
+            </layoutItems>
+            <layoutItems>
+                <behavior>Edit</behavior>
+                <field>Address__c</field>
+            </layoutItems>
+            <layoutItems>
+                <behavior>Edit</behavior>
+                <field>F__c</field>
+            </layoutItems>
+            <layoutItems>
+                <behavior>Edit</behavior>
+                <field>Email__c</field>
+            </layoutItems>
+        </layoutColumns>
+        <layoutColumns/>
+        <style>TwoColumnsLeftToRight</style>
+    </layoutSections>
+    <relatedLists>
+        <fields>FULL_NAME</fields>
+        <fields>LEAD.COMPANY</fields>
+        <fields>LEAD.PHONE</fields>
+        <relatedList>Lead.Converted_Account__c</relatedList>
+    </relatedLists>
+    <relatedLists>
+        <fields>NAME</fields>
+        <relatedList>Gym_Trainer__c.Gym_Member__c</relatedList>
+    </relatedLists>
+    <relatedLists>
+        <fields>NAME</fields>
+        <relatedList>Payment__c.Account__c</relatedList>
+    </relatedLists>
+    <relatedObjects>ParentId</relatedObjects>
+    <showEmailCheckbox>false</showEmailCheckbox>
+    <summaryLayout>
+        <masterLabel>00hd200000Roq5V</masterLabel>
+        <sizeX>4</sizeX>
+        <sizeY>0</sizeY>
+        <summaryLayoutStyle>Default</summaryLayoutStyle>
+    </summaryLayout>
+</Layout>`;
+}
+
+function buildLayoutXmlWithRelatedLists(relatedLists = [], extraXml = '') {
+    const relatedListXml = relatedLists
+        .map(
+            (entry) => `    <relatedLists>
+        <fields>NAME</fields>
+        <relatedList>${entry}</relatedList>
+    </relatedLists>`
+        )
+        .join('\n');
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Layout xmlns="http://soap.sforce.com/2006/04/metadata">
+    <layoutSections>
+        <layoutColumns>
+            <layoutItems>
+                <field>DOB__c</field>
+            </layoutItems>
+        </layoutColumns>
+    </layoutSections>
+${relatedListXml}
+${extraXml}
+</Layout>`;
+}
+
+function findReference(references, metadataType, name) {
+    return (references || []).find(
+        (ref) => ref.metadataType === metadataType && ref.name === name
+    );
+}
+
+function findReferences(references, metadataType, name) {
+    return (references || []).filter(
+        (ref) => ref.metadataType === metadataType && ref.name === name
+    );
+}
+
 function buildLayoutXml(fields = []) {
     const fieldXml = fields
         .map((field) => `            <field>${field}</field>`)
@@ -549,6 +652,401 @@ async function main() {
                 /missing|does not exist/i.test(String(parentFinding.reason || '')),
                 `unexpected reason: ${parentFinding.reason}`
             );
+        }
+    );
+
+    await runTest(
+        'T13: production Account-Gym Layout discovers parent, fields, and related lists',
+        async () => {
+            const result = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildProductionAccountGymLayoutXml()
+            });
+
+            const refs = result.references || [];
+
+            assert.ok(findReference(refs, 'CustomObject', 'Account'));
+            assert.ok(findReference(refs, 'CustomField', 'Account.DOB__c'));
+            assert.ok(findReference(refs, 'CustomField', 'Account.Address__c'));
+            assert.ok(findReference(refs, 'CustomField', 'Account.F__c'));
+            assert.ok(findReference(refs, 'CustomField', 'Account.Email__c'));
+            assert.ok(
+                findReference(refs, 'CustomField', 'Lead.Converted_Account__c')
+            );
+            assert.ok(
+                findReference(refs, 'CustomField', 'Gym_Trainer__c.Gym_Member__c')
+            );
+            assert.ok(
+                findReference(refs, 'CustomField', 'Payment__c.Account__c')
+            );
+
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Account.Name'),
+                undefined
+            );
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Account.ParentId'),
+                undefined
+            );
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Account.Phone'),
+                undefined
+            );
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Account.FULL_NAME'),
+                undefined
+            );
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Lead.COMPANY'),
+                undefined
+            );
+        }
+    );
+
+    await runTest(
+        'T14: related list Lead.Converted_Account__c blocks when dest and source missing',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([
+                    'Lead.Converted_Account__c'
+                ])
+            });
+
+            const destinationStates = new Map([
+                ['CustomObject:Account', 'EXISTS'],
+                ['CustomField:Account.DOB__c', 'EXISTS'],
+                ['CustomField:Lead.Converted_Account__c', 'MISSING']
+            ]);
+
+            const pipeline = await resolveLayoutPipeline({
+                discoveredReferences: discovery.references,
+                destinationStates,
+                selectedMetadata: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: ACCOUNT_GYM_LAYOUT,
+                        filePath: ACCOUNT_GYM_LAYOUT_PATH
+                    }
+                ],
+                artifactFlags: {
+                    'CustomField:Lead.Converted_Account__c': {
+                        artifactResolved: false,
+                        sourceExists: false
+                    }
+                }
+            });
+
+            assert.strictEqual(
+                pipeline.compatibility.overallCompatibility,
+                'BLOCKED'
+            );
+
+            const relatedListBlocker = (
+                pipeline.compatibility.findings || []
+            ).find(
+                (finding) =>
+                    finding.metadataName === 'Lead.Converted_Account__c' &&
+                    finding.ruleId === 'layout.fieldReference'
+            );
+
+            assert.ok(relatedListBlocker);
+        }
+    );
+
+    await runTest(
+        'T15: multiple relatedLists discovered without duplicates',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([
+                    'Lead.Converted_Account__c',
+                    'Gym_Trainer__c.Gym_Member__c',
+                    'Payment__c.Account__c'
+                ])
+            });
+
+            assert.strictEqual(
+                findReferences(
+                    discovery.references,
+                    'CustomField',
+                    'Lead.Converted_Account__c'
+                ).length,
+                1
+            );
+            assert.ok(
+                findReference(
+                    discovery.references,
+                    'CustomField',
+                    'Gym_Trainer__c.Gym_Member__c'
+                )
+            );
+            assert.ok(
+                findReference(
+                    discovery.references,
+                    'CustomField',
+                    'Payment__c.Account__c'
+                )
+            );
+        }
+    );
+
+    await runTest(
+        'T16: customButtons discover WebLink references',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([], `
+    <customButtons>Send_Invoice__c</customButtons>
+    <customButtons>Submit</customButtons>`)
+            });
+
+            const webLink = findReference(
+                discovery.references,
+                'WebLink',
+                'Account.Send_Invoice__c'
+            );
+
+            assert.ok(webLink);
+            assert.strictEqual(webLink.referenceType, 'CustomButton');
+            assert.strictEqual(
+                findReference(discovery.references, 'WebLink', 'Account.Submit'),
+                undefined
+            );
+        }
+    );
+
+    await runTest(
+        'T17: quickActionList discovers non-standard quick actions as deferred',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([], `
+    <quickActionList>
+        <quickActionListItems>
+            <quickActionName>Account.Custom_Action__c</quickActionName>
+        </quickActionListItems>
+        <quickActionListItems>
+            <quickActionName>Edit</quickActionName>
+        </quickActionListItems>
+    </quickActionList>`)
+            });
+
+            const quickAction = findReference(
+                discovery.references,
+                'QuickAction',
+                'Account.Custom_Action__c'
+            );
+
+            assert.ok(quickAction);
+            assert.strictEqual(quickAction.deployable, false);
+            assert.strictEqual(quickAction.blocking, false);
+        }
+    );
+
+    await runTest(
+        'T18: platformActionList discovers custom actions as deferred',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([], `
+    <platformActionList>
+        <platformActionListItems>
+            <actionName>Account.Platform_Action__c</actionName>
+        </platformActionListItems>
+        <platformActionListItems>
+            <actionName>FeedItem.TextPost</actionName>
+        </platformActionListItems>
+    </platformActionList>`)
+            });
+
+            const action = findReference(
+                discovery.references,
+                'QuickAction',
+                'Account.Platform_Action__c'
+            );
+
+            assert.ok(action);
+            assert.strictEqual(action.referenceType, 'PlatformAction');
+            assert.strictEqual(action.blocking, false);
+        }
+    );
+
+    await runTest(
+        'T19: relatedObjects ParentId does not create false dependency',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([], `
+    <relatedObjects>ParentId</relatedObjects>`)
+            });
+
+            assert.strictEqual(
+                findReference(discovery.references, 'CustomField', 'Account.ParentId'),
+                undefined
+            );
+        }
+    );
+
+    await runTest(
+        'T20: destination EXISTS avoids unnecessary field deployment block',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildProductionAccountGymLayoutXml()
+            });
+
+            const destinationStates = new Map([
+                ['CustomObject:Account', 'EXISTS'],
+                ['CustomField:Account.DOB__c', 'EXISTS'],
+                ['CustomField:Account.Address__c', 'EXISTS'],
+                ['CustomField:Account.F__c', 'EXISTS'],
+                ['CustomField:Account.Email__c', 'EXISTS'],
+                ['CustomField:Lead.Converted_Account__c', 'EXISTS'],
+                ['CustomField:Gym_Trainer__c.Gym_Member__c', 'EXISTS'],
+                ['CustomField:Payment__c.Account__c', 'EXISTS']
+            ]);
+
+            const pipeline = await resolveLayoutPipeline({
+                discoveredReferences: discovery.references,
+                destinationStates,
+                selectedMetadata: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: ACCOUNT_GYM_LAYOUT,
+                        filePath: ACCOUNT_GYM_LAYOUT_PATH
+                    }
+                ]
+            });
+
+            const blockers = (pipeline.compatibility.findings || []).filter(
+                (finding) =>
+                    finding.status === 'BLOCK' || finding.blocking === true
+            );
+
+            assert.strictEqual(blockers.length, 0);
+            assert.notStrictEqual(
+                pipeline.compatibility.overallCompatibility,
+                'BLOCKED'
+            );
+        }
+    );
+
+    await runTest(
+        'T21: destination MISSING + source EXISTS allows deploy scheduling',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([
+                    'Lead.Converted_Account__c'
+                ])
+            });
+
+            const destinationStates = new Map([
+                ['CustomObject:Account', 'EXISTS'],
+                ['CustomField:Lead.Converted_Account__c', 'MISSING']
+            ]);
+
+            const pipeline = await resolveLayoutPipeline({
+                discoveredReferences: discovery.references,
+                destinationStates,
+                selectedMetadata: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: ACCOUNT_GYM_LAYOUT,
+                        filePath: ACCOUNT_GYM_LAYOUT_PATH
+                    }
+                ],
+                artifactFlags: {
+                    'CustomField:Lead.Converted_Account__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    }
+                }
+            });
+
+            const relatedListPass = (pipeline.compatibility.findings || []).find(
+                (finding) =>
+                    finding.metadataName === 'Lead.Converted_Account__c' &&
+                    finding.ruleId === 'layout.fieldReference' &&
+                    finding.status === 'PASS'
+            );
+
+            assert.ok(relatedListPass);
+            assert.notStrictEqual(
+                pipeline.compatibility.overallCompatibility,
+                'BLOCKED'
+            );
+        }
+    );
+
+    await runTest(
+        'REGRESSION: production relatedList Lead.Converted_Account__c blocked pre-deploy',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildProductionAccountGymLayoutXml()
+            });
+
+            const destinationStates = new Map([
+                ['CustomObject:Account', 'EXISTS'],
+                ['CustomField:Account.DOB__c', 'MISSING'],
+                ['CustomField:Account.Address__c', 'MISSING'],
+                ['CustomField:Account.F__c', 'MISSING'],
+                ['CustomField:Account.Email__c', 'MISSING'],
+                ['CustomField:Lead.Converted_Account__c', 'MISSING'],
+                ['CustomField:Gym_Trainer__c.Gym_Member__c', 'MISSING'],
+                ['CustomField:Payment__c.Account__c', 'MISSING']
+            ]);
+
+            const artifactFlags = {
+                'CustomField:Account.DOB__c': {
+                    artifactResolved: false,
+                    sourceExists: false
+                },
+                'CustomField:Lead.Converted_Account__c': {
+                    artifactResolved: false,
+                    sourceExists: false
+                }
+            };
+
+            const pipeline = await resolveLayoutPipeline({
+                discoveredReferences: discovery.references,
+                destinationStates,
+                selectedMetadata: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: ACCOUNT_GYM_LAYOUT,
+                        filePath: ACCOUNT_GYM_LAYOUT_PATH
+                    }
+                ],
+                artifactFlags
+            });
+
+            assert.strictEqual(
+                pipeline.compatibility.overallCompatibility,
+                'BLOCKED'
+            );
+
+            const leadRelatedListBlocker = (
+                pipeline.compatibility.findings || []
+            ).find(
+                (finding) =>
+                    finding.metadataName === 'Lead.Converted_Account__c' &&
+                    (finding.status === 'BLOCK' || finding.blocking === true)
+            );
+
+            assert.ok(leadRelatedListBlocker);
         }
     );
 
