@@ -35,7 +35,8 @@ const SUPPORTED_REVIEW_METADATA_TYPES = new Set([
     'NamedCredential',
     'ExternalCredential',
     'CustomObject',
-    'Flow'
+    'Flow',
+    'Layout'
 ]);
 
 const { METADATA_TYPE_RULES } = require('../config/metadataTypes');
@@ -306,6 +307,24 @@ async function processMetadataItem(
         return {
             metadataType,
             metadataName,
+            filePath,
+            status: 'SUCCESS',
+            ...buildEmptyDependencyAnalysisResult()
+        };
+    }
+
+    if (metadataType === 'Layout') {
+        const layoutRule = METADATA_TYPE_RULES.Layout;
+        const layoutBaseName = path.posix.basename(normalizePath(filePath));
+        const resolvedLayoutName =
+            layoutRule?.extension &&
+            layoutBaseName.endsWith(layoutRule.extension)
+                ? layoutBaseName.slice(0, -layoutRule.extension.length)
+                : metadataName;
+
+        return {
+            metadataType,
+            metadataName: resolvedLayoutName,
             filePath,
             status: 'SUCCESS',
             ...buildEmptyDependencyAnalysisResult()

@@ -122,6 +122,12 @@ const METADATA_TYPE_RULES = {
         extension: '.listView-meta.xml',
         requiresMetaXml: false
     },
+    Layout: {
+        kind: METADATA_KINDS.FILE,
+        folder: 'layouts',
+        extension: '.layout-meta.xml',
+        requiresMetaXml: false
+    },
     SharingReason: {
         kind: METADATA_KINDS.FILE,
         extension: '.sharingReason-meta.xml',

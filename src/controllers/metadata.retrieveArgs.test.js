@@ -52,7 +52,8 @@ async function main() {
             'RecordType',
             'Profile',
             'PermissionSet',
-            'CustomMetadata'
+            'CustomMetadata',
+            'Layout'
         ];
 
         for (const type of requiredTypes) {

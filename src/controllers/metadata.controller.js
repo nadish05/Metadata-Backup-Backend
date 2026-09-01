@@ -53,7 +53,8 @@ const RETRIEVAL_METADATA_TYPES = [
     'NamedCredential',
     'ExternalCredential',
     'CustomLabel',
-    'CustomMetadata'
+    'CustomMetadata',
+    'Layout'
 ];
 
 /**
@@ -1749,7 +1750,8 @@ const metadataTypes = [
   'NamedCredential',
   'ExternalCredential',
   'CustomLabel',
-  'CustomMetadata'
+  'CustomMetadata',
+  'Layout'
 ];
 
 const metadataArgs =
