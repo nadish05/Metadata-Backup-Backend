@@ -1589,10 +1589,16 @@ async function validateDeployment({
         };
     }
 
+    const analyzerBlockingComponents =
+        deploymentCompatibilityPlanService.buildBlockingComponentsFromCompatibilityFindings(
+            compatibilityFindings
+        );
+
     const compatibilityBlockingComponents =
         deploymentCompatibilityPlanService.mergeCompatibilityBlockingComponents(
             deploymentCompatibilityImpact?.blockingComponents || [],
-            deploymentCompatibilityPlan?.blockingComponents || []
+            deploymentCompatibilityPlan?.blockingComponents || [],
+            analyzerBlockingComponents
         );
     const compatibilityBlockingSummary =
         deploymentCompatibilityPlanService.buildBlockingSummary(

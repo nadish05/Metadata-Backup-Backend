@@ -522,6 +522,57 @@ function buildBlockingSummary(blockingComponents = []) {
     };
 }
 
+function isBlockingCompatibilityFinding(finding) {
+    return (
+        finding?.status === 'BLOCK' ||
+        finding?.status === 'FAIL' ||
+        finding?.blocking === true
+    );
+}
+
+/**
+ * Convert Deployment Compatibility Analyzer findings into readiness blockers.
+ * Uses the same blocking semantics as deploymentCompatibilityAnalyzer.
+ */
+function buildBlockingComponentsFromCompatibilityFindings(findings = []) {
+    const components = [];
+    const seen = new Set();
+
+    for (const finding of findings) {
+        if (!isBlockingCompatibilityFinding(finding)) {
+            continue;
+        }
+
+        const metadataType = finding?.metadataType || finding?.type || null;
+        const metadataName = finding?.metadataName || finding?.name || null;
+
+        if (!metadataType || !metadataName) {
+            continue;
+        }
+
+        const key = `${metadataType}:${metadataName}`;
+
+        if (seen.has(key)) {
+            continue;
+        }
+
+        seen.add(key);
+        components.push({
+            metadataType,
+            metadataName,
+            action: 'BLOCKING',
+            category: finding?.ruleId || 'COMPATIBILITY_ANALYZER',
+            severity: finding?.severity || 'BLOCKER',
+            status: finding?.status || 'BLOCK',
+            reason: finding?.reason || null,
+            requiredBy: finding?.requiredBy || null,
+            recommendation: finding?.recommendedAction || null
+        });
+    }
+
+    return components;
+}
+
 function mergeCompatibilityBlockingComponents(...collections) {
     const byComponent = new Map();
 
@@ -691,5 +742,7 @@ module.exports = {
     extractLwcComponentNames,
     analyzeLwcAndFlexiDependencies,
     buildBlockingSummary,
+    isBlockingCompatibilityFinding,
+    buildBlockingComponentsFromCompatibilityFindings,
     mergeCompatibilityBlockingComponents
 };
