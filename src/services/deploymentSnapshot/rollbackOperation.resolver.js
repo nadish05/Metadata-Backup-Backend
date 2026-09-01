@@ -12,6 +12,9 @@ const {
     createUnavailableRollbackOperationStore
 } = require('./stores/unavailableRollbackOperationStore');
 const {
+    createMemoryRollbackOperationStore
+} = require('./stores/memoryRollbackOperationStore');
+const {
     createSalesforceControlPlaneRollbackOperationStore
 } = require('../controlPlane/stores/salesforceControlPlaneRollbackOperationStore');
 const { getSharedControlPlaneClient } = require('../controlPlane/controlPlane.runtime');
@@ -21,6 +24,7 @@ const UNAVAILABLE_MESSAGE =
 
 let cachedKey = null;
 let cachedStore = null;
+let cachedSalesforceInlineStore = null;
 
 function getSharedRollbackOperationStore() {
     const config = resolveSnapshotStorageConfig();
@@ -50,13 +54,27 @@ function getSharedRollbackOperationStore() {
     return cachedStore;
 }
 
+function getSalesforceInlineRollbackOperationStore() {
+    if (!cachedSalesforceInlineStore) {
+        cachedSalesforceInlineStore = createMemoryRollbackOperationStore();
+    }
+
+    return cachedSalesforceInlineStore;
+}
+
 function resetSharedRollbackOperationStoreForTests() {
     cachedKey = null;
     cachedStore = null;
 }
 
+function resetSalesforceInlineRollbackOperationStoreForTests() {
+    cachedSalesforceInlineStore = null;
+}
+
 module.exports = {
     getSharedRollbackOperationStore,
+    getSalesforceInlineRollbackOperationStore,
     resetSharedRollbackOperationStoreForTests,
+    resetSalesforceInlineRollbackOperationStoreForTests,
     UNAVAILABLE_MESSAGE
 };

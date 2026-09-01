@@ -227,6 +227,10 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const resolveActor =
         dependencies.resolveTrustedActor ||
         (() => null);
+    const skipAuthorization =
+        typeof dependencies.skipRollbackAuthorization === 'function'
+            ? dependencies.skipRollbackAuthorization
+            : () => dependencies.skipRollbackAuthorization === true;
     const recoveryContract =
         dependencies.recoveryContract ||
         createRollbackRecoveryContract({
@@ -500,38 +504,41 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             );
         }
 
-        const actor = resolveActorContext(resolveActor(args));
-        const authorization = await resolveAuthorizationService().authorize({
-            actor,
-            action: ROLLBACK_AUTHORIZATION_ACTION.ROLLBACK,
-            destinationOrgId: verifiedOrgId,
-            snapshotId: snapshot.snapshotId,
-            historyId: args.historyId || null
-        });
-        logAuthorizationDecision(authorization);
-        void buildRollbackAuditContext({
-            actor,
-            action: ROLLBACK_AUTHORIZATION_ACTION.ROLLBACK,
-            destinationOrgId: verifiedOrgId,
-            snapshotId: snapshot.snapshotId,
-            authorizationDecision: authorization.decision
-        });
+        if (!skipAuthorization()) {
+            const actor = resolveActorContext(resolveActor(args));
+            const authorization = await resolveAuthorizationService().authorize({
+                actor,
+                action: ROLLBACK_AUTHORIZATION_ACTION.ROLLBACK,
+                destinationOrgId: verifiedOrgId,
+                snapshotId: snapshot.snapshotId,
+                historyId: args.historyId || null
+            });
+            logAuthorizationDecision(authorization);
+            void buildRollbackAuditContext({
+                actor,
+                action: ROLLBACK_AUTHORIZATION_ACTION.ROLLBACK,
+                destinationOrgId: verifiedOrgId,
+                snapshotId: snapshot.snapshotId,
+                authorizationDecision: authorization.decision
+            });
 
-        if (
-            authorization.decision !== ROLLBACK_AUTHORIZATION_DECISION.AUTHORIZED
-        ) {
-            const code =
-                authorization.decision ===
-                ROLLBACK_AUTHORIZATION_DECISION.UNAVAILABLE
-                    ? ROLLBACK_CODE.AUTHORIZATION_UNAVAILABLE
-                    : ROLLBACK_CODE.AUTHORIZATION_DENIED;
+            if (
+                authorization.decision !==
+                ROLLBACK_AUTHORIZATION_DECISION.AUTHORIZED
+            ) {
+                const code =
+                    authorization.decision ===
+                    ROLLBACK_AUTHORIZATION_DECISION.UNAVAILABLE
+                        ? ROLLBACK_CODE.AUTHORIZATION_UNAVAILABLE
+                        : ROLLBACK_CODE.AUTHORIZATION_DENIED;
 
-            return block(
-                code,
-                authorization.message ||
-                    'Rollback is not authorized for this actor and destination org.',
-                { snapshotId }
-            );
+                return block(
+                    code,
+                    authorization.message ||
+                        'Rollback is not authorized for this actor and destination org.',
+                    { snapshotId }
+                );
+            }
         }
 
         let claim;

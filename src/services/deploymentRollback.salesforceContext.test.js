@@ -53,6 +53,9 @@ const {
     INPUT_CODE,
     createDeploymentRollbackService
 } = require('./deploymentRollback.service');
+const {
+    resetSalesforceInlineRollbackOperationStoreForTests
+} = require('./deploymentSnapshot/rollbackOperation.resolver');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -189,6 +192,7 @@ function createSalesforceHarness({
         store: createMemoryOrgLockStore()
     })
 } = {}) {
+    resetSalesforceInlineRollbackOperationStoreForTests();
     let executions = 0;
     let checkOnlyCalls = 0;
     let injectedCaptureService = null;
@@ -536,6 +540,124 @@ function createSalesforceHarness({
             });
 
             assert.strictEqual(restoreFactoryCalled, false);
+        }
+    );
+
+    await runTest(
+        'Salesforce inline rollback works without durable storage env configuration',
+        async () => {
+            const previousMode = process.env.SNAPSHOT_STORAGE_MODE;
+            const previousRoot = process.env.SNAPSHOT_DURABLE_ROOT;
+
+            delete process.env.SNAPSHOT_STORAGE_MODE;
+            delete process.env.SNAPSHOT_DURABLE_ROOT;
+
+            try {
+                const {
+                    getSalesforceInlineRollbackOperationStore,
+                    resetSalesforceInlineRollbackOperationStoreForTests
+                } = require('./deploymentSnapshot/rollbackOperation.resolver');
+                resetSalesforceInlineRollbackOperationStoreForTests();
+
+                const harness = createSalesforceHarness();
+                const { snapshotExport, artifacts } = buildSalesforcePayload();
+                const historyId = seedOriginalHistory(harness.historyService, {
+                    snapshotId: SNAPSHOT_ID,
+                    destinationOrgId: DEST
+                });
+
+                const result = await harness.service.executeRollback({
+                    historyId,
+                    snapshotId: SNAPSHOT_ID,
+                    snapshotExport,
+                    artifacts,
+                    ...CREDENTIALS
+                });
+
+                assert.strictEqual(result.httpStatus, 200);
+                assert.strictEqual(result.body.success, true);
+                assert.notStrictEqual(
+                    result.body.code,
+                    'ROLLBACK_OPERATION_STORE_UNAVAILABLE'
+                );
+                assert.notStrictEqual(
+                    result.body.code,
+                    'ROLLBACK_STORAGE_UNAVAILABLE'
+                );
+                assert.ok(getSalesforceInlineRollbackOperationStore());
+            } finally {
+                if (previousMode === undefined) {
+                    delete process.env.SNAPSHOT_STORAGE_MODE;
+                } else {
+                    process.env.SNAPSHOT_STORAGE_MODE = previousMode;
+                }
+
+                if (previousRoot === undefined) {
+                    delete process.env.SNAPSHOT_DURABLE_ROOT;
+                } else {
+                    process.env.SNAPSHOT_DURABLE_ROOT = previousRoot;
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Salesforce inline rollback does not require HTTP authorization dependencies',
+        async () => {
+            resetSalesforceInlineRollbackOperationStoreForTests();
+
+            const harness = createSalesforceHarness();
+            const { snapshotExport, artifacts } = buildSalesforcePayload();
+            const historyId = seedOriginalHistory(harness.historyService, {
+                snapshotId: SNAPSHOT_ID,
+                destinationOrgId: DEST
+            });
+
+            const service = createDeploymentRollbackService({
+                historyService: harness.historyService,
+                createRestoreService: (overrides = {}) =>
+                    createDestinationSnapshotRestoreService({
+                        isSnapshotRollbackEnabled: () => true,
+                        isDurableSnapshotStorageReady: () => true,
+                        resolveVerifiedDestinationOrgId: async () => DEST,
+                        retrieveDestinationMember: async () => ({
+                            artifactBytes: afterBytes(),
+                            files: []
+                        }),
+                        runCheckOnlyDeployment: async () => ({
+                            executed: true,
+                            success: true,
+                            status: 'Succeeded',
+                            message: 'ok'
+                        }),
+                        runDeploymentExecution: async () => ({
+                            success: true,
+                            status: 'Succeeded',
+                            message: 'deployed'
+                        }),
+                        historyService: harness.historyService,
+                        ...overrides
+                    })
+            });
+
+            const result = await service.executeRollback({
+                historyId,
+                snapshotId: SNAPSHOT_ID,
+                snapshotExport,
+                artifacts,
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(result.httpStatus, 200);
+            assert.strictEqual(result.body.success, true);
+            assert.notStrictEqual(
+                result.body.code,
+                'ROLLBACK_AUTHORIZATION_DENIED'
+            );
+            assert.notStrictEqual(
+                result.body.code,
+                'ROLLBACK_AUTHORIZATION_UNAVAILABLE'
+            );
         }
     );
 })();

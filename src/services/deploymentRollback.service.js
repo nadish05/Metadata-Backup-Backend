@@ -18,8 +18,8 @@ const {
 const deploymentHistoryService = require('./deploymentHistory.service');
 const { orgIdsMatch } = require('./deploymentOrgLock/destinationOrgIdentity.service');
 const {
-    createRollbackHttpAuthorizationDependencies
-} = require('./deploymentSnapshot/rollbackAuthorization.httpProvider');
+    getSalesforceInlineRollbackOperationStore
+} = require('./deploymentSnapshot/rollbackOperation.resolver');
 
 const INPUT_CODE = Object.freeze({
     HISTORY_ID_REQUIRED: 'ROLLBACK_HISTORY_ID_REQUIRED',
@@ -118,15 +118,11 @@ function classifyRestoreResult(result) {
 function createDeploymentRollbackService(dependencies = {}) {
     const historyService =
         dependencies.historyService || deploymentHistoryService;
-    const rollbackHttpAuthorization =
-        dependencies.rollbackHttpAuthorization ||
-        createRollbackHttpAuthorizationDependencies();
     const createRestoreService =
         dependencies.createRestoreService ||
         ((overrides = {}) =>
             createDestinationSnapshotRestoreService({
                 historyService,
-                ...rollbackHttpAuthorization,
                 ...overrides
             }));
     const restoreService =
@@ -216,7 +212,10 @@ function createDeploymentRollbackService(dependencies = {}) {
 
                 activeRestoreService = createRestoreService({
                     captureService: context.captureService,
-                    isDurableSnapshotStorageReady: () => true
+                    isDurableSnapshotStorageReady: () => true,
+                    getRollbackOperationStore:
+                        getSalesforceInlineRollbackOperationStore,
+                    skipRollbackAuthorization: true
                 });
             } catch (error) {
                 if (error instanceof SalesforceRollbackSnapshotContextError) {
