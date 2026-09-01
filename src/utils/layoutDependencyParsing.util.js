@@ -55,6 +55,46 @@ function isSafeApiName(value) {
 }
 
 /**
+ * Custom object API names end with __c (same rule as PermissionSet/Profile discovery).
+ */
+function isCustomObjectName(value) {
+    const name = String(value || '').trim();
+
+    return (
+        name.endsWith('__c') &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
+    );
+}
+
+/**
+ * Parse Object.Field__c qualified names into object and field segments.
+ */
+function parseQualifiedCustomFieldReference(value) {
+    const normalized = String(value || '').trim();
+    const separatorIndex = normalized.indexOf('.');
+
+    if (separatorIndex <= 0) {
+        return null;
+    }
+
+    const objectApiName = normalized.slice(0, separatorIndex).trim();
+    const fieldApiName = normalized.slice(separatorIndex + 1).trim();
+
+    if (
+        !isSafeApiName(objectApiName) ||
+        !isDeployableField(fieldApiName)
+    ) {
+        return null;
+    }
+
+    return {
+        objectApiName,
+        fieldApiName,
+        qualifiedName: `${objectApiName}.${fieldApiName}`
+    };
+}
+
+/**
  * Normalize related-list object tokens such as LEAD → Lead.
  */
 function normalizeObjectApiNameToken(objectToken) {
@@ -230,6 +270,8 @@ function extractAllXmlTagValues(content, tagName) {
 module.exports = {
     STANDARD_LAYOUT_BUTTONS,
     STANDARD_PLATFORM_ACTIONS,
+    isCustomObjectName,
+    parseQualifiedCustomFieldReference,
     parseCustomRelatedListReference,
     parseRelatedListDisplayField,
     parseLayoutCustomButtonReference,

@@ -7,6 +7,8 @@ const {
     isDeployableField
 } = require('../../../utils/salesforceSystemFields.util');
 const {
+    isCustomObjectName,
+    parseQualifiedCustomFieldReference,
     parseCustomRelatedListReference,
     parseRelatedListDisplayField,
     parseLayoutCustomButtonReference,
@@ -130,6 +132,61 @@ function extractLayoutItemFieldNames(layoutXml) {
     return fieldNames;
 }
 
+function createCustomFieldWithOwningObjectReferences({
+    qualifiedFieldName,
+    sourceMetadata,
+    sourceElement,
+    referenceType,
+    parentReferenceType,
+    depth,
+    fieldReason,
+    parentReason
+}) {
+    const fieldReference = parseQualifiedCustomFieldReference(
+        qualifiedFieldName
+    );
+
+    if (!fieldReference) {
+        return [];
+    }
+
+    const references = [];
+
+    if (isCustomObjectName(fieldReference.objectApiName)) {
+        references.push(
+            createReference({
+                name: fieldReference.objectApiName,
+                metadataType: 'CustomObject',
+                sourceMetadata,
+                sourceElement,
+                referenceType: parentReferenceType,
+                depth,
+                reason: parentReason,
+                deployable: true,
+                blocking: true,
+                sobjectType: fieldReference.objectApiName
+            })
+        );
+    }
+
+    references.push(
+        createReference({
+            name: fieldReference.qualifiedName,
+            metadataType: 'CustomField',
+            sourceMetadata,
+            sourceElement,
+            referenceType,
+            depth,
+            reason: fieldReason,
+            deployable: true,
+            blocking: true,
+            sobjectType: fieldReference.objectApiName
+        })
+    );
+
+    return references;
+}
+
 function discoverLayoutItemFieldReferences(
     layoutXml,
     sourceMetadata,
@@ -151,20 +208,17 @@ function discoverLayoutItemFieldReferences(
             continue;
         }
 
-        const qualifiedName = `${objectApiName}.${fieldApiName}`;
-
         references.push(
-            createReference({
-                name: qualifiedName,
-                metadataType: 'CustomField',
+            ...createCustomFieldWithOwningObjectReferences({
+                qualifiedFieldName: `${objectApiName}.${fieldApiName}`,
                 sourceMetadata,
                 sourceElement: fieldApiName,
                 referenceType: 'Field',
+                parentReferenceType: 'ParentObject',
                 depth,
-                reason: 'Custom field referenced by Page Layout.',
-                deployable: true,
-                blocking: true,
-                sobjectType: objectApiName
+                fieldReason: 'Custom field referenced by Page Layout.',
+                parentReason:
+                    'Custom object required by Page Layout field reference.'
             })
         );
     }
@@ -186,18 +240,17 @@ function discoverRelatedListReferences(layoutXml, sourceMetadata, depth) {
 
             if (qualifiedField) {
                 references.push(
-                    createReference({
-                        name: qualifiedField,
-                        metadataType: 'CustomField',
+                    ...createCustomFieldWithOwningObjectReferences({
+                        qualifiedFieldName: qualifiedField,
                         sourceMetadata,
                         sourceElement: relatedListValue,
                         referenceType: 'RelatedList',
+                        parentReferenceType: 'RelatedListParentObject',
                         depth,
-                        reason:
+                        fieldReason:
                             'Custom related list lookup field referenced by Page Layout.',
-                        deployable: true,
-                        blocking: true,
-                        sobjectType: qualifiedField.split('.')[0] || null
+                        parentReason:
+                            'Custom object required by Page Layout related list field.'
                     })
                 );
             }
@@ -212,18 +265,17 @@ function discoverRelatedListReferences(layoutXml, sourceMetadata, depth) {
             }
 
             references.push(
-                createReference({
-                    name: qualifiedField,
-                    metadataType: 'CustomField',
+                ...createCustomFieldWithOwningObjectReferences({
+                    qualifiedFieldName: qualifiedField,
                     sourceMetadata,
                     sourceElement: displayField,
                     referenceType: 'RelatedListField',
+                    parentReferenceType: 'RelatedListParentObject',
                     depth,
-                    reason:
+                    fieldReason:
                         'Custom related list column field referenced by Page Layout.',
-                    deployable: true,
-                    blocking: true,
-                    sobjectType: qualifiedField.split('.')[0] || null
+                    parentReason:
+                        'Custom object required by Page Layout related list column field.'
                 })
             );
         }

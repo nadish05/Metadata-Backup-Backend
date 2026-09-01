@@ -134,6 +134,20 @@ function findReferences(references, metadataType, name) {
     );
 }
 
+function findResolvedDependency(resolvedDependencies, metadataType, name) {
+    return (resolvedDependencies || []).find(
+        (dependency) =>
+            (dependency.metadataType || dependency.type) === metadataType &&
+            (dependency.metadataName || dependency.name) === name
+    );
+}
+
+function getPackageMemberNames(generatedPackage, metadataType) {
+    return (generatedPackage?.metadata || [])
+        .filter((item) => item.metadataType === metadataType)
+        .map((item) => item.metadataName);
+}
+
 function buildLayoutXml(fields = []) {
     const fieldXml = fields
         .map((field) => `            <field>${field}</field>`)
@@ -982,6 +996,372 @@ async function main() {
             );
 
             assert.ok(relatedListPass);
+            assert.notStrictEqual(
+                pipeline.compatibility.overallCompatibility,
+                'BLOCKED'
+            );
+        }
+    );
+
+    await runTest(
+        'T22: Gym_Trainer__c.Gym_Member__c emits parent CustomObject and CustomField',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([
+                    'Gym_Trainer__c.Gym_Member__c'
+                ])
+            });
+
+            const refs = discovery.references || [];
+
+            assert.ok(
+                findReference(refs, 'CustomObject', 'Gym_Trainer__c'),
+                'expected CustomObject:Gym_Trainer__c'
+            );
+            assert.ok(
+                findReference(
+                    refs,
+                    'CustomField',
+                    'Gym_Trainer__c.Gym_Member__c'
+                ),
+                'expected CustomField:Gym_Trainer__c.Gym_Member__c'
+            );
+        }
+    );
+
+    await runTest(
+        'T23: Payment__c.Account__c emits parent CustomObject and CustomField',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([
+                    'Payment__c.Account__c'
+                ])
+            });
+
+            const refs = discovery.references || [];
+
+            assert.ok(findReference(refs, 'CustomObject', 'Payment__c'));
+            assert.ok(
+                findReference(refs, 'CustomField', 'Payment__c.Account__c')
+            );
+        }
+    );
+
+    await runTest(
+        'T24: Lead.Converted_Account__c emits CustomField only without CustomObject:Lead',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([
+                    'Lead.Converted_Account__c'
+                ])
+            });
+
+            const refs = discovery.references || [];
+
+            assert.ok(
+                findReference(refs, 'CustomField', 'Lead.Converted_Account__c')
+            );
+            assert.strictEqual(findReference(refs, 'CustomObject', 'Lead'), undefined);
+        }
+    );
+
+    await runTest(
+        'T25: Layout parent Account and Account fields do not duplicate CustomObject:Account',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXml(['DOB__c', 'Address__c'])
+            });
+
+            assert.strictEqual(
+                findReferences(discovery.references, 'CustomObject', 'Account')
+                    .length,
+                1
+            );
+        }
+    );
+
+    await runTest(
+        'T26: related-list display fields remain ignored',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: `<?xml version="1.0" encoding="UTF-8"?>
+<Layout xmlns="http://soap.sforce.com/2006/04/metadata">
+    <relatedLists>
+        <fields>FULL_NAME</fields>
+        <fields>NAME</fields>
+        <fields>LEAD.COMPANY</fields>
+        <fields>LEAD.PHONE</fields>
+        <relatedList>Lead.Converted_Account__c</relatedList>
+    </relatedLists>
+</Layout>`
+            });
+
+            const refs = discovery.references || [];
+
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Account.FULL_NAME'),
+                undefined
+            );
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Account.NAME'),
+                undefined
+            );
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Lead.COMPANY'),
+                undefined
+            );
+            assert.strictEqual(
+                findReference(refs, 'CustomField', 'Lead.PHONE'),
+                undefined
+            );
+        }
+    );
+
+    await runTest(
+        'T27: source object and field available with destination missing schedules DEPLOY for both',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([
+                    'Gym_Trainer__c.Gym_Member__c',
+                    'Payment__c.Account__c'
+                ])
+            });
+
+            const destinationStates = new Map([
+                ['CustomObject:Account', 'EXISTS'],
+                ['CustomObject:Gym_Trainer__c', 'MISSING'],
+                ['CustomField:Gym_Trainer__c.Gym_Member__c', 'MISSING'],
+                ['CustomObject:Payment__c', 'MISSING'],
+                ['CustomField:Payment__c.Account__c', 'MISSING']
+            ]);
+
+            const pipeline = await resolveLayoutPipeline({
+                discoveredReferences: discovery.references,
+                destinationStates,
+                selectedMetadata: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: ACCOUNT_GYM_LAYOUT,
+                        filePath: ACCOUNT_GYM_LAYOUT_PATH
+                    }
+                ],
+                artifactFlags: {
+                    'CustomObject:Gym_Trainer__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomField:Gym_Trainer__c.Gym_Member__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomObject:Payment__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomField:Payment__c.Account__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    }
+                }
+            });
+
+            const gymTrainerObject = findResolvedDependency(
+                pipeline.resolvedDependencies,
+                'CustomObject',
+                'Gym_Trainer__c'
+            );
+            const gymTrainerField = findResolvedDependency(
+                pipeline.resolvedDependencies,
+                'CustomField',
+                'Gym_Trainer__c.Gym_Member__c'
+            );
+            const paymentObject = findResolvedDependency(
+                pipeline.resolvedDependencies,
+                'CustomObject',
+                'Payment__c'
+            );
+            const paymentField = findResolvedDependency(
+                pipeline.resolvedDependencies,
+                'CustomField',
+                'Payment__c.Account__c'
+            );
+
+            assert.strictEqual(gymTrainerObject?.action, 'DEPLOY');
+            assert.strictEqual(gymTrainerField?.action, 'DEPLOY');
+            assert.strictEqual(paymentObject?.action, 'DEPLOY');
+            assert.strictEqual(paymentField?.action, 'DEPLOY');
+
+            const packageObjects = getPackageMemberNames(
+                pipeline.generatedPackage,
+                'CustomObject'
+            );
+            const packageFields = getPackageMemberNames(
+                pipeline.generatedPackage,
+                'CustomField'
+            );
+
+            assert.ok(packageObjects.includes('Gym_Trainer__c'));
+            assert.ok(packageObjects.includes('Payment__c'));
+            assert.ok(packageFields.includes('Gym_Trainer__c.Gym_Member__c'));
+            assert.ok(packageFields.includes('Payment__c.Account__c'));
+
+            assert.notStrictEqual(
+                pipeline.compatibility.overallCompatibility,
+                'BLOCKED'
+            );
+        }
+    );
+
+    await runTest(
+        'T28: missing source object blocks deployment via artifact.exists',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildLayoutXmlWithRelatedLists([
+                    'Gym_Trainer__c.Gym_Member__c'
+                ])
+            });
+
+            const destinationStates = new Map([
+                ['CustomObject:Account', 'EXISTS'],
+                ['CustomObject:Gym_Trainer__c', 'MISSING'],
+                ['CustomField:Gym_Trainer__c.Gym_Member__c', 'MISSING']
+            ]);
+
+            const pipeline = await resolveLayoutPipeline({
+                discoveredReferences: discovery.references,
+                destinationStates,
+                selectedMetadata: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: ACCOUNT_GYM_LAYOUT,
+                        filePath: ACCOUNT_GYM_LAYOUT_PATH
+                    }
+                ],
+                artifactFlags: {
+                    'CustomObject:Gym_Trainer__c': {
+                        artifactResolved: false,
+                        sourceExists: false
+                    },
+                    'CustomField:Gym_Trainer__c.Gym_Member__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    }
+                }
+            });
+
+            assert.strictEqual(
+                pipeline.compatibility.overallCompatibility,
+                'BLOCKED'
+            );
+
+            const artifactBlocker = (pipeline.compatibility.findings || []).find(
+                (finding) =>
+                    finding.ruleId === 'artifact.exists' &&
+                    finding.metadataName === 'Gym_Trainer__c' &&
+                    (finding.status === 'FAIL' ||
+                        finding.status === 'BLOCK' ||
+                        finding.blocking === true)
+            );
+
+            assert.ok(artifactBlocker);
+        }
+    );
+
+    await runTest(
+        'INTEGRATION: production Account-Gym Layout package includes related-list parent objects',
+        async () => {
+            const discovery = await discoverLayoutReferences({
+                layoutMemberName: ACCOUNT_GYM_LAYOUT,
+                layoutPath: ACCOUNT_GYM_LAYOUT_PATH,
+                layoutXml: buildProductionAccountGymLayoutXml()
+            });
+
+            const destinationStates = new Map([
+                ['CustomObject:Account', 'EXISTS'],
+                ['CustomObject:Gym_Trainer__c', 'MISSING'],
+                ['CustomField:Gym_Trainer__c.Gym_Member__c', 'MISSING'],
+                ['CustomObject:Payment__c', 'MISSING'],
+                ['CustomField:Payment__c.Account__c', 'MISSING'],
+                ['CustomField:Lead.Converted_Account__c', 'EXISTS'],
+                ['CustomField:Account.DOB__c', 'EXISTS'],
+                ['CustomField:Account.Address__c', 'EXISTS'],
+                ['CustomField:Account.F__c', 'EXISTS'],
+                ['CustomField:Account.Email__c', 'EXISTS']
+            ]);
+
+            const pipeline = await resolveLayoutPipeline({
+                discoveredReferences: discovery.references,
+                destinationStates,
+                selectedMetadata: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: ACCOUNT_GYM_LAYOUT,
+                        filePath: ACCOUNT_GYM_LAYOUT_PATH
+                    }
+                ],
+                artifactFlags: {
+                    'CustomObject:Gym_Trainer__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomField:Gym_Trainer__c.Gym_Member__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomObject:Payment__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomField:Payment__c.Account__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    }
+                }
+            });
+
+            assert.ok(
+                getPackageMemberNames(pipeline.generatedPackage, 'Layout').includes(
+                    ACCOUNT_GYM_LAYOUT
+                )
+            );
+            assert.ok(
+                getPackageMemberNames(
+                    pipeline.generatedPackage,
+                    'CustomField'
+                ).includes('Gym_Trainer__c.Gym_Member__c')
+            );
+            assert.ok(
+                getPackageMemberNames(
+                    pipeline.generatedPackage,
+                    'CustomField'
+                ).includes('Payment__c.Account__c')
+            );
+            assert.ok(
+                getPackageMemberNames(
+                    pipeline.generatedPackage,
+                    'CustomObject'
+                ).includes('Gym_Trainer__c')
+            );
+            assert.ok(
+                getPackageMemberNames(
+                    pipeline.generatedPackage,
+                    'CustomObject'
+                ).includes('Payment__c')
+            );
             assert.notStrictEqual(
                 pipeline.compatibility.overallCompatibility,
                 'BLOCKED'
