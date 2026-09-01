@@ -226,14 +226,16 @@ function logFindings(findings, summary, overallCompatibility) {
  *   selectedMetadata?: Array,
  *   discoveredRelationships?: Array,
  *   discoveredReferences?: Array,
- *   resolvedDependencies?: Array
+ *   resolvedDependencies?: Array,
+ *   destinationStates?: Map
  * }} options
  */
 function analyzeDeploymentCompatibility({
     selectedMetadata = [],
     discoveredRelationships = [],
     discoveredReferences = [],
-    resolvedDependencies = []
+    resolvedDependencies = [],
+    destinationStates = new Map()
 } = {}) {
     logSection('Deployment Compatibility Analyzer');
 
@@ -249,7 +251,8 @@ function analyzeDeploymentCompatibility({
         discoveredRelationships,
         discoveredReferences,
         resolvedDependencies,
-        availability
+        availability,
+        destinationStates
     };
 
     const findings = [];

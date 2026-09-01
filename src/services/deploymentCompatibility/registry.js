@@ -4,6 +4,8 @@
  */
 
 const flexiPageFieldReferenceRule = require('./rules/flexiPageFieldReference.rule');
+const layoutFieldReferenceRule = require('./rules/layoutFieldReference.rule');
+const layoutParentObjectRule = require('./rules/layoutParentObject.rule');
 const lightningComponentReferenceRule = require('./rules/lightningComponentReference.rule');
 const actionOverrideReferenceRule = require('./rules/actionOverrideReference.rule');
 const lookupTargetRule = require('./rules/lookupTarget.rule');
@@ -14,6 +16,8 @@ function getRegisteredCompatibilityRules() {
     return [
         artifactExistsRule,
         flexiPageFieldReferenceRule,
+        layoutFieldReferenceRule,
+        layoutParentObjectRule,
         lightningComponentReferenceRule,
         actionOverrideReferenceRule,
         lookupTargetRule,

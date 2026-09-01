@@ -935,7 +935,11 @@ async function validateDeployment({
                     selectedMetadata: artifactEnrichedSelectedMetadata,
                     discoveredRelationships,
                     discoveredReferences,
-                    resolvedDependencies: resolvedRequiredDependencies
+                    resolvedDependencies: enrichAnalyzerItemsWithDestinationState(
+                        resolvedRequiredDependencies,
+                        destinationStatesForAnalyzer
+                    ),
+                    destinationStates: destinationStatesForAnalyzer
                 }
             );
         compatibilitySummary =

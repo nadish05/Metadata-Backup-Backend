@@ -20,6 +20,53 @@ function shellQuote(value) {
     return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
+function collectLayoutScanTargets({
+    selectedMetadata,
+    discoveredRelationships,
+    enrichedDependencies
+}) {
+    const targets = [];
+    const seen = new Set();
+
+    function addTarget(item, depth = 1) {
+        const metadataType = item?.metadataType || item?.type;
+        const name = item?.metadataName || item?.name;
+
+        if (metadataType !== 'Layout' || !name) {
+            return;
+        }
+
+        const key = buildGraphNodeId('Layout', name);
+
+        if (!key || seen.has(key)) {
+            return;
+        }
+
+        seen.add(key);
+        targets.push({
+            metadataType: 'Layout',
+            metadataName: name,
+            name,
+            filePath: item.filePath || null,
+            depth: item.depth != null ? item.depth : depth
+        });
+    }
+
+    for (const item of selectedMetadata || []) {
+        addTarget(item, 0);
+    }
+
+    for (const item of discoveredRelationships || []) {
+        addTarget(item, item.depth || 1);
+    }
+
+    for (const item of enrichedDependencies || []) {
+        addTarget(item, item.depth || 1);
+    }
+
+    return targets;
+}
+
 function collectFlexiPageScanTargets({
     selectedMetadata,
     discoveredRelationships,
@@ -189,11 +236,18 @@ async function discoverReferences({
         };
     }
 
-    const scanTargets = collectFlexiPageScanTargets({
-        selectedMetadata,
-        discoveredRelationships,
-        enrichedDependencies
-    });
+    const scanTargets = [
+        ...collectFlexiPageScanTargets({
+            selectedMetadata,
+            discoveredRelationships,
+            enrichedDependencies
+        }),
+        ...collectLayoutScanTargets({
+            selectedMetadata,
+            discoveredRelationships,
+            enrichedDependencies
+        })
+    ];
 
     if (!scanTargets.length) {
         console.log('Metadata scanned: 0');

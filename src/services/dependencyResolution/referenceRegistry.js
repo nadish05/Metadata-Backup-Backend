@@ -3,9 +3,10 @@
  */
 
 const flexiPageReferenceDiscoverer = require('./discoverers/flexiPageReference.discoverer');
+const layoutReferenceDiscoverer = require('./discoverers/layoutReference.discoverer');
 
 function getRegisteredReferenceDiscoverers() {
-    return [flexiPageReferenceDiscoverer];
+    return [flexiPageReferenceDiscoverer, layoutReferenceDiscoverer];
 }
 
 module.exports = {
