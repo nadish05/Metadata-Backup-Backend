@@ -101,7 +101,11 @@ const customObjectGraphDiscoverer = {
             name: objectName,
             filePath: metadata.filePath || null,
             depth,
-            origin
+            origin,
+            referenceType: metadata.referenceType || metadata.relationship || null,
+            relationship: metadata.relationship || metadata.referenceType || null,
+            discoveryMethod: metadata.discoveryMethod || null,
+            sourceMetadata: metadata.sourceMetadata || null
         };
 
         const seen = new Set();

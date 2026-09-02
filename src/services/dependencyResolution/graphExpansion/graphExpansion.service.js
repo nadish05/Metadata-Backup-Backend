@@ -45,6 +45,8 @@ function toFrontierNode(item, depth = 0) {
         return null;
     }
 
+    const referenceType = item?.referenceType || item?.relationship || null;
+
     return {
         metadataType,
         type: metadataType,
@@ -54,7 +56,11 @@ function toFrontierNode(item, depth = 0) {
         depth: item.depth != null ? item.depth : depth,
         deployable: item.deployable !== false,
         blocking: item.blocking !== false,
-        origin: item.origin || null
+        origin: item.origin || null,
+        referenceType,
+        relationship: item?.relationship || referenceType,
+        discoveryMethod: item?.discoveryMethod || null,
+        sourceMetadata: item?.sourceMetadata || null
     };
 }
 
@@ -482,6 +488,7 @@ async function expandMetadataGraph({
 module.exports = {
     expandMetadataGraph,
     collectSeedNodes,
+    toFrontierNode,
     MAX_GRAPH_DEPTH,
     MAX_NODE_COUNT
 };

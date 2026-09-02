@@ -11,6 +11,8 @@ const {
 
 const ACTION_OVERRIDE_DISCOVERY_METHOD = 'actionOverrides';
 const ACTION_OVERRIDE_RELATIONSHIP = 'ActionOverride';
+const LAYOUT_REFERENCE_DISCOVERY_METHOD = 'layoutReference';
+const LAYOUT_PARENT_OBJECT_REFERENCE_TYPE = 'ParentObject';
 const FLEXIPAGE_SUFFIX = '.flexipage-meta.xml';
 
 function normalizePath(filePath) {
@@ -82,6 +84,16 @@ async function isStructuralActionOverrideFlexiPageForObject({
     }
 }
 
+function shouldSkipStructuralActionOverrideFlexiPages(scanTarget) {
+    const referenceType =
+        scanTarget?.referenceType || scanTarget?.relationship || null;
+
+    return (
+        scanTarget?.discoveryMethod === LAYOUT_REFERENCE_DISCOVERY_METHOD &&
+        referenceType === LAYOUT_PARENT_OBJECT_REFERENCE_TYPE
+    );
+}
+
 function createActionOverrideFlexiPageRecord({
     flexiPageName,
     sourceMetadata,
@@ -149,30 +161,33 @@ async function discoverStructuralCustomObjectDependencies({
         return { relationships, warnings, filesScanned };
     }
 
-    for (const flexiPageName of extractFlexiPagesFromActionOverrides(
-        objectXml
-    )) {
-        const flexiPageMatch = await isStructuralActionOverrideFlexiPageForObject({
-            flexiPageName,
-            objectApiName,
-            repoFiles,
-            readRepoFile,
-            warnings
-        });
+    if (!shouldSkipStructuralActionOverrideFlexiPages(scanTarget)) {
+        for (const flexiPageName of extractFlexiPagesFromActionOverrides(
+            objectXml
+        )) {
+            const flexiPageMatch =
+                await isStructuralActionOverrideFlexiPageForObject({
+                    flexiPageName,
+                    objectApiName,
+                    repoFiles,
+                    readRepoFile,
+                    warnings
+                });
 
-        filesScanned += flexiPageMatch.filesScanned || 0;
+            filesScanned += flexiPageMatch.filesScanned || 0;
 
-        if (!flexiPageMatch.matches) {
-            continue;
+            if (!flexiPageMatch.matches) {
+                continue;
+            }
+
+            relationships.push(
+                createActionOverrideFlexiPageRecord({
+                    flexiPageName,
+                    sourceMetadata: objectApiName,
+                    depth
+                })
+            );
         }
-
-        relationships.push(
-            createActionOverrideFlexiPageRecord({
-                flexiPageName,
-                sourceMetadata: objectApiName,
-                depth
-            })
-        );
     }
 
     const masterDetailFields =
@@ -199,5 +214,6 @@ module.exports = {
     discoverStructuralCustomObjectDependencies,
     createActionOverrideFlexiPageRecord,
     isStructuralActionOverrideFlexiPageForObject,
+    shouldSkipStructuralActionOverrideFlexiPages,
     resolveFlexiPageFilePath
 };
