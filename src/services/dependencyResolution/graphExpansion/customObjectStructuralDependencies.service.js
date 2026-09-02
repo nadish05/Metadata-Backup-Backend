@@ -11,6 +11,76 @@ const {
 
 const ACTION_OVERRIDE_DISCOVERY_METHOD = 'actionOverrides';
 const ACTION_OVERRIDE_RELATIONSHIP = 'ActionOverride';
+const FLEXIPAGE_SUFFIX = '.flexipage-meta.xml';
+
+function normalizePath(filePath) {
+    return String(filePath || '').replace(/\\/g, '/');
+}
+
+function resolveFlexiPageFilePath(flexiPageName, repoFiles) {
+    if (!flexiPageName || !Array.isArray(repoFiles)) {
+        return null;
+    }
+
+    const expectedEnding = `/flexipages/${flexiPageName}${FLEXIPAGE_SUFFIX}`;
+
+    return (
+        repoFiles
+            .map(normalizePath)
+            .find((repoFile) => repoFile.endsWith(expectedEnding)) || null
+    );
+}
+
+function extractXmlTagValue(content, tagName) {
+    const pattern = new RegExp(
+        `<${tagName}>\\s*([^<]+?)\\s*</${tagName}>`,
+        'i'
+    );
+    const match = String(content || '').match(pattern);
+
+    return match ? match[1].trim() : null;
+}
+
+async function isStructuralActionOverrideFlexiPageForObject({
+    flexiPageName,
+    objectApiName,
+    repoFiles,
+    readRepoFile,
+    warnings
+}) {
+    const filePath = resolveFlexiPageFilePath(flexiPageName, repoFiles);
+
+    if (!filePath) {
+        warnings.push(
+            `FlexiPage metadata file not found for structural action override ${flexiPageName} on ${objectApiName}.`
+        );
+        return { matches: false, filesScanned: 0 };
+    }
+
+    try {
+        const flexiPageXml = await readRepoFile(filePath);
+        const sobjectType = extractXmlTagValue(flexiPageXml, 'sobjectType');
+
+        if (!sobjectType) {
+            warnings.push(
+                `FlexiPage ${flexiPageName} is missing sobjectType; skipping structural action override for ${objectApiName}.`
+            );
+            return { matches: false, filesScanned: 1 };
+        }
+
+        return {
+            matches: sobjectType === objectApiName,
+            filesScanned: 1
+        };
+    } catch (error) {
+        warnings.push(
+            `Unable to read FlexiPage metadata ${filePath} for structural action override validation on ${objectApiName}: ${
+                error?.message || 'unknown error'
+            }`
+        );
+        return { matches: false, filesScanned: 0 };
+    }
+}
 
 function createActionOverrideFlexiPageRecord({
     flexiPageName,
@@ -82,6 +152,20 @@ async function discoverStructuralCustomObjectDependencies({
     for (const flexiPageName of extractFlexiPagesFromActionOverrides(
         objectXml
     )) {
+        const flexiPageMatch = await isStructuralActionOverrideFlexiPageForObject({
+            flexiPageName,
+            objectApiName,
+            repoFiles,
+            readRepoFile,
+            warnings
+        });
+
+        filesScanned += flexiPageMatch.filesScanned || 0;
+
+        if (!flexiPageMatch.matches) {
+            continue;
+        }
+
         relationships.push(
             createActionOverrideFlexiPageRecord({
                 flexiPageName,
@@ -113,5 +197,7 @@ async function discoverStructuralCustomObjectDependencies({
 
 module.exports = {
     discoverStructuralCustomObjectDependencies,
-    createActionOverrideFlexiPageRecord
+    createActionOverrideFlexiPageRecord,
+    isStructuralActionOverrideFlexiPageForObject,
+    resolveFlexiPageFilePath
 };

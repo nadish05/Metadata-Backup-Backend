@@ -33,6 +33,10 @@ const PAYMENT_AMOUNT_FIELD_PATH =
     'force-app/main/default/objects/Payment__c/fields/Amount_Due__c.field-meta.xml';
 const PAYMENT_PARENT_LINK_FIELD_PATH =
     'force-app/main/default/objects/Payment__c/fields/Parent_Link__c.field-meta.xml';
+const PAYMENT_RECORD_PAGE_PATH =
+    'force-app/main/default/flexipages/Payment_Record_Page.flexipage-meta.xml';
+const MEMBER_RECORD_PAGE_PATH =
+    'force-app/main/default/flexipages/Member_Record_Page.flexipage-meta.xml';
 const MEMBER_OBJECT_PATH =
     'force-app/main/default/objects/Member__c/Member__c.object-meta.xml';
 const READWRITE_OBJECT_PATH =
@@ -92,6 +96,20 @@ const PAYMENT_PARENT_LINK_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <relationshipName>Payments</relationshipName>
 </CustomField>`;
 
+const PAYMENT_RECORD_PAGE_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<FlexiPage xmlns="http://soap.sforce.com/2006/04/metadata">
+    <sobjectType>Payment__c</sobjectType>
+    <masterLabel>Payment Record Page</masterLabel>
+    <type>RecordPage</type>
+</FlexiPage>`;
+
+const MEMBER_RECORD_PAGE_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<FlexiPage xmlns="http://soap.sforce.com/2006/04/metadata">
+    <sobjectType>Member__c</sobjectType>
+    <masterLabel>Member Record Page</masterLabel>
+    <type>RecordPage</type>
+</FlexiPage>`;
+
 const MEMBER_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
     <label>Member</label>
@@ -122,6 +140,8 @@ const FILE_CONTENT = {
     [PAYMENT_MEMBER_FIELD_PATH]: PAYMENT_MEMBER_FIELD_XML,
     [PAYMENT_AMOUNT_FIELD_PATH]: PAYMENT_AMOUNT_FIELD_XML,
     [PAYMENT_PARENT_LINK_FIELD_PATH]: PAYMENT_PARENT_LINK_FIELD_XML,
+    [PAYMENT_RECORD_PAGE_PATH]: PAYMENT_RECORD_PAGE_XML,
+    [MEMBER_RECORD_PAGE_PATH]: MEMBER_RECORD_PAGE_XML,
     [MEMBER_OBJECT_PATH]: MEMBER_OBJECT_XML,
     [READWRITE_OBJECT_PATH]: READWRITE_OBJECT_XML,
     [READWRITE_LOOKUP_FIELD_PATH]: READWRITE_LOOKUP_FIELD_XML
