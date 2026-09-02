@@ -5,9 +5,14 @@
 
 const customObjectResolver = require('./resolvers/customObject.resolver');
 const personAccountRecordTypeResolver = require('./resolvers/personAccountRecordType.resolver');
+const structuralActionOverrideFieldResolver = require('./resolvers/structuralActionOverrideField.resolver');
 
 function getRegisteredResolvers() {
-    return [customObjectResolver, personAccountRecordTypeResolver];
+    return [
+        structuralActionOverrideFieldResolver,
+        customObjectResolver,
+        personAccountRecordTypeResolver
+    ];
 }
 
 module.exports = {

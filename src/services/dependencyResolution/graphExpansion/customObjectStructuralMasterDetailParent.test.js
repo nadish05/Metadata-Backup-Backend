@@ -38,6 +38,8 @@ const SUBSCRIPTION_RECORD_PAGE_PATH =
     'force-app/main/default/flexipages/Subscription_Record_Page.flexipage-meta.xml';
 const SUBSCRIPTION_PLAN_FIELD_PATH =
     'force-app/main/default/objects/Subscription__c/fields/Plan__c.field-meta.xml';
+const SUBSCRIPTION_REMAINING_SESSIONS_FIELD_PATH =
+    'force-app/main/default/objects/Subscription__c/fields/Remaining_Sessions__c.field-meta.xml';
 const SUBSCRIPTION_PARENT_MD_FIELD_PATH =
     'force-app/main/default/objects/Subscription__c/fields/Account__c.field-meta.xml';
 const ACCOUNT_OBJECT_PATH =
@@ -104,11 +106,43 @@ const SUBSCRIPTION_RECORD_PAGE_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <type>RecordPage</type>
 </FlexiPage>`;
 
+const SUBSCRIPTION_RECORD_PAGE_WITH_FIELDS_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<FlexiPage xmlns="http://soap.sforce.com/2006/04/metadata">
+    <sobjectType>Subscription__c</sobjectType>
+    <masterLabel>Subscription Record Page</masterLabel>
+    <type>RecordPage</type>
+    <flexiPageRegions>
+        <itemInstances>
+            <componentInstance>
+                <componentInstanceProperties>
+                    <name>title</name>
+                    <value>{!Record.Remaining_Sessions__c}</value>
+                </componentInstanceProperties>
+                <componentName>flexipage:field</componentName>
+                <identifier>remainingSessionsFormula</identifier>
+            </componentInstance>
+        </itemInstances>
+        <itemInstances>
+            <fieldInstance>
+                <fieldItem>Record.Remaining_Sessions__c</fieldItem>
+            </fieldInstance>
+        </itemInstances>
+    </flexiPageRegions>
+</FlexiPage>`;
+
 const SUBSCRIPTION_PLAN_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Plan__c</fullName>
     <type>Text</type>
     <length>80</length>
+</CustomField>`;
+
+const SUBSCRIPTION_REMAINING_SESSIONS_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Remaining_Sessions__c</fullName>
+    <type>Number</type>
+    <precision>18</precision>
+    <scale>0</scale>
 </CustomField>`;
 
 const SUBSCRIPTION_PARENT_MD_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -162,6 +196,8 @@ const FILE_CONTENT = {
     [SUBSCRIPTION_OBJECT_PATH]: SUBSCRIPTION_OBJECT_XML,
     [SUBSCRIPTION_RECORD_PAGE_PATH]: SUBSCRIPTION_RECORD_PAGE_XML,
     [SUBSCRIPTION_PLAN_FIELD_PATH]: SUBSCRIPTION_PLAN_FIELD_XML,
+    [SUBSCRIPTION_REMAINING_SESSIONS_FIELD_PATH]:
+        SUBSCRIPTION_REMAINING_SESSIONS_FIELD_XML,
     [SUBSCRIPTION_PARENT_MD_FIELD_PATH]: SUBSCRIPTION_PARENT_MD_FIELD_XML,
     [ACCOUNT_OBJECT_PATH]: ACCOUNT_OBJECT_XML,
     [ACCOUNT_RELATED_RECORD_PAGE_PATH]: ACCOUNT_RELATED_RECORD_PAGE_XML,
@@ -232,6 +268,28 @@ async function discoverSubscriptionMasterDetailParent(overrides = {}) {
         repoFiles: REPO_FILES,
         readRepoFile,
         listRepoFiles,
+        depth: 3
+    });
+}
+
+async function discoverSubscriptionMasterDetailParentWithFields(
+    readRepoFileOverrides = {}
+) {
+    return customObjectGraphDiscoverer.discover({
+        metadata: subscriptionMasterDetailParentMetadata(),
+        repoFiles: [
+            ...REPO_FILES,
+            SUBSCRIPTION_REMAINING_SESSIONS_FIELD_PATH
+        ],
+        readRepoFile: createReadRepoFile({
+            [SUBSCRIPTION_RECORD_PAGE_PATH]:
+                SUBSCRIPTION_RECORD_PAGE_WITH_FIELDS_XML,
+            ...readRepoFileOverrides
+        }),
+        listRepoFiles: async () => [
+            ...REPO_FILES,
+            SUBSCRIPTION_REMAINING_SESSIONS_FIELD_PATH
+        ],
         depth: 3
     });
 }
@@ -546,7 +604,7 @@ async function main() {
             });
 
             const subscriptionGraphResult =
-                await discoverSubscriptionMasterDetailParent();
+                await discoverSubscriptionMasterDetailParentWithFields();
 
             const graphDependencies = [
                 ...(paymentGraphResult.discoveredNodes || []),
@@ -556,6 +614,8 @@ async function main() {
                 type: node.metadataType,
                 metadataType: node.metadataType,
                 relationship: node.relationship || null,
+                discoveryMethod: node.discoveryMethod || null,
+                sourceMetadata: node.sourceMetadata || null,
                 action: 'DEPLOY',
                 required: true,
                 selected: true
@@ -583,7 +643,11 @@ async function main() {
                     ['CustomField:Payment__c.Account__c', 'MISSING'],
                     ['CustomField:Payment__c.Subscription__c', 'MISSING'],
                     ['FlexiPage:Payment_Record_Page', 'MISSING'],
-                    ['FlexiPage:Subscription_Record_Page', 'MISSING']
+                    ['FlexiPage:Subscription_Record_Page', 'MISSING'],
+                    [
+                        'CustomField:Subscription__c.Remaining_Sessions__c',
+                        'MISSING'
+                    ]
                 ])
             });
 
@@ -622,6 +686,9 @@ async function main() {
             assert.ok(packageFields.includes('Payment__c.Subscription__c'));
             assert.ok(packageFlexiPages.includes('Payment_Record_Page'));
             assert.ok(packageFlexiPages.includes('Subscription_Record_Page'));
+            assert.ok(
+                packageFields.includes('Subscription__c.Remaining_Sessions__c')
+            );
             assert.strictEqual(
                 packageFlexiPages.includes('Account_Related_Record_1'),
                 false
@@ -648,6 +715,109 @@ async function main() {
             assert.strictEqual(
                 getPackageMemberNames(generatedPackage, 'ApexClass').includes(
                     'PaymentRefundController'
+                ),
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 12: FIX #2D discovers Remaining_Sessions__c from Subscription_Record_Page fieldItem and expression',
+        async () => {
+            const result = await discoverSubscriptionMasterDetailParentWithFields();
+
+            assert.deepStrictEqual(nodeNames(result, 'CustomField'), [
+                'Subscription__c.Remaining_Sessions__c'
+            ]);
+
+            const field = findNode(
+                result,
+                'CustomField',
+                'Subscription__c.Remaining_Sessions__c'
+            );
+
+            assert.ok(field);
+            assert.strictEqual(field.discoveryMethod, 'structuralActionOverrideField');
+            assert.strictEqual(field.sourceMetadata, 'Subscription_Record_Page');
+            assert.strictEqual(field.relationship, 'Field');
+            assert.deepStrictEqual(nodeNames(result, 'FlexiPage'), [
+                'Subscription_Record_Page'
+            ]);
+            assert.strictEqual(
+                nodeNames(result, 'CustomObject').length,
+                0
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 13: FIX #2D skips structural FlexiPage field when destination EXISTS',
+        async () => {
+            const result = await discoverSubscriptionMasterDetailParentWithFields();
+            const graphDependencies = (result.discoveredNodes || []).map(
+                (node) => ({
+                    name: node.name,
+                    type: node.metadataType,
+                    metadataType: node.metadataType,
+                    relationship: node.relationship || null,
+                    discoveryMethod: node.discoveryMethod || null,
+                    sourceMetadata: node.sourceMetadata || null,
+                    required: true,
+                    selected: true,
+                    deployable: true,
+                    blocking: true
+                })
+            );
+
+            const resolution = await resolveDependencies({
+                requiredDependencies: graphDependencies,
+                destinationStates: new Map([
+                    [
+                        'CustomField:Subscription__c.Remaining_Sessions__c',
+                        'EXISTS'
+                    ],
+                    ['FlexiPage:Subscription_Record_Page', 'MISSING']
+                ])
+            });
+
+            const fieldDecision = resolution.resolvedDependencies.find(
+                (item) =>
+                    item.name === 'Subscription__c.Remaining_Sessions__c'
+            );
+
+            assert.ok(fieldDecision);
+            assert.strictEqual(fieldDecision.action, 'SKIP');
+            assert.strictEqual(fieldDecision.selected, false);
+
+            const generatedPackage = generateDeploymentPackage({
+                selectedMetadata: [],
+                requiredDependencies: resolution.resolvedDependencies,
+                selectedTestClasses: []
+            });
+
+            assert.strictEqual(
+                getPackageMemberNames(generatedPackage, 'CustomField').includes(
+                    'Subscription__c.Remaining_Sessions__c'
+                ),
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 14: FIX #2D does not enumerate unreferenced Subscription__c fields',
+        async () => {
+            const result = await discoverSubscriptionMasterDetailParentWithFields();
+
+            assert.strictEqual(
+                nodeNames(result, 'CustomField').includes(
+                    'Subscription__c.Plan__c'
+                ),
+                false
+            );
+            assert.strictEqual(
+                nodeNames(result, 'CustomField').includes(
+                    'Subscription__c.Account__c'
                 ),
                 false
             );

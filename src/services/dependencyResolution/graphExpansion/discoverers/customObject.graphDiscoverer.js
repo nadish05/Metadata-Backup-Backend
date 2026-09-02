@@ -21,6 +21,9 @@ const {
     discoverStructuralActionOverrideFlexiPages
 } = require('../customObjectStructuralDependencies.service');
 const {
+    discoverStructuralActionOverrideFlexiPageFields
+} = require('../structuralActionOverrideField.discoverer');
+const {
     STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
 } = require('../../discoverers/customObjectRelationship.discoverer');
 
@@ -156,6 +159,27 @@ const customObjectGraphDiscoverer = {
                 appendStructuralRelationshipsToResult({
                     objectName,
                     relationships: actionOverrideDiscovery.relationships,
+                    depth,
+                    addNode
+                });
+
+                const fieldDiscovery =
+                    await discoverStructuralActionOverrideFlexiPageFields({
+                        objectApiName: objectName,
+                        actionOverrideFlexiPages:
+                            actionOverrideDiscovery.relationships,
+                        repoFiles,
+                        readRepoFile,
+                        depth
+                    });
+
+                result.statistics.filesScanned +=
+                    fieldDiscovery.filesScanned || 0;
+                result.warnings.push(...(fieldDiscovery.warnings || []));
+
+                appendStructuralRelationshipsToResult({
+                    objectName,
+                    relationships: fieldDiscovery.relationships,
                     depth,
                     addNode
                 });
