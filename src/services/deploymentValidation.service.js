@@ -52,6 +52,9 @@ const {
     getLatestApiVersion
 } = require('./destinationInventory/destinationInventoryBuilder.service');
 const {
+    collectDestinationInventoryItems
+} = require('./destinationInventory/destinationInventoryCandidateCollector.service');
+const {
     resolveDeploymentApiVersionPolicyAsync
 } = require('./deploymentApiVersionPolicy.service');
 const { DEFAULT_API_VERSION } = require('../config/salesforce');
@@ -139,53 +142,6 @@ function prepareDeploymentPackageForValidation(deploymentPackage) {
         ...deploymentPackage,
         selectedMetadata: normalizedSelectedMetadata
     };
-}
-
-/**
- * Collect metadata participating in validation for Destination Inventory.
- * Does not mutate inventories or affect Deploy/Skip decisions by itself.
- */
-function collectDestinationInventoryItems({
-    selectedMetadata,
-    requiredDependencies,
-    discoveredReferences
-} = {}) {
-    const byKey = new Map();
-
-    const addItem = (metadataType, metadataName) => {
-        if (!metadataType || !metadataName) {
-            return;
-        }
-
-        const key = `${metadataType}:${metadataName}`;
-
-        if (!byKey.has(key)) {
-            byKey.set(key, { metadataType, metadataName });
-        }
-    };
-
-    for (const item of selectedMetadata || []) {
-        addItem(
-            item?.metadataType || item?.type,
-            item?.metadataName || item?.name
-        );
-    }
-
-    for (const item of requiredDependencies || []) {
-        addItem(
-            item?.metadataType || item?.type,
-            item?.metadataName || item?.name
-        );
-    }
-
-    for (const item of discoveredReferences || []) {
-        addItem(
-            item?.metadataType || item?.type,
-            item?.metadataName || item?.name
-        );
-    }
-
-    return [...byKey.values()];
 }
 
 /**
@@ -750,10 +706,15 @@ async function validateDeployment({
         let inventoryItems = [];
 
         try {
+            // Phase 1 closure architecture — bounded prerequisite candidates
+            // join the same batched inventory pass (empty until discoverers supply them).
+            const closureInventoryCandidates = [];
+
             inventoryItems = collectDestinationInventoryItems({
                 selectedMetadata: artifactEnrichedSelectedMetadata,
                 requiredDependencies: enrichedRequiredDependencies,
-                discoveredReferences
+                discoveredReferences,
+                closureCandidates: closureInventoryCandidates
             });
 
             const inventoryResult = await buildDestinationInventory({
