@@ -117,13 +117,11 @@ function createActionOverrideFlexiPageRecord({
 }
 
 /**
- * Discover deploy-invariant dependencies for a secondary CustomObject:
- * - actionOverrides FlexiPages
- * - MasterDetail owning fields when sharing is ControlledByParent
+ * Discover only structural actionOverride FlexiPages for a CustomObject.
  *
  * @returns {Promise<{ relationships: object[], warnings: string[], filesScanned: number }>}
  */
-async function discoverStructuralCustomObjectDependencies({
+async function discoverStructuralActionOverrideFlexiPages({
     objectApiName,
     scanTarget,
     repoFiles,
@@ -142,7 +140,7 @@ async function discoverStructuralCustomObjectDependencies({
 
     if (!objectMetaPath) {
         warnings.push(
-            `CustomObject metadata file not found for structural scan of ${objectApiName}.`
+            `CustomObject metadata file not found for structural action override scan of ${objectApiName}.`
         );
         return { relationships, warnings, filesScanned };
     }
@@ -154,7 +152,7 @@ async function discoverStructuralCustomObjectDependencies({
         filesScanned += 1;
     } catch (error) {
         warnings.push(
-            `Unable to read CustomObject metadata ${objectMetaPath} for structural scan: ${
+            `Unable to read CustomObject metadata ${objectMetaPath} for structural action override scan: ${
                 error?.message || 'unknown error'
             }`
         );
@@ -190,6 +188,68 @@ async function discoverStructuralCustomObjectDependencies({
         }
     }
 
+    return { relationships, warnings, filesScanned };
+}
+
+/**
+ * Discover deploy-invariant dependencies for a secondary CustomObject:
+ * - actionOverrides FlexiPages
+ * - MasterDetail owning fields when sharing is ControlledByParent
+ *
+ * @returns {Promise<{ relationships: object[], warnings: string[], filesScanned: number }>}
+ */
+async function discoverStructuralCustomObjectDependencies({
+    objectApiName,
+    scanTarget,
+    repoFiles,
+    readRepoFile,
+    depth = 1
+}) {
+    const relationships = [];
+    const warnings = [];
+    let filesScanned = 0;
+
+    if (!objectApiName || !Array.isArray(repoFiles) || !readRepoFile) {
+        return { relationships, warnings, filesScanned };
+    }
+
+    const actionOverrideDiscovery = await discoverStructuralActionOverrideFlexiPages(
+        {
+            objectApiName,
+            scanTarget,
+            repoFiles,
+            readRepoFile,
+            depth
+        }
+    );
+
+    relationships.push(...(actionOverrideDiscovery.relationships || []));
+    warnings.push(...(actionOverrideDiscovery.warnings || []));
+    filesScanned += actionOverrideDiscovery.filesScanned || 0;
+
+    const objectMetaPath = resolveObjectMetaXmlPath(scanTarget, repoFiles);
+
+    if (!objectMetaPath) {
+        warnings.push(
+            `CustomObject metadata file not found for structural scan of ${objectApiName}.`
+        );
+        return { relationships, warnings, filesScanned };
+    }
+
+    let objectXml;
+
+    try {
+        objectXml = await readRepoFile(objectMetaPath);
+        filesScanned += 1;
+    } catch (error) {
+        warnings.push(
+            `Unable to read CustomObject metadata ${objectMetaPath} for structural scan: ${
+                error?.message || 'unknown error'
+            }`
+        );
+        return { relationships, warnings, filesScanned };
+    }
+
     const masterDetailFields =
         await customObjectRelationshipDiscoverer.discoverControlledByParentMasterDetailOwningFields(
             {
@@ -212,6 +272,7 @@ async function discoverStructuralCustomObjectDependencies({
 
 module.exports = {
     discoverStructuralCustomObjectDependencies,
+    discoverStructuralActionOverrideFlexiPages,
     createActionOverrideFlexiPageRecord,
     isStructuralActionOverrideFlexiPageForObject,
     shouldSkipStructuralActionOverrideFlexiPages,

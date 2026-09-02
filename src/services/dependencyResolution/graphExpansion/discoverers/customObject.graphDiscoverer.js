@@ -17,7 +17,8 @@ const {
     shouldEnumerateCustomObjectChildren
 } = require('../../metadataGraphOrigin.model');
 const {
-    discoverStructuralCustomObjectDependencies
+    discoverStructuralCustomObjectDependencies,
+    discoverStructuralActionOverrideFlexiPages
 } = require('../customObjectStructuralDependencies.service');
 const {
     STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
@@ -129,12 +130,43 @@ const customObjectGraphDiscoverer = {
             }
         }
 
-        // MasterDetail parent objects discovered as structural prerequisites are
-        // terminal nodes: include the object shell without re-running structural scan.
+        // MasterDetail parent objects are terminal for MD fields and broad expansion,
+        // but still require embedded actionOverride FlexiPages for deploy validity.
         if (
             metadata?.discoveryMethod ===
             STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
         ) {
+            try {
+                const actionOverrideDiscovery =
+                    await discoverStructuralActionOverrideFlexiPages({
+                        objectApiName: objectName,
+                        scanTarget,
+                        repoFiles,
+                        readRepoFile,
+                        depth
+                    });
+
+                result.statistics.filesScanned +=
+                    actionOverrideDiscovery.filesScanned || 0;
+                result.statistics.metadataScanned += 1;
+                result.warnings.push(
+                    ...(actionOverrideDiscovery.warnings || [])
+                );
+
+                appendStructuralRelationshipsToResult({
+                    objectName,
+                    relationships: actionOverrideDiscovery.relationships,
+                    depth,
+                    addNode
+                });
+            } catch (error) {
+                result.warnings.push(
+                    `CustomObject structural action override scan failed for ${objectName}: ${
+                        error?.message || 'unknown error'
+                    }`
+                );
+            }
+
             return result;
         }
 

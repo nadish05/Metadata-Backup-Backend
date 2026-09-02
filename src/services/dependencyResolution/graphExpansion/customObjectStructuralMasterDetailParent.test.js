@@ -2,6 +2,7 @@ const assert = require('assert');
 
 const customObjectRelationshipDiscoverer = require('../discoverers/customObjectRelationship.discoverer');
 const customObjectGraphDiscoverer = require('./discoverers/customObject.graphDiscoverer');
+const flexiPageGraphDiscoverer = require('./discoverers/flexiPage.graphDiscoverer');
 const layoutReferenceDiscoverer = require('../discoverers/layoutReference.discoverer');
 const {
     mergeDeployableReferences,
@@ -210,165 +211,150 @@ function getPackageMemberNames(generatedPackage, metadataType) {
         .map((item) => item.metadataName);
 }
 
+function subscriptionMasterDetailParentMetadata(overrides = {}) {
+    return {
+        metadataType: 'CustomObject',
+        metadataName: 'Subscription__c',
+        name: 'Subscription__c',
+        filePath: SUBSCRIPTION_OBJECT_PATH,
+        origin: METADATA_ORIGINS.RELATIONSHIP_TARGET,
+        discoveryMethod:
+            customObjectRelationshipDiscoverer.STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD,
+        sourceMetadata: 'Payment__c',
+        sourceField: 'Subscription__c',
+        ...overrides
+    };
+}
+
+async function discoverSubscriptionMasterDetailParent(overrides = {}) {
+    return customObjectGraphDiscoverer.discover({
+        metadata: subscriptionMasterDetailParentMetadata(overrides),
+        repoFiles: REPO_FILES,
+        readRepoFile,
+        listRepoFiles,
+        depth: 3
+    });
+}
+
 async function main() {
     await runTest(
-        'TEST 1: ControlledByParent Payment__c.Subscription__c emits field and parent CustomObject',
+        'TEST 1: structuralMasterDetailParent Subscription__c discovers Subscription_Record_Page',
         async () => {
-            const relationships =
-                await customObjectRelationshipDiscoverer.discoverControlledByParentMasterDetailOwningFields(
-                    {
-                        objectApiName: 'Payment__c',
-                        objectXml: PAYMENT_OBJECT_XML,
-                        repoFiles: REPO_FILES,
-                        readRepoFile,
-                        depth: 2
-                    }
-                );
+            const result = await discoverSubscriptionMasterDetailParent();
 
-            const names = relationships.map((item) => item.name).sort();
-
-            assert.deepStrictEqual(names, [
-                'Payment__c.Subscription__c',
-                'Subscription__c'
+            assert.deepStrictEqual(nodeNames(result, 'FlexiPage'), [
+                'Subscription_Record_Page'
             ]);
-            assert.ok(
-                relationships.some(
-                    (item) =>
-                        item.name === 'Payment__c.Subscription__c' &&
-                        item.metadataType === 'CustomField'
-                )
+
+            const flexiPage = findNode(
+                result,
+                'FlexiPage',
+                'Subscription_Record_Page'
             );
-            assert.ok(
-                relationships.some(
-                    (item) =>
-                        item.name === 'Subscription__c' &&
-                        item.metadataType === 'CustomObject'
-                )
-            );
+
+            assert.ok(flexiPage);
+            assert.strictEqual(flexiPage.relationship, 'ActionOverride');
+            assert.strictEqual(flexiPage.discoveryMethod, 'actionOverrides');
+            assert.strictEqual(flexiPage.sourceMetadata, 'Subscription__c');
         }
     );
 
     await runTest(
-        'TEST 2: structural MasterDetail parent carries expected metadata',
+        'TEST 2: structuralMasterDetailParent Subscription__c excludes mismatched Account_Related_Record_1',
         async () => {
-            const relationships =
-                await customObjectRelationshipDiscoverer.discoverControlledByParentMasterDetailOwningFields(
-                    {
-                        objectApiName: 'Payment__c',
-                        objectXml: PAYMENT_OBJECT_XML,
-                        repoFiles: REPO_FILES,
-                        readRepoFile,
-                        depth: 2
-                    }
-                );
+            const subscriptionWithMismatchedOverride = `<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Subscription</label>
+    <sharingModel>ControlledByParent</sharingModel>
+    <externalSharingModel>ControlledByParent</externalSharingModel>
+    <actionOverrides>
+        <actionName>View</actionName>
+        <type>Flexipage</type>
+        <formFactor>Large</formFactor>
+        <content>Account_Related_Record_1</content>
+    </actionOverrides>
+</CustomObject>`;
 
-            const parent = relationships.find(
-                (item) => item.name === 'Subscription__c'
-            );
-
-            assert.ok(parent);
-            assert.strictEqual(parent.relationship, 'MasterDetail');
-            assert.strictEqual(parent.origin, METADATA_ORIGINS.RELATIONSHIP_TARGET);
-            assert.strictEqual(
-                parent.discoveryMethod,
-                customObjectRelationshipDiscoverer.STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
-            );
-            assert.strictEqual(
-                parent.discoveredBy,
-                'CustomObjectRelationshipDiscoverer'
-            );
-            assert.strictEqual(parent.sourceMetadata, 'Payment__c');
-            assert.strictEqual(parent.sourceField, 'Subscription__c');
-        }
-    );
-
-    await runTest(
-        'TEST 3: structuralMasterDetailParent Subscription__c does not expand',
-        async () => {
-            const paymentResult = await customObjectGraphDiscoverer.discover({
-                metadata: {
-                    metadataType: 'CustomObject',
-                    metadataName: 'Payment__c',
-                    name: 'Payment__c',
-                    filePath: PAYMENT_OBJECT_PATH,
-                    origin: METADATA_ORIGINS.SECONDARY_DEPENDENCY,
-                    referenceType: 'RelatedListParentObject',
-                    relationship: 'RelatedListParentObject',
-                    discoveryMethod: 'layoutReference',
-                    sourceMetadata: 'Account-Gym Member Layout'
-                },
+            const result = await customObjectGraphDiscoverer.discover({
+                metadata: subscriptionMasterDetailParentMetadata(),
                 repoFiles: REPO_FILES,
-                readRepoFile,
-                listRepoFiles,
-                depth: 2
-            });
-
-            const subscriptionNode = findNode(
-                paymentResult,
-                'CustomObject',
-                'Subscription__c'
-            );
-
-            assert.ok(subscriptionNode);
-            assert.strictEqual(
-                subscriptionNode.discoveryMethod,
-                customObjectRelationshipDiscoverer.STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
-            );
-
-            const terminalResult = await customObjectGraphDiscoverer.discover({
-                metadata: {
-                    metadataType: 'CustomObject',
-                    metadataName: 'Subscription__c',
-                    name: 'Subscription__c',
-                    filePath: SUBSCRIPTION_OBJECT_PATH,
-                    origin: METADATA_ORIGINS.RELATIONSHIP_TARGET,
-                    discoveryMethod:
-                        customObjectRelationshipDiscoverer.STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD,
-                    sourceMetadata: 'Payment__c',
-                    sourceField: 'Subscription__c'
-                },
-                repoFiles: REPO_FILES,
-                readRepoFile,
+                readRepoFile: createReadRepoFile({
+                    [SUBSCRIPTION_OBJECT_PATH]: subscriptionWithMismatchedOverride
+                }),
                 listRepoFiles,
                 depth: 3
             });
 
-            assert.deepStrictEqual(nodeNames(terminalResult, 'FlexiPage'), []);
-            assert.deepStrictEqual(nodeNames(terminalResult, 'CustomField'), []);
-            assert.deepStrictEqual(nodeNames(terminalResult, 'CustomObject'), []);
+            assert.deepStrictEqual(nodeNames(result, 'FlexiPage'), []);
         }
     );
 
     await runTest(
-        'TEST 4: Payment_Record_Page structural behavior remains unchanged',
+        'TEST 3: structuralMasterDetailParent Subscription__c does not discover fields or additional parents',
         async () => {
-            const result = await customObjectGraphDiscoverer.discover({
-                metadata: {
-                    metadataType: 'CustomObject',
-                    metadataName: 'Payment__c',
-                    name: 'Payment__c',
-                    filePath: PAYMENT_OBJECT_PATH,
-                    origin: METADATA_ORIGINS.SECONDARY_DEPENDENCY,
-                    referenceType: 'RelatedListParentObject',
-                    relationship: 'RelatedListParentObject',
-                    discoveryMethod: 'layoutReference',
-                    sourceMetadata: 'Account-Gym Member Layout'
-                },
-                repoFiles: REPO_FILES,
-                readRepoFile,
-                listRepoFiles,
-                depth: 2
-            });
+            const result = await discoverSubscriptionMasterDetailParent();
 
-            assert.deepStrictEqual(
-                nodeNames(result, 'FlexiPage').sort(),
-                ['Payment_Record_Page']
+            assert.deepStrictEqual(nodeNames(result, 'CustomField'), []);
+            assert.deepStrictEqual(nodeNames(result, 'CustomObject'), []);
+        }
+    );
+
+    await runTest(
+        'TEST 4: structuralMasterDetailParent Subscription__c emits only ActionOverride FlexiPages',
+        async () => {
+            const result = await discoverSubscriptionMasterDetailParent();
+
+            assert.strictEqual((result.discoveredNodes || []).length, 1);
+            assert.strictEqual(
+                result.discoveredNodes[0].metadataType,
+                'FlexiPage'
+            );
+            assert.strictEqual(
+                result.discoveredNodes[0].relationship,
+                'ActionOverride'
             );
         }
     );
 
     await runTest(
-        'TEST 5: FIX #2A ParentObject Account still skips Account_Related_Record_1',
+        'TEST 5: FlexiPage expansion guard blocks Subscription_Record_Page child expansion',
+        async () => {
+            const subscriptionResult = await discoverSubscriptionMasterDetailParent();
+            const flexiPageNode = findNode(
+                subscriptionResult,
+                'FlexiPage',
+                'Subscription_Record_Page'
+            );
+
+            assert.ok(flexiPageNode);
+
+            const flexiPageResult = await flexiPageGraphDiscoverer.discover({
+                metadata: {
+                    metadataType: 'FlexiPage',
+                    metadataName: 'Subscription_Record_Page',
+                    name: 'Subscription_Record_Page',
+                    filePath: SUBSCRIPTION_RECORD_PAGE_PATH,
+                    origin: METADATA_ORIGINS.DIRECT_DEPENDENCY,
+                    relationship: 'ActionOverride',
+                    discoveryMethod: 'actionOverrides',
+                    sourceMetadata: 'Subscription__c'
+                },
+                repoFiles: REPO_FILES,
+                readRepoFile,
+                depth: 4
+            });
+
+            assert.deepStrictEqual(nodeNames(flexiPageResult, 'CustomField'), []);
+            assert.deepStrictEqual(
+                nodeNames(flexiPageResult, 'LightningComponentBundle'),
+                []
+            );
+            assert.deepStrictEqual(nodeNames(flexiPageResult, 'ApexClass'), []);
+        }
+    );
+
+    await runTest(
+        'TEST 6: FIX #2A ParentObject Account still skips Account_Related_Record_1',
         async () => {
             const result = await customObjectGraphDiscoverer.discover({
                 metadata: {
@@ -399,7 +385,70 @@ async function main() {
     );
 
     await runTest(
-        'TEST 6: PRIMARY Payment__c still receives full discovery',
+        'TEST 7: FIX #2B Payment__c.Subscription__c still emits Subscription__c parent',
+        async () => {
+            const relationships =
+                await customObjectRelationshipDiscoverer.discoverControlledByParentMasterDetailOwningFields(
+                    {
+                        objectApiName: 'Payment__c',
+                        objectXml: PAYMENT_OBJECT_XML,
+                        repoFiles: REPO_FILES,
+                        readRepoFile,
+                        depth: 2
+                    }
+                );
+
+            const names = relationships.map((item) => item.name).sort();
+
+            assert.deepStrictEqual(names, [
+                'Payment__c.Subscription__c',
+                'Subscription__c'
+            ]);
+
+            const parent = relationships.find(
+                (item) => item.name === 'Subscription__c'
+            );
+
+            assert.ok(parent);
+            assert.strictEqual(parent.relationship, 'MasterDetail');
+            assert.strictEqual(parent.origin, METADATA_ORIGINS.RELATIONSHIP_TARGET);
+            assert.strictEqual(
+                parent.discoveryMethod,
+                customObjectRelationshipDiscoverer.STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 8: RelatedListParentObject Payment__c still discovers Payment_Record_Page',
+        async () => {
+            const result = await customObjectGraphDiscoverer.discover({
+                metadata: {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Payment__c',
+                    name: 'Payment__c',
+                    filePath: PAYMENT_OBJECT_PATH,
+                    origin: METADATA_ORIGINS.SECONDARY_DEPENDENCY,
+                    referenceType: 'RelatedListParentObject',
+                    relationship: 'RelatedListParentObject',
+                    discoveryMethod: 'layoutReference',
+                    sourceMetadata: 'Account-Gym Member Layout'
+                },
+                repoFiles: REPO_FILES,
+                readRepoFile,
+                listRepoFiles,
+                depth: 2
+            });
+
+            assert.deepStrictEqual(
+                nodeNames(result, 'FlexiPage').sort(),
+                ['Payment_Record_Page']
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 9: PRIMARY CustomObject Payment__c remains unchanged',
         async () => {
             const result = await customObjectGraphDiscoverer.discover({
                 metadata: {
@@ -423,7 +472,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 7: normal RELATIONSHIP_TARGET Member__c retains structural FlexiPage behavior',
+        'TEST 10: normal RELATIONSHIP_TARGET Member__c retains structural FlexiPage behavior',
         async () => {
             const result = await customObjectGraphDiscoverer.discover({
                 metadata: {
@@ -452,7 +501,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 8: Layout integration package includes Subscription__c shell without unrelated expansion',
+        'TEST 11: Layout integration package includes Subscription_Record_Page without unrelated expansion',
         async () => {
             const layoutXml = `<?xml version="1.0" encoding="UTF-8"?>
 <Layout xmlns="http://soap.sforce.com/2006/04/metadata">
@@ -496,9 +545,13 @@ async function main() {
                 depth: 2
             });
 
-            const graphDependencies = (
-                paymentGraphResult.discoveredNodes || []
-            ).map((node) => ({
+            const subscriptionGraphResult =
+                await discoverSubscriptionMasterDetailParent();
+
+            const graphDependencies = [
+                ...(paymentGraphResult.discoveredNodes || []),
+                ...(subscriptionGraphResult.discoveredNodes || [])
+            ].map((node) => ({
                 name: node.name,
                 type: node.metadataType,
                 metadataType: node.metadataType,
@@ -529,7 +582,8 @@ async function main() {
                     ['CustomObject:Subscription__c', 'MISSING'],
                     ['CustomField:Payment__c.Account__c', 'MISSING'],
                     ['CustomField:Payment__c.Subscription__c', 'MISSING'],
-                    ['FlexiPage:Payment_Record_Page', 'MISSING']
+                    ['FlexiPage:Payment_Record_Page', 'MISSING'],
+                    ['FlexiPage:Subscription_Record_Page', 'MISSING']
                 ])
             });
 
@@ -567,12 +621,9 @@ async function main() {
             assert.ok(packageFields.includes('Payment__c.Account__c'));
             assert.ok(packageFields.includes('Payment__c.Subscription__c'));
             assert.ok(packageFlexiPages.includes('Payment_Record_Page'));
+            assert.ok(packageFlexiPages.includes('Subscription_Record_Page'));
             assert.strictEqual(
                 packageFlexiPages.includes('Account_Related_Record_1'),
-                false
-            );
-            assert.strictEqual(
-                packageFlexiPages.includes('Subscription_Record_Page'),
                 false
             );
             assert.strictEqual(
@@ -585,6 +636,19 @@ async function main() {
             );
             assert.strictEqual(
                 packageObjects.includes('Member__c'),
+                false
+            );
+            assert.strictEqual(
+                getPackageMemberNames(
+                    generatedPackage,
+                    'LightningComponentBundle'
+                ).includes('refundPayment'),
+                false
+            );
+            assert.strictEqual(
+                getPackageMemberNames(generatedPackage, 'ApexClass').includes(
+                    'PaymentRefundController'
+                ),
                 false
             );
         }
