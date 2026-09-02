@@ -9,8 +9,19 @@ const {
     createGraphNode,
     createGraphEdge
 } = require('../discoveryContract');
+const { METADATA_ORIGINS } = require('../../metadataGraphOrigin.model');
 
 const DISCOVERER_ID = 'FlexiPageGraphDiscoverer';
+const ACTION_OVERRIDE_RELATIONSHIP = 'ActionOverride';
+const ACTION_OVERRIDE_DISCOVERY_METHOD = 'actionOverrides';
+
+function isStructuralActionOverrideFlexiPage(metadata) {
+    return (
+        metadata?.origin === METADATA_ORIGINS.DIRECT_DEPENDENCY &&
+        metadata?.relationship === ACTION_OVERRIDE_RELATIONSHIP &&
+        metadata?.discoveryMethod === ACTION_OVERRIDE_DISCOVERY_METHOD
+    );
+}
 
 const flexiPageGraphDiscoverer = {
     id: DISCOVERER_ID,
@@ -26,6 +37,13 @@ const flexiPageGraphDiscoverer = {
 
         if (!name) {
             result.warnings.push('FlexiPage discoverer received metadata without a name.');
+            return result;
+        }
+
+        // Secondary CustomObject actionOverride FlexiPages are already present in
+        // the graph from structural discovery. Do not re-expand them into fields,
+        // LWCs, or Apex unless they are PRIMARY or PRIMARY CustomObject paths.
+        if (isStructuralActionOverrideFlexiPage(metadata)) {
             return result;
         }
 
@@ -90,3 +108,5 @@ const flexiPageGraphDiscoverer = {
 };
 
 module.exports = flexiPageGraphDiscoverer;
+module.exports.isStructuralActionOverrideFlexiPage =
+    isStructuralActionOverrideFlexiPage;
