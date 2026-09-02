@@ -181,6 +181,7 @@ function nodeToDependency(node) {
         selected: true,
         relationship: node.relationship || node.referenceType || null,
         sourceMetadata: node.sourceMetadata || null,
+        origin: node.origin || null,
         discoveredBy: node.discoveredBy || 'GraphExpansion',
         discoveryMethod: node.discoveryMethod || 'graphExpansion',
         reason: node.reason || null,

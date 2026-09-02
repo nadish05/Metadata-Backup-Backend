@@ -430,10 +430,17 @@ function extractLwcComponentNames(content) {
     return [...names];
 }
 
-function analyzeLwcAndFlexiDependencies(item, content, membership) {
+function analyzeLwcAndFlexiDependencies(
+    item,
+    content,
+    membership,
+    destinationStates = null
+) {
     const warnings = [];
     const metadataName = getItemName(item);
     const metadataType = getItemType(item);
+    const states =
+        destinationStates instanceof Map ? destinationStates : new Map();
 
     if (!content || !metadataName) {
         return warnings;
@@ -448,6 +455,12 @@ function analyzeLwcAndFlexiDependencies(item, content, membership) {
                 'LightningComponentBundle',
                 componentName
             )
+        ) {
+            continue;
+        }
+
+        if (
+            states.get(`LightningComponentBundle:${componentName}`) === 'EXISTS'
         ) {
             continue;
         }
@@ -626,7 +639,8 @@ async function analyzeDeploymentCompatibilityPlan({
     permissionSetCompatibility = null,
     existingFindings = [],
     deploymentApiVersionPolicy = null,
-    readFile = null
+    readFile = null,
+    destinationStates = null
 } = {}) {
     if (!generatedDeploymentPackage) {
         return buildEmptyResult('Generated deployment package not available.');
@@ -679,7 +693,12 @@ async function analyzeDeploymentCompatibilityPlan({
             type === 'AuraDefinitionBundle'
         ) {
             warnings.push(
-                ...analyzeLwcAndFlexiDependencies(item, content, membership)
+                ...analyzeLwcAndFlexiDependencies(
+                    item,
+                    content,
+                    membership,
+                    destinationStates
+                )
             );
         }
     }

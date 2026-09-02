@@ -38,6 +38,9 @@ const {
     discoverStructuralFormulaRelatedFieldClosure,
     mergeUniqueDependencies
 } = require('./dependencyResolution/graphExpansion/structuralFormulaRelatedField.closure.service');
+const {
+    discoverStructuralActionOverrideComponentClosure
+} = require('./dependencyResolution/graphExpansion/structuralActionOverrideComponent.closure.service');
 const artifactResolutionService = require('./repositoryArtifacts/artifactResolution.service');
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
@@ -744,6 +747,50 @@ async function validateDeployment({
                 ...(graphExpansionSummary.warnings || []),
                 formulaClosureError.message ||
                     'Structural formula related field closure failed; continuing without formula prerequisites.'
+            ]
+        };
+    }
+
+    try {
+        const lwcClosureResult =
+            await discoverStructuralActionOverrideComponentClosure({
+                enrichedDependencies: enrichedRequiredDependencies,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            });
+
+        if (lwcClosureResult?.closureCandidates?.length) {
+            closureInventoryCandidates.push(
+                ...lwcClosureResult.closureCandidates
+            );
+        }
+
+        if (lwcClosureResult?.dependencies?.length) {
+            enrichedRequiredDependencies = mergeUniqueDependencies(
+                enrichedRequiredDependencies,
+                lwcClosureResult.dependencies
+            );
+        }
+
+        if (lwcClosureResult?.warnings?.length) {
+            graphExpansionSummary = {
+                ...graphExpansionSummary,
+                warnings: [
+                    ...(graphExpansionSummary.warnings || []),
+                    ...lwcClosureResult.warnings
+                ]
+            };
+        }
+    } catch (lwcClosureError) {
+        console.error('STRUCTURAL ACTION OVERRIDE COMPONENT CLOSURE ERROR');
+        console.error(lwcClosureError);
+        graphExpansionSummary = {
+            ...graphExpansionSummary,
+            warnings: [
+                ...(graphExpansionSummary.warnings || []),
+                lwcClosureError.message ||
+                    'Structural action override component closure failed; continuing without LWC/Apex prerequisites.'
             ]
         };
     }
@@ -1490,7 +1537,8 @@ async function validateDeployment({
                     existingFindings: compatibilityPlanFindings,
                     deploymentApiVersionPolicy:
                         compatibilityApiVersionPolicy,
-                    readFile: packageSourceReadFile
+                    readFile: packageSourceReadFile,
+                    destinationStates: destinationStatesForAnalyzer
                 }
             );
     } catch (compatibilityPlanError) {
