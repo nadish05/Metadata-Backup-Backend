@@ -6,6 +6,11 @@ const DISCOVERER_ID = 'CustomObjectRelationshipDiscoverer';
 const DISCOVERY_METHOD = 'referenceTo';
 const INTERNAL_DISCOVERY_METHOD = 'objectInternalReference';
 const EXPRESSION_DISCOVERY_METHOD = 'expressionFieldReference';
+const STRUCTURAL_MASTER_DETAIL_DISCOVERY_METHOD = 'structuralMasterDetail';
+const STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD =
+    'structuralMasterDetailParent';
+
+const { METADATA_ORIGINS } = require('../metadataGraphOrigin.model');
 
 const RELATIONSHIP_TYPES = Object.freeze({
     Lookup: 'Lookup',
@@ -907,9 +912,10 @@ function createRelationshipRecord({
     depth = 1,
     metadataType = 'CustomObject',
     discoveryMethod = DISCOVERY_METHOD,
+    origin = null,
     reason = null
 }) {
-    return {
+    const record = {
         name: referencedObject,
         metadataType,
         type: metadataType,
@@ -925,6 +931,12 @@ function createRelationshipRecord({
             reason ||
             `${relationship} target discovered from field metadata.`
     };
+
+    if (origin) {
+        record.origin = origin;
+    }
+
+    return record;
 }
 
 function collectFieldTokensFromSections(objectXml, tags) {
@@ -1327,6 +1339,30 @@ async function discoverControlledByParentMasterDetailOwningFields({
                 continue;
             }
 
+            const parsed = parseRelationshipFromFieldXml(fieldXml);
+
+            if (
+                parsed &&
+                parsed.relationship === RELATIONSHIP_TYPES.MasterDetail &&
+                isCustomObjectApiName(parsed.referencedObject)
+            ) {
+                relationships.push(
+                    createRelationshipRecord({
+                        referencedObject: parsed.referencedObject,
+                        relationship: RELATIONSHIP_TYPES.MasterDetail,
+                        sourceMetadata: objectApiName,
+                        sourceField,
+                        depth,
+                        metadataType: 'CustomObject',
+                        discoveryMethod:
+                            STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD,
+                        origin: METADATA_ORIGINS.RELATIONSHIP_TARGET,
+                        reason:
+                            'MasterDetail parent object required for ControlledByParent structural field deployment.'
+                    })
+                );
+            }
+
             relationships.push(
                 createRelationshipRecord({
                     referencedObject: owningFieldName,
@@ -1335,7 +1371,7 @@ async function discoverControlledByParentMasterDetailOwningFields({
                     sourceField,
                     depth,
                     metadataType: 'CustomField',
-                    discoveryMethod: 'structuralMasterDetail',
+                    discoveryMethod: STRUCTURAL_MASTER_DETAIL_DISCOVERY_METHOD,
                     reason:
                         'MasterDetail field required by ControlledByParent sharing model.'
                 })
@@ -1356,5 +1392,9 @@ customObjectRelationshipDiscoverer.hasControlledByParentSharingModel =
     hasControlledByParentSharingModel;
 customObjectRelationshipDiscoverer.discoverControlledByParentMasterDetailOwningFields =
     discoverControlledByParentMasterDetailOwningFields;
+customObjectRelationshipDiscoverer.STRUCTURAL_MASTER_DETAIL_DISCOVERY_METHOD =
+    STRUCTURAL_MASTER_DETAIL_DISCOVERY_METHOD;
+customObjectRelationshipDiscoverer.STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD =
+    STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD;
 
 module.exports = customObjectRelationshipDiscoverer;

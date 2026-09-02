@@ -206,9 +206,14 @@ async function main() {
             assert.ok(
                 nodeNames(result, 'FlexiPage').includes('Payment_Record_Page')
             );
-            assert.strictEqual(
+            assert.ok(
                 nodeNames(result, 'CustomObject').includes('Member__c'),
-                false
+                'expected structural MasterDetail parent Member__c'
+            );
+            assert.strictEqual(
+                nodeNames(result, 'FlexiPage').includes('Member_Record_Page'),
+                false,
+                'structuralMasterDetailParent must not expand parent FlexiPages'
             );
             assert.strictEqual(
                 nodeNames(result, 'CustomField').includes(
@@ -256,7 +261,7 @@ async function main() {
     );
 
     await runTest(
-        'TEST 3: secondary ControlledByParent emits MasterDetail field only',
+        'TEST 3: secondary ControlledByParent emits MasterDetail field and parent object',
         async () => {
             const result = await customObjectGraphDiscoverer.discover({
                 metadata: {
@@ -289,15 +294,15 @@ async function main() {
                 ),
                 false
             );
-            assert.strictEqual(
+            assert.ok(
                 nodeNames(result, 'CustomObject').includes('Member__c'),
-                false
+                'expected structural MasterDetail parent Member__c'
             );
         }
     );
 
     await runTest(
-        'TEST 4: secondary Payment__c emits structural FlexiPage and MasterDetail only',
+        'TEST 4: secondary Payment__c emits structural FlexiPage and MasterDetail prerequisites',
         async () => {
             const result = await customObjectGraphDiscoverer.discover({
                 metadata: {
@@ -320,7 +325,9 @@ async function main() {
             assert.deepStrictEqual(nodeNames(result, 'CustomField').sort(), [
                 'Payment__c.Parent_Link__c'
             ]);
-            assert.deepStrictEqual(nodeNames(result, 'CustomObject'), []);
+            assert.deepStrictEqual(nodeNames(result, 'CustomObject').sort(), [
+                'Member__c'
+            ]);
         }
     );
 
@@ -443,12 +450,17 @@ async function main() {
                 destinationStates: new Map([
                     ['CustomObject:Account', 'EXISTS'],
                     ['CustomObject:Payment__c', 'MISSING'],
+                    ['CustomObject:Member__c', 'MISSING'],
                     ['CustomField:Payment__c.Account__c', 'MISSING'],
                     ['CustomField:Payment__c.Parent_Link__c', 'MISSING'],
                     ['FlexiPage:Payment_Record_Page', 'MISSING']
                 ]),
                 artifactFlags: {
                     'CustomObject:Payment__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomObject:Member__c': {
                         artifactResolved: true,
                         sourceExists: true
                     },
@@ -495,7 +507,10 @@ async function main() {
             assert.ok(packageFields.includes('Payment__c.Account__c'));
             assert.ok(packageFields.includes('Payment__c.Parent_Link__c'));
             assert.ok(packageFlexiPages.includes('Payment_Record_Page'));
-            assert.strictEqual(packageObjects.includes('Member__c'), false);
+            assert.ok(
+                packageObjects.includes('Member__c'),
+                'expected structural MasterDetail parent Member__c in package'
+            );
             assert.strictEqual(
                 packageFields.includes('Payment__c.Amount_Due__c'),
                 false

@@ -19,6 +19,9 @@ const {
 const {
     discoverStructuralCustomObjectDependencies
 } = require('../customObjectStructuralDependencies.service');
+const {
+    STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
+} = require('../../discoverers/customObjectRelationship.discoverer');
 
 const DISCOVERER_ID = 'CustomObjectGraphDiscoverer';
 
@@ -37,8 +40,9 @@ function appendStructuralRelationshipsToResult({
                 'CustomObject',
             deployable: true,
             blocking: relationship.required !== false,
-            sourceMetadata: objectName,
-            origin: METADATA_ORIGINS.DIRECT_DEPENDENCY,
+            sourceMetadata: relationship.sourceMetadata || objectName,
+            sourceField: relationship.sourceField || null,
+            origin: relationship.origin || METADATA_ORIGINS.DIRECT_DEPENDENCY,
             discoveredBy: relationship.discoveredBy || DISCOVERER_ID,
             discoveryMethod:
                 relationship.discoveryMethod || 'structuralDependency',
@@ -123,6 +127,15 @@ const customObjectGraphDiscoverer = {
             if (edge) {
                 result.discoveredEdges.push(edge);
             }
+        }
+
+        // MasterDetail parent objects discovered as structural prerequisites are
+        // terminal nodes: include the object shell without re-running structural scan.
+        if (
+            metadata?.discoveryMethod ===
+            STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
+        ) {
+            return result;
         }
 
         // Match Deployment Review: only PRIMARY_SELECTION / CUSTOM_METADATA_PARENT

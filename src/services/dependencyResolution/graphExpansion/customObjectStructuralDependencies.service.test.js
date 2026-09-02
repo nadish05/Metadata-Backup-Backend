@@ -174,6 +174,15 @@ async function main() {
                         relationship.name === 'Payment__c.Parent_Link__c'
                 )
             );
+            assert.ok(
+                result.relationships.some(
+                    (relationship) =>
+                        relationship.name === 'Member__c' &&
+                        relationship.metadataType === 'CustomObject' &&
+                        relationship.discoveryMethod ===
+                            'structuralMasterDetailParent'
+                )
+            );
         }
     );
 
@@ -265,6 +274,15 @@ async function main() {
                 result.relationships.some(
                     (relationship) =>
                         relationship.name === 'Payment__c.Parent_Link__c'
+                )
+            );
+            assert.ok(
+                result.relationships.some(
+                    (relationship) =>
+                        relationship.name === 'Member__c' &&
+                        relationship.metadataType === 'CustomObject' &&
+                        relationship.discoveryMethod ===
+                            'structuralMasterDetailParent'
                 )
             );
         }
