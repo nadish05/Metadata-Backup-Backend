@@ -281,7 +281,8 @@ function analyzeFormulaFieldXml({
     fieldXml,
     metadataName,
     ownerObjectApiName,
-    membership
+    membership,
+    destinationStates = null
 }) {
     const warnings = [];
     const seen = new Set();
@@ -311,6 +312,14 @@ function analyzeFormulaFieldXml({
         }
 
         if (hasPackageMember(membership, 'CustomField', ref.qualifiedName)) {
+            continue;
+        }
+
+        if (
+            destinationStates instanceof Map &&
+            destinationStates.get(`CustomField:${ref.qualifiedName}`) ===
+                'EXISTS'
+        ) {
             continue;
         }
 
@@ -549,7 +558,8 @@ function buildEmptyResult(reason) {
 async function analyzeFormulaCompatibility({
     generatedDeploymentPackage,
     readFile = null,
-    existingFindings = []
+    existingFindings = [],
+    destinationStates = null
 } = {}) {
     if (!generatedDeploymentPackage) {
         return buildEmptyResult('Generated deployment package not available.');
@@ -605,7 +615,8 @@ async function analyzeFormulaCompatibility({
                     fieldXml,
                     metadataName,
                     ownerObjectApiName,
-                    membership
+                    membership,
+                    destinationStates
                 })
             );
         }

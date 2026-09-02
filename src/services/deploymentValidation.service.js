@@ -34,6 +34,10 @@ const dependencyResolutionService = require('./dependencyResolution/dependencyRe
 const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
 const referenceDiscoveryService = require('./dependencyResolution/referenceDiscovery.service');
 const graphExpansionService = require('./dependencyResolution/graphExpansion/graphExpansion.service');
+const {
+    discoverStructuralFormulaRelatedFieldClosure,
+    mergeUniqueDependencies
+} = require('./dependencyResolution/graphExpansion/structuralFormulaRelatedField.closure.service');
 const artifactResolutionService = require('./repositoryArtifacts/artifactResolution.service');
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
@@ -698,6 +702,52 @@ async function validateDeployment({
         };
     }
 
+    const closureInventoryCandidates = [];
+
+    try {
+        const formulaClosureResult =
+            await discoverStructuralFormulaRelatedFieldClosure({
+                enrichedDependencies: enrichedRequiredDependencies,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            });
+
+        if (formulaClosureResult?.closureCandidates?.length) {
+            closureInventoryCandidates.push(
+                ...formulaClosureResult.closureCandidates
+            );
+        }
+
+        if (formulaClosureResult?.dependencies?.length) {
+            enrichedRequiredDependencies = mergeUniqueDependencies(
+                enrichedRequiredDependencies,
+                formulaClosureResult.dependencies
+            );
+        }
+
+        if (formulaClosureResult?.warnings?.length) {
+            graphExpansionSummary = {
+                ...graphExpansionSummary,
+                warnings: [
+                    ...(graphExpansionSummary.warnings || []),
+                    ...formulaClosureResult.warnings
+                ]
+            };
+        }
+    } catch (formulaClosureError) {
+        console.error('STRUCTURAL FORMULA RELATED FIELD CLOSURE ERROR');
+        console.error(formulaClosureError);
+        graphExpansionSummary = {
+            ...graphExpansionSummary,
+            warnings: [
+                ...(graphExpansionSummary.warnings || []),
+                formulaClosureError.message ||
+                    'Structural formula related field closure failed; continuing without formula prerequisites.'
+            ]
+        };
+    }
+
     try {
         // Phase 3D — Destination Inventory feeds Dependency Resolution.
         // Inventory Map → toDestinationStateMap → context.destinationStates.
@@ -706,10 +756,6 @@ async function validateDeployment({
         let inventoryItems = [];
 
         try {
-            // Phase 1 closure architecture — bounded prerequisite candidates
-            // join the same batched inventory pass (empty until discoverers supply them).
-            const closureInventoryCandidates = [];
-
             inventoryItems = collectDestinationInventoryItems({
                 selectedMetadata: artifactEnrichedSelectedMetadata,
                 requiredDependencies: enrichedRequiredDependencies,
@@ -1355,7 +1401,8 @@ async function validateDeployment({
             await formulaCompatibilityService.analyzeFormulaCompatibility({
                 generatedDeploymentPackage,
                 readFile: packageSourceReadFile,
-                existingFindings
+                existingFindings,
+                destinationStates: destinationStatesForAnalyzer
             });
     } catch (formulaCompatibilityError) {
         console.error('FORMULA COMPATIBILITY VALIDATION ERROR');
