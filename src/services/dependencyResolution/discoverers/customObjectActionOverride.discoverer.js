@@ -214,3 +214,7 @@ const customObjectActionOverrideDiscoverer = {
 };
 
 module.exports = customObjectActionOverrideDiscoverer;
+module.exports.extractFlexiPagesFromActionOverrides =
+    extractFlexiPagesFromActionOverrides;
+module.exports.resolveObjectMetaXmlPath = resolveObjectMetaXmlPath;
+module.exports.getCustomObjectApiName = getCustomObjectApiName;

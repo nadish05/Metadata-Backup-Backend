@@ -6,6 +6,11 @@ const {
 } = require('../../metadataGraphOrigin.model');
 const layoutReferenceDiscoverer = require('../../discoverers/layoutReference.discoverer');
 const permissionSetRelationshipDiscoverer = require('../../discoverers/permissionSetRelationship.discoverer');
+const {
+    mergeDeployableReferences,
+    resolveDependencies
+} = require('../../dependencyResolution.service');
+const { generateDeploymentPackage } = require('../../../deploymentPackage.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -26,12 +31,25 @@ const PAYMENT_MEMBER_FIELD_PATH =
     'force-app/main/default/objects/Payment__c/fields/Member__c.field-meta.xml';
 const PAYMENT_AMOUNT_FIELD_PATH =
     'force-app/main/default/objects/Payment__c/fields/Amount_Due__c.field-meta.xml';
+const PAYMENT_PARENT_LINK_FIELD_PATH =
+    'force-app/main/default/objects/Payment__c/fields/Parent_Link__c.field-meta.xml';
 const MEMBER_OBJECT_PATH =
     'force-app/main/default/objects/Member__c/Member__c.object-meta.xml';
+const READWRITE_OBJECT_PATH =
+    'force-app/main/default/objects/ReadWrite__c/ReadWrite__c.object-meta.xml';
+const READWRITE_LOOKUP_FIELD_PATH =
+    'force-app/main/default/objects/ReadWrite__c/fields/Coordinator__c.field-meta.xml';
 
-const PAYMENT_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
+function buildPaymentObjectXml({ controlledByParent = false } = {}) {
+    const sharingXml = controlledByParent
+        ? `
+    <sharingModel>ControlledByParent</sharingModel>
+    <externalSharingModel>ControlledByParent</externalSharingModel>`
+        : '';
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
 <CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
-    <label>Payment</label>
+    <label>Payment</label>${sharingXml}
     <actionOverrides>
         <actionName>View</actionName>
         <type>Flexipage</type>
@@ -39,6 +57,12 @@ const PAYMENT_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
         <content>Payment_Record_Page</content>
     </actionOverrides>
 </CustomObject>`;
+}
+
+const PAYMENT_OBJECT_XML = buildPaymentObjectXml();
+const PAYMENT_OBJECT_CONTROLLED_XML = buildPaymentObjectXml({
+    controlledByParent: true
+});
 
 const PAYMENT_ACCOUNT_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
@@ -60,6 +84,14 @@ const PAYMENT_AMOUNT_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <type>Currency</type>
 </CustomField>`;
 
+const PAYMENT_PARENT_LINK_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Parent_Link__c</fullName>
+    <type>MasterDetail</type>
+    <referenceTo>Member__c</referenceTo>
+    <relationshipName>Payments</relationshipName>
+</CustomField>`;
+
 const MEMBER_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
     <label>Member</label>
@@ -71,39 +103,51 @@ const MEMBER_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
     </actionOverrides>
 </CustomObject>`;
 
-const REPO_FILES = [
-    PAYMENT_OBJECT_PATH,
-    PAYMENT_ACCOUNT_FIELD_PATH,
-    PAYMENT_MEMBER_FIELD_PATH,
-    PAYMENT_AMOUNT_FIELD_PATH,
-    MEMBER_OBJECT_PATH
-];
+const READWRITE_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Read Write</label>
+    <sharingModel>ReadWrite</sharingModel>
+</CustomObject>`;
 
-async function readRepoFile(filePath) {
-    const normalized = String(filePath).replace(/\\/g, '/');
+const READWRITE_LOOKUP_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Coordinator__c</fullName>
+    <type>Lookup</type>
+    <referenceTo>Employee__c</referenceTo>
+</CustomField>`;
 
-    if (normalized === PAYMENT_OBJECT_PATH) {
-        return PAYMENT_OBJECT_XML;
-    }
+const FILE_CONTENT = {
+    [PAYMENT_OBJECT_PATH]: PAYMENT_OBJECT_XML,
+    [PAYMENT_ACCOUNT_FIELD_PATH]: PAYMENT_ACCOUNT_FIELD_XML,
+    [PAYMENT_MEMBER_FIELD_PATH]: PAYMENT_MEMBER_FIELD_XML,
+    [PAYMENT_AMOUNT_FIELD_PATH]: PAYMENT_AMOUNT_FIELD_XML,
+    [PAYMENT_PARENT_LINK_FIELD_PATH]: PAYMENT_PARENT_LINK_FIELD_XML,
+    [MEMBER_OBJECT_PATH]: MEMBER_OBJECT_XML,
+    [READWRITE_OBJECT_PATH]: READWRITE_OBJECT_XML,
+    [READWRITE_LOOKUP_FIELD_PATH]: READWRITE_LOOKUP_FIELD_XML
+};
 
-    if (normalized === PAYMENT_ACCOUNT_FIELD_PATH) {
-        return PAYMENT_ACCOUNT_FIELD_XML;
-    }
+const REPO_FILES = Object.keys(FILE_CONTENT);
 
-    if (normalized === PAYMENT_MEMBER_FIELD_PATH) {
-        return PAYMENT_MEMBER_FIELD_XML;
-    }
+function createReadRepoFile(overrides = {}) {
+    return async function readRepoFile(filePath) {
+        const normalized = String(filePath).replace(/\\/g, '/');
 
-    if (normalized === PAYMENT_AMOUNT_FIELD_PATH) {
-        return PAYMENT_AMOUNT_FIELD_XML;
-    }
+        if (overrides[normalized] != null) {
+            return overrides[normalized];
+        }
 
-    if (normalized === MEMBER_OBJECT_PATH) {
-        return MEMBER_OBJECT_XML;
-    }
+        if (FILE_CONTENT[normalized] != null) {
+            return FILE_CONTENT[normalized];
+        }
 
-    throw new Error(`Unexpected read: ${filePath}`);
+        throw new Error(`Unexpected read: ${filePath}`);
+    };
 }
+
+const readRepoFile = createReadRepoFile({
+    [PAYMENT_OBJECT_PATH]: PAYMENT_OBJECT_CONTROLLED_XML
+});
 
 async function listRepoFiles() {
     return REPO_FILES;
@@ -115,9 +159,15 @@ function nodeNames(result, metadataType) {
         .map((node) => node.name);
 }
 
+function getPackageMemberNames(generatedPackage, metadataType) {
+    return (generatedPackage?.metadata || [])
+        .filter((item) => item.metadataType === metadataType)
+        .map((item) => item.metadataName);
+}
+
 async function main() {
     await runTest(
-        'TEST 1: secondary CustomObject does not broadly expand in graph discoverer',
+        'TEST 1: secondary CustomObject emits structural FlexiPage without broad expansion',
         async () => {
             const result = await customObjectGraphDiscoverer.discover({
                 metadata: {
@@ -133,8 +183,19 @@ async function main() {
                 depth: 2
             });
 
-            assert.deepStrictEqual(result.discoveredNodes, []);
-            assert.deepStrictEqual(result.discoveredEdges, []);
+            assert.ok(
+                nodeNames(result, 'FlexiPage').includes('Payment_Record_Page')
+            );
+            assert.strictEqual(
+                nodeNames(result, 'CustomObject').includes('Member__c'),
+                false
+            );
+            assert.strictEqual(
+                nodeNames(result, 'CustomField').includes(
+                    'Payment__c.Amount_Due__c'
+                ),
+                false
+            );
             assert.strictEqual(result.statistics.reviewsExecuted, 0);
         }
     );
@@ -175,7 +236,125 @@ async function main() {
     );
 
     await runTest(
-        'TEST 3: Layout related-list parent CustomObject stays in references without graph neighborhood expansion',
+        'TEST 3: secondary ControlledByParent emits MasterDetail field only',
+        async () => {
+            const result = await customObjectGraphDiscoverer.discover({
+                metadata: {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Payment__c',
+                    name: 'Payment__c',
+                    filePath: PAYMENT_OBJECT_PATH,
+                    origin: METADATA_ORIGINS.SECONDARY_DEPENDENCY
+                },
+                repoFiles: REPO_FILES,
+                readRepoFile,
+                listRepoFiles,
+                depth: 2
+            });
+
+            assert.ok(
+                nodeNames(result, 'CustomField').includes(
+                    'Payment__c.Parent_Link__c'
+                )
+            );
+            assert.strictEqual(
+                nodeNames(result, 'CustomField').includes(
+                    'Payment__c.Account__c'
+                ),
+                false
+            );
+            assert.strictEqual(
+                nodeNames(result, 'CustomField').includes(
+                    'Payment__c.Amount_Due__c'
+                ),
+                false
+            );
+            assert.strictEqual(
+                nodeNames(result, 'CustomObject').includes('Member__c'),
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 4: secondary Payment__c emits structural FlexiPage and MasterDetail only',
+        async () => {
+            const result = await customObjectGraphDiscoverer.discover({
+                metadata: {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Payment__c',
+                    name: 'Payment__c',
+                    filePath: PAYMENT_OBJECT_PATH,
+                    origin: METADATA_ORIGINS.SECONDARY_DEPENDENCY
+                },
+                repoFiles: REPO_FILES,
+                readRepoFile,
+                listRepoFiles,
+                depth: 2
+            });
+
+            assert.deepStrictEqual(
+                nodeNames(result, 'FlexiPage').sort(),
+                ['Payment_Record_Page']
+            );
+            assert.deepStrictEqual(nodeNames(result, 'CustomField').sort(), [
+                'Payment__c.Parent_Link__c'
+            ]);
+            assert.deepStrictEqual(nodeNames(result, 'CustomObject'), []);
+        }
+    );
+
+    await runTest(
+        'TEST 5: secondary CustomObject without ControlledByParent skips MasterDetail scan',
+        async () => {
+            const result = await customObjectGraphDiscoverer.discover({
+                metadata: {
+                    metadataType: 'CustomObject',
+                    metadataName: 'ReadWrite__c',
+                    name: 'ReadWrite__c',
+                    filePath: READWRITE_OBJECT_PATH,
+                    origin: METADATA_ORIGINS.SECONDARY_DEPENDENCY
+                },
+                repoFiles: REPO_FILES,
+                readRepoFile: createReadRepoFile(),
+                listRepoFiles,
+                depth: 2
+            });
+
+            assert.deepStrictEqual(nodeNames(result, 'CustomField'), []);
+            assert.deepStrictEqual(nodeNames(result, 'CustomObject'), []);
+            assert.deepStrictEqual(nodeNames(result, 'FlexiPage'), []);
+        }
+    );
+
+    await runTest(
+        'TEST 6: relationship-target CustomObject emits structural FlexiPage only',
+        async () => {
+            const result = await customObjectGraphDiscoverer.discover({
+                metadata: {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Member__c',
+                    name: 'Member__c',
+                    filePath: MEMBER_OBJECT_PATH,
+                    origin: METADATA_ORIGINS.RELATIONSHIP_TARGET
+                },
+                repoFiles: REPO_FILES,
+                readRepoFile: createReadRepoFile(),
+                listRepoFiles,
+                depth: 3
+            });
+
+            assert.deepStrictEqual(
+                nodeNames(result, 'FlexiPage').sort(),
+                ['Member_Record_Page']
+            );
+            assert.deepStrictEqual(nodeNames(result, 'CustomField'), []);
+            assert.deepStrictEqual(nodeNames(result, 'CustomObject'), []);
+        }
+    );
+
+    await runTest(
+        'TEST 7: Layout related-list Payment__c structural dependencies merge into package',
         async () => {
             const layoutXml = `<?xml version="1.0" encoding="UTF-8"?>
 <Layout xmlns="http://soap.sforce.com/2006/04/metadata">
@@ -201,22 +380,6 @@ async function main() {
                 depth: 1
             });
 
-            const refs = layoutDiscovery.references || [];
-            assert.ok(
-                refs.some(
-                    (ref) =>
-                        ref.metadataType === 'CustomObject' &&
-                        ref.name === 'Payment__c'
-                )
-            );
-            assert.ok(
-                refs.some(
-                    (ref) =>
-                        ref.metadataType === 'CustomField' &&
-                        ref.name === 'Payment__c.Account__c'
-                )
-            );
-
             const graphResult = await customObjectGraphDiscoverer.discover({
                 metadata: {
                     metadataType: 'CustomObject',
@@ -231,43 +394,97 @@ async function main() {
                 depth: 2
             });
 
-            assert.deepStrictEqual(graphResult.discoveredNodes, []);
-            assert.strictEqual(
-                nodeNames(graphResult, 'FlexiPage').length,
-                0,
-                'Layout secondary Payment__c must not discover FlexiPages'
+            const graphDependencies = (graphResult.discoveredNodes || []).map(
+                (node) => ({
+                    name: node.name,
+                    type: node.metadataType,
+                    metadataType: node.metadataType,
+                    action: 'DEPLOY',
+                    required: true,
+                    selected: true
+                })
             );
-        }
-    );
 
-    await runTest(
-        'TEST 4: relationship-target recursive CustomObject visit does not re-expand',
-        async () => {
-            const result = await customObjectGraphDiscoverer.discover({
-                metadata: {
-                    metadataType: 'CustomObject',
-                    metadataName: 'Member__c',
-                    name: 'Member__c',
-                    filePath: MEMBER_OBJECT_PATH,
-                    origin: METADATA_ORIGINS.RELATIONSHIP_TARGET
-                },
-                repoFiles: REPO_FILES,
-                readRepoFile,
-                listRepoFiles,
-                depth: 3
+            const mergedDependencies = mergeDeployableReferences(
+                [],
+                [
+                    ...(layoutDiscovery.references || []),
+                    ...graphDependencies.map((dependency) => ({
+                        ...dependency,
+                        deployable: true,
+                        blocking: true
+                    }))
+                ]
+            );
+
+            const resolution = await resolveDependencies({
+                requiredDependencies: mergedDependencies,
+                discoveredReferences: layoutDiscovery.references || [],
+                destinationStates: new Map([
+                    ['CustomObject:Account', 'EXISTS'],
+                    ['CustomObject:Payment__c', 'MISSING'],
+                    ['CustomField:Payment__c.Account__c', 'MISSING'],
+                    ['CustomField:Payment__c.Parent_Link__c', 'MISSING'],
+                    ['FlexiPage:Payment_Record_Page', 'MISSING']
+                ]),
+                artifactFlags: {
+                    'CustomObject:Payment__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomField:Payment__c.Account__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'CustomField:Payment__c.Parent_Link__c': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    },
+                    'FlexiPage:Payment_Record_Page': {
+                        artifactResolved: true,
+                        sourceExists: true
+                    }
+                }
             });
 
-            assert.deepStrictEqual(result.discoveredNodes, []);
+            const generatedPackage = generateDeploymentPackage({
+                selectedMetadata: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: 'Account-Gym Member Layout'
+                    }
+                ],
+                requiredDependencies: resolution.resolvedDependencies,
+                selectedTestClasses: []
+            });
+
+            const packageObjects = getPackageMemberNames(
+                generatedPackage,
+                'CustomObject'
+            );
+            const packageFields = getPackageMemberNames(
+                generatedPackage,
+                'CustomField'
+            );
+            const packageFlexiPages = getPackageMemberNames(
+                generatedPackage,
+                'FlexiPage'
+            );
+
+            assert.ok(packageObjects.includes('Payment__c'));
+            assert.ok(packageFields.includes('Payment__c.Account__c'));
+            assert.ok(packageFields.includes('Payment__c.Parent_Link__c'));
+            assert.ok(packageFlexiPages.includes('Payment_Record_Page'));
+            assert.strictEqual(packageObjects.includes('Member__c'), false);
             assert.strictEqual(
-                nodeNames(result, 'FlexiPage').length,
-                0,
-                'relationship-target Member__c must not discover Member_Record_Page'
+                packageFields.includes('Payment__c.Amount_Due__c'),
+                false
             );
         }
     );
 
     await runTest(
-        'TEST 5: PermissionSet relationship discovery path is separate from graph discoverer',
+        'TEST 8: PermissionSet relationship discovery path is separate from graph discoverer',
         async () => {
             const result = await permissionSetRelationshipDiscoverer.discover({
                 selectedMetadata: [

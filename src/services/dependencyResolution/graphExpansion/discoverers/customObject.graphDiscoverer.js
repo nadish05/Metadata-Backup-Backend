@@ -16,8 +16,53 @@ const {
     resolveMetadataOrigin,
     shouldEnumerateCustomObjectChildren
 } = require('../../metadataGraphOrigin.model');
+const {
+    discoverStructuralCustomObjectDependencies
+} = require('../customObjectStructuralDependencies.service');
 
 const DISCOVERER_ID = 'CustomObjectGraphDiscoverer';
+
+function appendStructuralRelationshipsToResult({
+    objectName,
+    relationships,
+    depth,
+    addNode
+}) {
+    for (const relationship of relationships || []) {
+        const node = createGraphNode({
+            name: relationship.name,
+            metadataType:
+                relationship.metadataType ||
+                relationship.type ||
+                'CustomObject',
+            deployable: true,
+            blocking: relationship.required !== false,
+            sourceMetadata: objectName,
+            origin: METADATA_ORIGINS.DIRECT_DEPENDENCY,
+            discoveredBy: relationship.discoveredBy || DISCOVERER_ID,
+            discoveryMethod:
+                relationship.discoveryMethod || 'structuralDependency',
+            referenceType: relationship.relationship || null,
+            relationship: relationship.relationship || null,
+            reason: relationship.reason,
+            depth:
+                relationship.depth != null ? relationship.depth : depth + 1
+        });
+
+        addNode(
+            node,
+            createGraphEdge({
+                fromType: 'CustomObject',
+                fromName: objectName,
+                toType: node.metadataType,
+                toName: node.name,
+                relationship: relationship.relationship || 'StructuralDependency',
+                discoveredBy: DISCOVERER_ID,
+                reason: node.reason
+            })
+        );
+    }
+}
 
 const customObjectGraphDiscoverer = {
     id: DISCOVERER_ID,
@@ -59,14 +104,6 @@ const customObjectGraphDiscoverer = {
             origin
         };
 
-        // Match Deployment Review: only PRIMARY_SELECTION / CUSTOM_METADATA_PARENT
-        // (and legacy null-origin) receive full child enumeration. Secondary and
-        // relationship-target CustomObjects are already represented in the
-        // dependency graph and must not trigger broad object-neighborhood expansion.
-        if (!shouldEnumerateCustomObjectChildren(origin)) {
-            return result;
-        }
-
         const seen = new Set();
 
         function addNode(node, edge) {
@@ -82,6 +119,43 @@ const customObjectGraphDiscoverer = {
             if (edge) {
                 result.discoveredEdges.push(edge);
             }
+        }
+
+        // Match Deployment Review: only PRIMARY_SELECTION / CUSTOM_METADATA_PARENT
+        // (and legacy null-origin) receive full child enumeration. Secondary and
+        // relationship-target CustomObjects are already represented in the
+        // dependency graph and must not trigger broad object-neighborhood expansion.
+        if (!shouldEnumerateCustomObjectChildren(origin)) {
+            try {
+                const structuralDiscovery =
+                    await discoverStructuralCustomObjectDependencies({
+                        objectApiName: objectName,
+                        scanTarget,
+                        repoFiles,
+                        readRepoFile,
+                        depth
+                    });
+
+                result.statistics.filesScanned +=
+                    structuralDiscovery.filesScanned || 0;
+                result.statistics.metadataScanned += 1;
+                result.warnings.push(...(structuralDiscovery.warnings || []));
+
+                appendStructuralRelationshipsToResult({
+                    objectName,
+                    relationships: structuralDiscovery.relationships,
+                    depth,
+                    addNode
+                });
+            } catch (error) {
+                result.warnings.push(
+                    `CustomObject structural dependency scan failed for ${objectName}: ${
+                        error?.message || 'unknown error'
+                    }`
+                );
+            }
+
+            return result;
         }
 
         try {

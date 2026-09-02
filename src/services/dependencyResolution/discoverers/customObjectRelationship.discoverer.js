@@ -1269,9 +1269,92 @@ const customObjectRelationshipDiscoverer = {
     }
 };
 
+function hasControlledByParentSharingModel(objectXml) {
+    if (!objectXml) {
+        return false;
+    }
+
+    const sharingModel = String(
+        extractXmlTagValue(objectXml, 'sharingModel') || ''
+    ).toLowerCase();
+    const externalSharingModel = String(
+        extractXmlTagValue(objectXml, 'externalSharingModel') || ''
+    ).toLowerCase();
+
+    return (
+        sharingModel === 'controlledbyparent' ||
+        externalSharingModel === 'controlledbyparent'
+    );
+}
+
+/**
+ * Emit owning MasterDetail CustomField dependencies when a CustomObject uses
+ * ControlledByParent sharing. Does not emit lookup targets or unrelated fields.
+ */
+async function discoverControlledByParentMasterDetailOwningFields({
+    objectApiName,
+    objectXml,
+    repoFiles,
+    readRepoFile,
+    depth = 1
+}) {
+    if (!objectApiName || !hasControlledByParentSharingModel(objectXml)) {
+        return [];
+    }
+
+    const relationships = [];
+    const normalizedRepoFiles = (repoFiles || []).map(normalizePath);
+    const fieldFiles = normalizedRepoFiles.filter((repoFile) =>
+        isFieldFileForObject(repoFile, objectApiName)
+    );
+
+    for (const fieldFilePath of fieldFiles) {
+        try {
+            const fieldXml = await readRepoFile(fieldFilePath);
+            const fieldType = extractXmlTagValue(fieldXml, 'type');
+
+            if (fieldType !== RELATIONSHIP_TYPES.MasterDetail) {
+                continue;
+            }
+
+            const sourceField = extractFieldApiName(fieldFilePath);
+            const owningFieldName = qualifyCustomFieldName(
+                objectApiName,
+                sourceField
+            );
+
+            if (!owningFieldName || !isCustomFieldApiToken(owningFieldName)) {
+                continue;
+            }
+
+            relationships.push(
+                createRelationshipRecord({
+                    referencedObject: owningFieldName,
+                    relationship: RELATIONSHIP_TYPES.MasterDetail,
+                    sourceMetadata: objectApiName,
+                    sourceField,
+                    depth,
+                    metadataType: 'CustomField',
+                    discoveryMethod: 'structuralMasterDetail',
+                    reason:
+                        'MasterDetail field required by ControlledByParent sharing model.'
+                })
+            );
+        } catch (error) {
+            // Structural scan is best-effort; callers collect warnings separately.
+        }
+    }
+
+    return relationships;
+}
+
 customObjectRelationshipDiscoverer.extractExpressionCustomFieldNames =
     extractExpressionCustomFieldNames;
 customObjectRelationshipDiscoverer.discoverExpressionFieldDependencies =
     discoverExpressionFieldDependencies;
+customObjectRelationshipDiscoverer.hasControlledByParentSharingModel =
+    hasControlledByParentSharingModel;
+customObjectRelationshipDiscoverer.discoverControlledByParentMasterDetailOwningFields =
+    discoverControlledByParentMasterDetailOwningFields;
 
 module.exports = customObjectRelationshipDiscoverer;
