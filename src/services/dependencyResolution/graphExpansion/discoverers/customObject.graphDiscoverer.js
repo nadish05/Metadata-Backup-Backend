@@ -13,7 +13,8 @@ const {
 } = require('../discoveryContract');
 const {
     METADATA_ORIGINS,
-    resolveMetadataOrigin
+    resolveMetadataOrigin,
+    shouldEnumerateCustomObjectChildren
 } = require('../../metadataGraphOrigin.model');
 
 const DISCOVERER_ID = 'CustomObjectGraphDiscoverer';
@@ -57,6 +58,14 @@ const customObjectGraphDiscoverer = {
             depth,
             origin
         };
+
+        // Match Deployment Review: only PRIMARY_SELECTION / CUSTOM_METADATA_PARENT
+        // (and legacy null-origin) receive full child enumeration. Secondary and
+        // relationship-target CustomObjects are already represented in the
+        // dependency graph and must not trigger broad object-neighborhood expansion.
+        if (!shouldEnumerateCustomObjectChildren(origin)) {
+            return result;
+        }
 
         const seen = new Set();
 
