@@ -95,7 +95,7 @@ function mergeDeployableReferences(
             continue;
         }
 
-        merged.push({
+        const dependency = {
             name,
             type,
             required: true,
@@ -116,7 +116,25 @@ function mergeDeployableReferences(
                 classification.destinationValidationRequired,
             defaultResolutionPolicy: classification.defaultResolutionPolicy,
             classificationReason: classification.reason
-        });
+        };
+
+        if (reference.discoveryMethod) {
+            dependency.discoveryMethod = reference.discoveryMethod;
+        }
+
+        if (reference.sourceMetadata) {
+            dependency.sourceMetadata = reference.sourceMetadata;
+        }
+
+        if (reference.origin) {
+            dependency.origin = reference.origin;
+        }
+
+        if (reference.sourceField) {
+            dependency.sourceField = reference.sourceField;
+        }
+
+        merged.push(dependency);
     }
 
     return merged;
