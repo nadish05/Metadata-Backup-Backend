@@ -41,6 +41,9 @@ const {
 const {
     discoverStructuralActionOverrideComponentClosure
 } = require('./dependencyResolution/graphExpansion/structuralActionOverrideComponent.closure.service');
+const {
+    discoverStructuralActionOverrideRelatedListClosure
+} = require('./dependencyResolution/graphExpansion/structuralActionOverrideRelatedList.closure.service');
 const artifactResolutionService = require('./repositoryArtifacts/artifactResolution.service');
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
@@ -791,6 +794,50 @@ async function validateDeployment({
                 ...(graphExpansionSummary.warnings || []),
                 lwcClosureError.message ||
                     'Structural action override component closure failed; continuing without LWC/Apex prerequisites.'
+            ]
+        };
+    }
+
+    try {
+        const relatedListClosureResult =
+            await discoverStructuralActionOverrideRelatedListClosure({
+                enrichedDependencies: enrichedRequiredDependencies,
+                repoUrl: deploymentPackage.repoUrl,
+                sourceBranch:
+                    deploymentPackage.sourceBranch || deploymentPackage.branch
+            });
+
+        if (relatedListClosureResult?.closureCandidates?.length) {
+            closureInventoryCandidates.push(
+                ...relatedListClosureResult.closureCandidates
+            );
+        }
+
+        if (relatedListClosureResult?.dependencies?.length) {
+            enrichedRequiredDependencies = mergeUniqueDependencies(
+                enrichedRequiredDependencies,
+                relatedListClosureResult.dependencies
+            );
+        }
+
+        if (relatedListClosureResult?.warnings?.length) {
+            graphExpansionSummary = {
+                ...graphExpansionSummary,
+                warnings: [
+                    ...(graphExpansionSummary.warnings || []),
+                    ...relatedListClosureResult.warnings
+                ]
+            };
+        }
+    } catch (relatedListClosureError) {
+        console.error('STRUCTURAL ACTION OVERRIDE RELATED LIST CLOSURE ERROR');
+        console.error(relatedListClosureError);
+        graphExpansionSummary = {
+            ...graphExpansionSummary,
+            warnings: [
+                ...(graphExpansionSummary.warnings || []),
+                relatedListClosureError.message ||
+                    'Structural action override related list closure failed; continuing without related-list prerequisites.'
             ]
         };
     }

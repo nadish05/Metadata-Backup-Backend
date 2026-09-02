@@ -9,10 +9,12 @@ const structuralActionOverrideFieldResolver = require('./resolvers/structuralAct
 const structuralFormulaRelatedFieldResolver = require('./resolvers/structuralFormulaRelatedField.resolver');
 const structuralActionOverrideComponentResolver = require('./resolvers/structuralActionOverrideComponent.resolver');
 const structuralActionOverrideApexResolver = require('./resolvers/structuralActionOverrideApex.resolver');
+const structuralActionOverrideRelatedListResolver = require('./resolvers/structuralActionOverrideRelatedList.resolver');
 
 function getRegisteredResolvers() {
     return [
         structuralFormulaRelatedFieldResolver,
+        structuralActionOverrideRelatedListResolver,
         structuralActionOverrideComponentResolver,
         structuralActionOverrideApexResolver,
         structuralActionOverrideFieldResolver,

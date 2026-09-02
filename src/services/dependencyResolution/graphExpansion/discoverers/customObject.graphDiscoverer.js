@@ -24,6 +24,10 @@ const {
     discoverStructuralActionOverrideFlexiPageFields
 } = require('../structuralActionOverrideField.discoverer');
 const {
+    discoverStructuralActionOverrideFlexiPageRelatedLists,
+    DISCOVERY_METHOD: STRUCTURAL_ACTION_OVERRIDE_RELATED_LIST_DISCOVERY_METHOD
+} = require('../structuralActionOverrideRelatedList.discoverer');
+const {
     STRUCTURAL_MASTER_DETAIL_PARENT_DISCOVERY_METHOD
 } = require('../../discoverers/customObjectRelationship.discoverer');
 
@@ -116,6 +120,13 @@ const customObjectGraphDiscoverer = {
             sourceMetadata: metadata.sourceMetadata || null
         };
 
+        if (
+            metadata?.discoveryMethod ===
+            STRUCTURAL_ACTION_OVERRIDE_RELATED_LIST_DISCOVERY_METHOD
+        ) {
+            return result;
+        }
+
         const seen = new Set();
 
         function addNode(node, edge) {
@@ -180,6 +191,27 @@ const customObjectGraphDiscoverer = {
                 appendStructuralRelationshipsToResult({
                     objectName,
                     relationships: fieldDiscovery.relationships,
+                    depth,
+                    addNode
+                });
+
+                const relatedListDiscovery =
+                    await discoverStructuralActionOverrideFlexiPageRelatedLists({
+                        objectApiName: objectName,
+                        actionOverrideFlexiPages:
+                            actionOverrideDiscovery.relationships,
+                        repoFiles,
+                        readRepoFile,
+                        depth
+                    });
+
+                result.statistics.filesScanned +=
+                    relatedListDiscovery.filesScanned || 0;
+                result.warnings.push(...(relatedListDiscovery.warnings || []));
+
+                appendStructuralRelationshipsToResult({
+                    objectName,
+                    relationships: relatedListDiscovery.relationships,
                     depth,
                     addNode
                 });
