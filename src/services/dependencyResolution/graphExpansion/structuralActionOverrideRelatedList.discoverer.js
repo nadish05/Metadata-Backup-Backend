@@ -8,6 +8,10 @@ const {
     resolveFlexiPageFilePath
 } = require('./customObjectStructuralDependencies.service');
 const { METADATA_ORIGINS } = require('../metadataGraphOrigin.model');
+const {
+    parseQualifiedCustomFieldReference
+} = require('../../../utils/layoutDependencyParsing.util');
+const { isDeployableField } = require('../../../utils/salesforceSystemFields.util');
 
 const DISCOVERY_METHOD = 'structuralActionOverrideRelatedList';
 const DISCOVERER_ID = 'StructuralActionOverrideRelatedListDiscoverer';
@@ -68,6 +72,7 @@ function extractDynamicRelatedListReferences(flexiPageXml) {
         );
 
         let relatedListApiName = null;
+        const relatedListFieldAliases = [];
 
         for (const propertyMatch of propertyBlocks) {
             const propertyBlock = propertyMatch[1] || '';
@@ -77,10 +82,14 @@ function extractDynamicRelatedListReferences(flexiPageXml) {
             if (propertyName === 'relatedListApiName' && propertyValue) {
                 relatedListApiName = propertyValue;
             }
+
+            if (propertyName === 'relatedListFieldAliases' && propertyValue) {
+                relatedListFieldAliases.push(propertyValue);
+            }
         }
 
         if (relatedListApiName) {
-            references.push({ relatedListApiName });
+            references.push({ relatedListApiName, relatedListFieldAliases });
         }
     }
 
@@ -160,6 +169,50 @@ async function resolveRelationshipDefiningField({
     return null;
 }
 
+function parseRelatedListFieldAlias(fieldAlias, childObjectApiName) {
+    const normalized = String(fieldAlias || '').trim();
+
+    if (!normalized || !childObjectApiName) {
+        return null;
+    }
+
+    if (normalized.includes('.')) {
+        const parsed = parseQualifiedCustomFieldReference(normalized);
+
+        if (!parsed || parsed.objectApiName !== childObjectApiName) {
+            return null;
+        }
+
+        return {
+            fieldApiName: parsed.fieldApiName,
+            qualifiedName: parsed.qualifiedName
+        };
+    }
+
+    if (!isDeployableField(normalized)) {
+        return null;
+    }
+
+    return {
+        fieldApiName: normalized,
+        qualifiedName: `${childObjectApiName}.${normalized}`
+    };
+}
+
+function resolveChildObjectFieldFilePath(
+    childObjectApiName,
+    fieldApiName,
+    repoFiles = []
+) {
+    const suffix = `/objects/${childObjectApiName}/fields/${fieldApiName}.field-meta.xml`;
+
+    return (
+        listCustomFieldRepoPaths(repoFiles).find((fieldPath) =>
+            normalizePath(fieldPath).endsWith(suffix)
+        ) || null
+    );
+}
+
 function isStructuralActionOverrideFlexiPageDependency(dependency) {
     const metadataType = dependency?.metadataType || dependency?.type;
 
@@ -185,7 +238,8 @@ function createStructuralActionOverrideRelatedListFieldRecord({
     relatedListApiName,
     fieldPath,
     depth,
-    origin = null
+    origin = null,
+    reason = null
 }) {
     const fieldApiName = qualifiedName.includes('.')
         ? qualifiedName.split('.').pop()
@@ -209,7 +263,9 @@ function createStructuralActionOverrideRelatedListFieldRecord({
         deployable: true,
         blocking: true,
         filePath: fieldPath || null,
-        reason: `Relationship field ${qualifiedName} required by structural FlexiPage related list ${relatedListApiName} on ${flexiPageName}.`
+        reason:
+            reason ||
+            `Relationship field ${qualifiedName} required by structural FlexiPage related list ${relatedListApiName} on ${flexiPageName}.`
     };
 }
 
@@ -318,6 +374,54 @@ async function discoverRelatedListsForFlexiPage({
             closureCandidates.push({
                 metadataType: 'CustomObject',
                 metadataName: resolvedField.childObjectApiName,
+                deployable: true
+            });
+        }
+
+        for (const fieldAlias of relatedListReference.relatedListFieldAliases ||
+            []) {
+            const parsedAlias = parseRelatedListFieldAlias(
+                fieldAlias,
+                resolvedField.childObjectApiName
+            );
+
+            if (!parsedAlias) {
+                continue;
+            }
+
+            const columnFieldPath = resolveChildObjectFieldFilePath(
+                resolvedField.childObjectApiName,
+                parsedAlias.fieldApiName,
+                repoFiles
+            );
+
+            if (!columnFieldPath) {
+                warnings.push(
+                    `Unable to resolve related list column field ${parsedAlias.qualifiedName} for ${relatedListReference.relatedListApiName} on ${flexiPageName} (${parentSobjectType}).`
+                );
+                continue;
+            }
+
+            if (seenFieldKeys.has(parsedAlias.qualifiedName)) {
+                continue;
+            }
+
+            seenFieldKeys.add(parsedAlias.qualifiedName);
+            relationships.push(
+                createStructuralActionOverrideRelatedListFieldRecord({
+                    qualifiedName: parsedAlias.qualifiedName,
+                    flexiPageName,
+                    parentSobjectType,
+                    relatedListApiName: fieldAlias,
+                    fieldPath: columnFieldPath,
+                    depth,
+                    origin,
+                    reason: `Related list column field ${parsedAlias.qualifiedName} required by structural FlexiPage related list ${relatedListReference.relatedListApiName} on ${flexiPageName}.`
+                })
+            );
+            closureCandidates.push({
+                metadataType: 'CustomField',
+                metadataName: parsedAlias.qualifiedName,
                 deployable: true
             });
         }
@@ -503,6 +607,8 @@ module.exports = {
     discoverStructuralActionOverrideRelatedLists,
     extractDynamicRelatedListReferences,
     isStructuralActionOverrideFlexiPageDependency,
+    parseRelatedListFieldAlias,
     parseRelationshipNameFromRelatedListApiName,
+    resolveChildObjectFieldFilePath,
     resolveRelationshipDefiningField
 };

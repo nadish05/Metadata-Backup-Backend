@@ -12,6 +12,7 @@ const {
     extractDynamicRelatedListReferences,
     isStructuralActionOverrideFlexiPageDependency,
     parseRelationshipNameFromRelatedListApiName,
+    parseRelatedListFieldAlias,
     resolveRelationshipDefiningField
 } = require('./structuralActionOverrideRelatedList.discoverer');
 const structuralActionOverrideRelatedListResolver = require('../resolvers/structuralActionOverrideRelatedList.resolver');
@@ -66,6 +67,18 @@ const MEMBER_RECORD_PAGE_XML = `<?xml version="1.0" encoding="UTF-8"?>
                 <componentInstanceProperties>
                     <name>relatedListApiName</name>
                     <value>Sessions__r</value>
+                </componentInstanceProperties>
+                <componentInstanceProperties>
+                    <name>relatedListFieldAliases</name>
+                    <value>NAME</value>
+                </componentInstanceProperties>
+                <componentInstanceProperties>
+                    <name>relatedListFieldAliases</name>
+                    <value>Status__c</value>
+                </componentInstanceProperties>
+                <componentInstanceProperties>
+                    <name>relatedListFieldAliases</name>
+                    <value>Gym_Trainer__c</value>
                 </componentInstanceProperties>
                 <componentName>lst:dynamicRelatedList</componentName>
             </componentInstance>
@@ -188,7 +201,42 @@ async function main() {
             references.map((item) => item.relatedListApiName),
             ['Sessions__r']
         );
+        assert.deepStrictEqual(references[0].relatedListFieldAliases, [
+            'NAME',
+            'Status__c',
+            'Gym_Trainer__c'
+        ]);
     });
+
+    await runTest('TEST 1A: NAME related-list alias is ignored', () => {
+        assert.strictEqual(
+            parseRelatedListFieldAlias('NAME', 'Session__c'),
+            null
+        );
+    });
+
+    await runTest('TEST 1B: Status__c resolves to Session__c.Status__c', () => {
+        assert.deepStrictEqual(
+            parseRelatedListFieldAlias('Status__c', 'Session__c'),
+            {
+                fieldApiName: 'Status__c',
+                qualifiedName: 'Session__c.Status__c'
+            }
+        );
+    });
+
+    await runTest(
+        'TEST 1C: Gym_Trainer__c resolves to Session__c.Gym_Trainer__c',
+        () => {
+            assert.deepStrictEqual(
+                parseRelatedListFieldAlias('Gym_Trainer__c', 'Session__c'),
+                {
+                    fieldApiName: 'Gym_Trainer__c',
+                    qualifiedName: 'Session__c.Gym_Trainer__c'
+                }
+            );
+        }
+    );
 
     await runTest(
         'TEST 2: Subscription_Record_Page extracts Sessions__r',
@@ -290,27 +338,17 @@ async function main() {
     );
 
     await runTest(
-        'TEST 6: Gym_Trainer__c relationship is not selected for Member__c',
+        'TEST 6: shared Sessions relationshipName does not infer Gym_Trainer__c lookup for Member__c',
         async () => {
-            const discovery =
-                await discoverStructuralActionOverrideFlexiPageRelatedLists({
-                    objectApiName: 'Member__c',
-                    actionOverrideFlexiPages: [
-                        {
-                            name: 'Member_Record_Page',
-                            relationship: 'ActionOverride'
-                        }
-                    ],
-                    repoFiles: REPO_FILES,
-                    readRepoFile: createReadRepoFile(),
-                    depth: 2
-                });
+            const resolved = await resolveRelationshipDefiningField({
+                relationshipName: 'Sessions',
+                referenceTo: 'Member__c',
+                repoFiles: REPO_FILES,
+                readRepoFile: createReadRepoFile()
+            });
 
-            assert.ok(
-                !getRelationshipNames(discovery).includes(
-                    'Session__c.Gym_Trainer__c'
-                )
-            );
+            assert.strictEqual(resolved.qualifiedName, 'Session__c.Member_demo__c');
+            assert.notStrictEqual(resolved.qualifiedName, 'Session__c.Gym_Trainer__c');
         }
     );
 
@@ -354,6 +392,50 @@ async function main() {
                     'Session__c.Account__c'
                 )
             );
+        }
+    );
+
+    await runTest(
+        'TEST 8A: column field destination EXISTS → SKIP',
+        () => {
+            const decision = structuralActionOverrideRelatedListResolver.resolve(
+                {
+                    type: 'CustomField',
+                    name: 'Session__c.Gym_Trainer__c',
+                    discoveryMethod: DISCOVERY_METHOD,
+                    sourceMetadata: 'Member_Record_Page',
+                    relationship: 'ActionOverrideRelatedList'
+                },
+                {
+                    destinationStates: new Map([
+                        ['CustomField:Session__c.Gym_Trainer__c', 'EXISTS']
+                    ])
+                }
+            );
+
+            assert.strictEqual(decision.action, ACTIONS.SKIP);
+        }
+    );
+
+    await runTest(
+        'TEST 8B: column field destination MISSING → DEPLOY',
+        () => {
+            const decision = structuralActionOverrideRelatedListResolver.resolve(
+                {
+                    type: 'CustomField',
+                    name: 'Session__c.Status__c',
+                    discoveryMethod: DISCOVERY_METHOD,
+                    sourceMetadata: 'Member_Record_Page',
+                    relationship: 'ActionOverrideRelatedList'
+                },
+                {
+                    destinationStates: new Map([
+                        ['CustomField:Session__c.Status__c', 'MISSING']
+                    ])
+                }
+            );
+
+            assert.strictEqual(decision.action, ACTIONS.DEPLOY);
         }
     );
 
@@ -501,12 +583,15 @@ async function main() {
                     readRepoFile: createReadRepoFile(),
                     depth: 2
                 });
-
-            assert.ok(
-                !getRelationshipNames(discovery).includes(
-                    'Session__c.Status__c'
-                )
+            const fieldNames = getRelationshipNames(discovery).filter((name) =>
+                name.includes('.')
             );
+
+            assert.ok(fieldNames.includes('Session__c.Member_demo__c'));
+            assert.ok(fieldNames.includes('Session__c.Status__c'));
+            assert.ok(fieldNames.includes('Session__c.Gym_Trainer__c'));
+            assert.ok(!fieldNames.includes('Session__c.Account__c'));
+            assert.ok(!fieldNames.includes('Session__c.Subscription__c'));
         }
     );
 
@@ -536,7 +621,9 @@ async function main() {
             assert.deepStrictEqual(
                 fieldNames.sort(),
                 [
+                    'Session__c.Gym_Trainer__c',
                     'Session__c.Member_demo__c',
+                    'Session__c.Status__c',
                     'Session__c.Subscription__c'
                 ].sort()
             );
@@ -777,8 +864,16 @@ async function main() {
                 )
             );
             assert.ok(
+                getRelationshipNames(discovery).includes('Session__c.Status__c')
+            );
+            assert.ok(
+                getRelationshipNames(discovery).includes(
+                    'Session__c.Gym_Trainer__c'
+                )
+            );
+            assert.ok(
                 !getRelationshipNames(discovery).includes(
-                    'Session__c.Status__c'
+                    'Session__c.Subscription__c'
                 )
             );
         }
@@ -819,8 +914,9 @@ async function main() {
 
             assert.ok(names.includes('Session__c.Member_demo__c'));
             assert.ok(names.includes('Session__c'));
-            assert.ok(!names.includes('Session__c.Gym_Trainer__c'));
-            assert.ok(!names.includes('Session__c.Status__c'));
+            assert.ok(names.includes('Session__c.Gym_Trainer__c'));
+            assert.ok(names.includes('Session__c.Status__c'));
+            assert.ok(!names.includes('Session__c.Subscription__c'));
         }
     );
 }
