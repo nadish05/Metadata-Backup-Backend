@@ -86,6 +86,38 @@ const MEMBER_RECORD_PAGE_XML = `<?xml version="1.0" encoding="UTF-8"?>
     </flexiPageRegions>
 </FlexiPage>`;
 
+const MEMBER_RECORD_PAGE_VALUE_LIST_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<FlexiPage xmlns="http://soap.sforce.com/2006/04/metadata">
+    <sobjectType>Member__c</sobjectType>
+    <masterLabel>Member Record Page</masterLabel>
+    <type>RecordPage</type>
+    <flexiPageRegions>
+        <itemInstances>
+            <componentInstance>
+                <componentInstanceProperties>
+                    <name>relatedListApiName</name>
+                    <value>Sessions__r</value>
+                </componentInstanceProperties>
+                <componentInstanceProperties>
+                    <name>relatedListFieldAliases</name>
+                    <valueList>
+                        <valueListItems>
+                            <value>NAME</value>
+                        </valueListItems>
+                        <valueListItems>
+                            <value>Status__c</value>
+                        </valueListItems>
+                        <valueListItems>
+                            <value>Gym_Trainer__c</value>
+                        </valueListItems>
+                    </valueList>
+                </componentInstanceProperties>
+                <componentName>lst:dynamicRelatedList</componentName>
+            </componentInstance>
+        </itemInstances>
+    </flexiPageRegions>
+</FlexiPage>`;
+
 const SUBSCRIPTION_RECORD_PAGE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <FlexiPage xmlns="http://soap.sforce.com/2006/04/metadata">
     <sobjectType>Subscription__c</sobjectType>
@@ -191,6 +223,31 @@ function getRelationshipNames(result) {
     );
 }
 
+function getSessionCustomFieldNames(result) {
+    return getRelationshipNames(result)
+        .filter((name) => name.startsWith('Session__c.'))
+        .sort();
+}
+
+async function discoverMemberRecordPageFields(memberRecordPageXml) {
+    return discoverStructuralActionOverrideRelatedLists({
+        structuralFlexiPageDependencies: [
+            createStructuralFlexiPageDependency(
+                'Member_Record_Page',
+                MEMBER_RECORD_PAGE_PATH
+            )
+        ],
+        readRepoFile: async (targetPath) => {
+            if (targetPath === MEMBER_RECORD_PAGE_PATH) {
+                return memberRecordPageXml;
+            }
+
+            return createReadRepoFile()(targetPath);
+        },
+        repoFiles: REPO_FILES
+    });
+}
+
 async function main() {
     await runTest('TEST 1: Member_Record_Page extracts Sessions__r', () => {
         const references = extractDynamicRelatedListReferences(
@@ -234,6 +291,71 @@ async function main() {
                     fieldApiName: 'Gym_Trainer__c',
                     qualifiedName: 'Session__c.Gym_Trainer__c'
                 }
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 1D: production valueList XML extracts all relatedListFieldAliases',
+        () => {
+            const references = extractDynamicRelatedListReferences(
+                MEMBER_RECORD_PAGE_VALUE_LIST_XML
+            );
+
+            assert.deepStrictEqual(references[0].relatedListFieldAliases, [
+                'NAME',
+                'Status__c',
+                'Gym_Trainer__c'
+            ]);
+        }
+    );
+
+    await runTest(
+        'TEST 1E: flat XML Member_Record_Page discovers relationship and column fields',
+        async () => {
+            const discovery = await discoverMemberRecordPageFields(
+                MEMBER_RECORD_PAGE_XML
+            );
+
+            assert.deepStrictEqual(getSessionCustomFieldNames(discovery), [
+                'Session__c.Gym_Trainer__c',
+                'Session__c.Member_demo__c',
+                'Session__c.Status__c'
+            ]);
+            assert.ok(
+                !getSessionCustomFieldNames(discovery).includes(
+                    'Session__c.Account__c'
+                )
+            );
+            assert.ok(
+                !getSessionCustomFieldNames(discovery).includes(
+                    'Session__c.Subscription__c'
+                )
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 1F: production valueList XML Member_Record_Page discovers relationship and column fields',
+        async () => {
+            const discovery = await discoverMemberRecordPageFields(
+                MEMBER_RECORD_PAGE_VALUE_LIST_XML
+            );
+
+            assert.deepStrictEqual(getSessionCustomFieldNames(discovery), [
+                'Session__c.Gym_Trainer__c',
+                'Session__c.Member_demo__c',
+                'Session__c.Status__c'
+            ]);
+            assert.ok(
+                !getSessionCustomFieldNames(discovery).includes(
+                    'Session__c.Account__c'
+                )
+            );
+            assert.ok(
+                !getSessionCustomFieldNames(discovery).includes(
+                    'Session__c.Subscription__c'
+                )
             );
         }
     );

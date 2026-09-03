@@ -39,6 +39,35 @@ function extractXmlTagValue(content, tagName) {
     return match ? match[1].trim() : null;
 }
 
+function extractAllXmlTagValues(content, tagName) {
+    const pattern = new RegExp(
+        `<${tagName}>\\s*([^<]+?)\\s*</${tagName}>`,
+        'gi'
+    );
+    const values = [];
+    let match;
+
+    while ((match = pattern.exec(String(content || ''))) !== null) {
+        const value = String(match[1] || '').trim();
+
+        if (value) {
+            values.push(value);
+        }
+    }
+
+    return values;
+}
+
+function extractRelatedListFieldAliasesFromPropertyBlock(propertyBlock) {
+    if (/<valueList\b/i.test(propertyBlock)) {
+        return extractAllXmlTagValues(propertyBlock, 'value');
+    }
+
+    const directValue = extractXmlTagValue(propertyBlock, 'value');
+
+    return directValue ? [directValue] : [];
+}
+
 function parseRelationshipNameFromRelatedListApiName(relatedListApiName) {
     const normalized = String(relatedListApiName || '').trim();
 
@@ -77,14 +106,23 @@ function extractDynamicRelatedListReferences(flexiPageXml) {
         for (const propertyMatch of propertyBlocks) {
             const propertyBlock = propertyMatch[1] || '';
             const propertyName = extractXmlTagValue(propertyBlock, 'name');
-            const propertyValue = extractXmlTagValue(propertyBlock, 'value');
 
-            if (propertyName === 'relatedListApiName' && propertyValue) {
-                relatedListApiName = propertyValue;
+            if (propertyName === 'relatedListApiName') {
+                const propertyValue = extractXmlTagValue(propertyBlock, 'value');
+
+                if (propertyValue) {
+                    relatedListApiName = propertyValue;
+                }
+
+                continue;
             }
 
-            if (propertyName === 'relatedListFieldAliases' && propertyValue) {
-                relatedListFieldAliases.push(propertyValue);
+            if (propertyName === 'relatedListFieldAliases') {
+                relatedListFieldAliases.push(
+                    ...extractRelatedListFieldAliasesFromPropertyBlock(
+                        propertyBlock
+                    )
+                );
             }
         }
 
