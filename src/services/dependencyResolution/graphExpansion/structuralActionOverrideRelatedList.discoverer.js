@@ -5,16 +5,19 @@
  */
 
 const {
-    isStructuralActionOverrideFlexiPage
-} = require('./discoverers/flexiPage.graphDiscoverer');
-const {
     resolveFlexiPageFilePath
 } = require('./customObjectStructuralDependencies.service');
+const { METADATA_ORIGINS } = require('../metadataGraphOrigin.model');
 
 const DISCOVERY_METHOD = 'structuralActionOverrideRelatedList';
 const DISCOVERER_ID = 'StructuralActionOverrideRelatedListDiscoverer';
 const EXPANSION_POLICY = 'PREREQUISITE_ONLY';
 const ACTION_OVERRIDE_RELATIONSHIP = 'ActionOverride';
+const ACTION_OVERRIDE_DISCOVERY_METHOD = 'actionOverrides';
+const CLOSURE_ELIGIBLE_ORIGINS = new Set([
+    METADATA_ORIGINS.DIRECT_DEPENDENCY,
+    METADATA_ORIGINS.RELATIONSHIP_TARGET
+]);
 const ACTION_OVERRIDE_RELATED_LIST_RELATIONSHIP = 'ActionOverrideRelatedList';
 const DYNAMIC_RELATED_LIST_COMPONENT = 'lst:dynamicRelatedList';
 
@@ -164,11 +167,15 @@ function isStructuralActionOverrideFlexiPageDependency(dependency) {
         return false;
     }
 
-    return isStructuralActionOverrideFlexiPage({
-        origin: dependency?.origin,
-        relationship: dependency?.relationship,
-        discoveryMethod: dependency?.discoveryMethod
-    });
+    if (dependency?.relationship !== ACTION_OVERRIDE_RELATIONSHIP) {
+        return false;
+    }
+
+    if (dependency?.discoveryMethod !== ACTION_OVERRIDE_DISCOVERY_METHOD) {
+        return false;
+    }
+
+    return CLOSURE_ELIGIBLE_ORIGINS.has(dependency?.origin);
 }
 
 function createStructuralActionOverrideRelatedListFieldRecord({

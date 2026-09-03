@@ -10,6 +10,7 @@ const {
     discoverStructuralActionOverrideFlexiPageRelatedLists,
     discoverStructuralActionOverrideRelatedLists,
     extractDynamicRelatedListReferences,
+    isStructuralActionOverrideFlexiPageDependency,
     parseRelationshipNameFromRelatedListApiName,
     resolveRelationshipDefiningField
 } = require('./structuralActionOverrideRelatedList.discoverer');
@@ -154,7 +155,7 @@ function createReadRepoFile(files = FILE_CONTENT) {
     };
 }
 
-function createStructuralFlexiPageDependency(name, filePath) {
+function createStructuralFlexiPageDependency(name, filePath, overrides = {}) {
     return {
         name,
         metadataType: 'FlexiPage',
@@ -166,7 +167,8 @@ function createStructuralFlexiPageDependency(name, filePath) {
         required: true,
         selected: true,
         deployable: true,
-        blocking: true
+        blocking: true,
+        ...overrides
     };
 }
 
@@ -671,6 +673,113 @@ async function main() {
             assert.strictEqual(
                 parseRelationshipNameFromRelatedListApiName('Sessions__r'),
                 'Sessions'
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 18A: closure eligibility accepts DIRECT_DEPENDENCY origin',
+        () => {
+            assert.strictEqual(
+                isStructuralActionOverrideFlexiPageDependency(
+                    createStructuralFlexiPageDependency(
+                        'Member_Record_Page',
+                        MEMBER_RECORD_PAGE_PATH
+                    )
+                ),
+                true
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 18B: closure eligibility accepts RELATIONSHIP_TARGET origin',
+        () => {
+            assert.strictEqual(
+                isStructuralActionOverrideFlexiPageDependency(
+                    createStructuralFlexiPageDependency(
+                        'Member_Record_Page',
+                        MEMBER_RECORD_PAGE_PATH,
+                        { origin: METADATA_ORIGINS.RELATIONSHIP_TARGET }
+                    )
+                ),
+                true
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 18C: closure eligibility rejects unrelated origin',
+        () => {
+            assert.strictEqual(
+                isStructuralActionOverrideFlexiPageDependency(
+                    createStructuralFlexiPageDependency(
+                        'Member_Record_Page',
+                        MEMBER_RECORD_PAGE_PATH,
+                        { origin: METADATA_ORIGINS.SECONDARY_DEPENDENCY }
+                    )
+                ),
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 18D: closure eligibility rejects wrong relationship',
+        () => {
+            assert.strictEqual(
+                isStructuralActionOverrideFlexiPageDependency(
+                    createStructuralFlexiPageDependency(
+                        'Member_Record_Page',
+                        MEMBER_RECORD_PAGE_PATH,
+                        { relationship: 'Field' }
+                    )
+                ),
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 18E: closure eligibility rejects wrong discoveryMethod',
+        () => {
+            assert.strictEqual(
+                isStructuralActionOverrideFlexiPageDependency(
+                    createStructuralFlexiPageDependency(
+                        'Member_Record_Page',
+                        MEMBER_RECORD_PAGE_PATH,
+                        { discoveryMethod: 'graphExpansion' }
+                    )
+                ),
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 18F: RELATIONSHIP_TARGET Member_Record_Page closes Session__c.Member_demo__c',
+        async () => {
+            const discovery = await discoverStructuralActionOverrideRelatedLists({
+                structuralFlexiPageDependencies: [
+                    createStructuralFlexiPageDependency(
+                        'Member_Record_Page',
+                        MEMBER_RECORD_PAGE_PATH,
+                        { origin: METADATA_ORIGINS.RELATIONSHIP_TARGET }
+                    )
+                ],
+                readRepoFile: createReadRepoFile(),
+                repoFiles: REPO_FILES
+            });
+
+            assert.ok(
+                getRelationshipNames(discovery).includes(
+                    'Session__c.Member_demo__c'
+                )
+            );
+            assert.ok(
+                !getRelationshipNames(discovery).includes(
+                    'Session__c.Status__c'
+                )
             );
         }
     );
