@@ -21,6 +21,9 @@ const {
     createSalesforceRollbackSnapshotContext,
     normalizeCaptureStatus
 } = require('./salesforceRollbackSnapshotContext.service');
+const {
+    isDeleteRollbackEligibleMember
+} = require('./snapshotRollbackEligibility.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -178,6 +181,67 @@ function buildArtifactsMap(artifactBytes, artifactId = ARTIFACT_ID) {
         assert.strictEqual(members[0].captureStatus, MEMBER_CAPTURE_STATUS.COMPLETE);
         assert.strictEqual(normalizeCaptureStatus('CAPTURED'), MEMBER_CAPTURE_STATUS.COMPLETE);
     });
+
+    await runTest('Salesforce captureStatus values normalize via canonical mapping', () => {
+        assert.strictEqual(
+            normalizeCaptureStatus('NOT_REQUIRED'),
+            MEMBER_CAPTURE_STATUS.ABSENT_PROVEN
+        );
+        assert.strictEqual(
+            normalizeCaptureStatus('CAPTURED'),
+            MEMBER_CAPTURE_STATUS.COMPLETE
+        );
+        assert.strictEqual(
+            normalizeCaptureStatus('SKIPPED'),
+            MEMBER_CAPTURE_STATUS.UNKNOWN
+        );
+        assert.strictEqual(
+            normalizeCaptureStatus('FAILED'),
+            MEMBER_CAPTURE_STATUS.FAILED
+        );
+        assert.strictEqual(
+            normalizeCaptureStatus(MEMBER_CAPTURE_STATUS.ABSENT_PROVEN),
+            MEMBER_CAPTURE_STATUS.ABSENT_PROVEN
+        );
+        assert.strictEqual(
+            normalizeCaptureStatus(MEMBER_CAPTURE_STATUS.COMPLETE),
+            MEMBER_CAPTURE_STATUS.COMPLETE
+        );
+    });
+
+    await runTest(
+        'NEW member with Salesforce NOT_REQUIRED is delete-rollback eligible after normalization',
+        async () => {
+            const expectedAfterHash = hashBytes(Buffer.from('deployed\n', 'utf8'));
+            const { snapshotExport } = buildSnapshotExport({
+                member: {
+                    memberKey: 'ApexClass:DemoDeletedClass',
+                    metadataType: 'ApexClass',
+                    metadataName: 'DemoDeletedClass',
+                    filePath:
+                        'force-app/main/default/classes/DemoDeletedClass.cls',
+                    changeClass: CHANGE_CLASS.NEW,
+                    existedBefore: false,
+                    destinationBeforeHash: null,
+                    expectedAfterHash,
+                    artifactId: null,
+                    artifactSize: 0,
+                    contentDocumentId: null,
+                    captureStatus: 'NOT_REQUIRED'
+                }
+            });
+
+            const { captureService } = await createSalesforceRollbackSnapshotContext(
+                snapshotExport,
+                {}
+            );
+            const members = await captureService.getMembers(SNAPSHOT_ID);
+            const member = members[0];
+
+            assert.strictEqual(member.captureStatus, MEMBER_CAPTURE_STATUS.ABSENT_PROVEN);
+            assert.strictEqual(isDeleteRollbackEligibleMember(member), true);
+        }
+    );
 
     await runTest('MODIFIED member artifact is retrievable as Buffer', async () => {
         const { snapshotExport, artifactBytes } = buildSnapshotExport();

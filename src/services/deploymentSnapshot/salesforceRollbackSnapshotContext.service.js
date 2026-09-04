@@ -22,6 +22,10 @@ const {
     ROLLBACK_MODE,
     isDeleteRollbackEligibleMember
 } = require('./snapshotRollbackEligibility.service');
+const {
+    NODE_CAPTURE_STATUS,
+    toNodeCaptureStatus
+} = require('../controlPlane/controlPlane.captureStatus');
 
 const SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE = Object.freeze({
     INVALID_REQUEST: 'ROLLBACK_SNAPSHOT_CONTEXT_INVALID_REQUEST',
@@ -31,9 +35,9 @@ const SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE = Object.freeze({
     ARTIFACT_INVALID: 'ROLLBACK_SNAPSHOT_CONTEXT_ARTIFACT_INVALID'
 });
 
-const SALESFORCE_CAPTURE_STATUS = Object.freeze({
-    CAPTURED: 'CAPTURED'
-});
+const NODE_CAPTURE_STATUS_VALUES = new Set(
+    Object.values(NODE_CAPTURE_STATUS)
+);
 
 const MEMBER_FIELDS = Object.freeze([
     'memberKey',
@@ -67,11 +71,11 @@ function isPlainObject(value) {
 }
 
 function normalizeCaptureStatus(captureStatus) {
-    if (captureStatus === SALESFORCE_CAPTURE_STATUS.CAPTURED) {
-        return MEMBER_CAPTURE_STATUS.COMPLETE;
+    if (NODE_CAPTURE_STATUS_VALUES.has(captureStatus)) {
+        return captureStatus;
     }
 
-    return captureStatus;
+    return toNodeCaptureStatus(captureStatus);
 }
 
 function pickMemberFields(member, snapshotId) {
