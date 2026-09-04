@@ -60,7 +60,7 @@ const {
 } = require('../deploymentOrgLock/deploymentOrgLock.errors');
 const { retrieveDestinationMember } = require('./destinationMetadataRetriever.service');
 const { generateManifest } = require('../packageXml.service');
-const { runCheckOnlyDeployment } = require('../checkOnlyDeployment.service');
+const { runCheckOnlyDeployment, refreshAccessToken } = require('../checkOnlyDeployment.service');
 const { isCheckOnlySuccess } = require('../deploymentCheckOnlyGate.service');
 const { runDeploymentExecution } = require('../deploymentExecution.service');
 const {
@@ -238,6 +238,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const inventoryBuilder =
         dependencies.buildDestinationInventory || buildDestinationInventory;
     const inventoryState = dependencies.getState || getState;
+    const refreshAccessTokenFn =
+        dependencies.refreshAccessToken || refreshAccessToken;
     const deleteWorkspace =
         dependencies.deleteRestoreWorkspace || deleteRestoreWorkspace;
     const resolveOperationStore =
@@ -374,6 +376,59 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             console.error(error?.message || error);
             return operation;
         }
+    }
+
+    async function resolvePostDeleteInventoryCredentials(args) {
+        if (args.accessToken) {
+            return {
+                accessToken: args.accessToken,
+                instanceUrl: args.instanceUrl
+            };
+        }
+
+        if (!args.refreshToken) {
+            return {
+                accessToken: null,
+                instanceUrl: args.instanceUrl || null
+            };
+        }
+
+        const tokenResult = await refreshAccessTokenFn(args.refreshToken);
+
+        return {
+            accessToken: tokenResult.accessToken,
+            instanceUrl: tokenResult.instanceUrl || args.instanceUrl
+        };
+    }
+
+    function buildExecutionTerminalPatch(
+        classified,
+        deploymentExecution,
+        salesforceDeploymentId
+    ) {
+        return {
+            status: classified.status,
+            salesforceDeploymentId,
+            salesforceStatus: deploymentExecution?.status || null,
+            resultCode:
+                classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED
+                    ? 'ROLLBACK_SUCCEEDED'
+                    : classified.status === ROLLBACK_OPERATION_STATUS.FAILED
+                      ? ROLLBACK_CODE.EXECUTION_FAILED
+                      : ROLLBACK_CODE.RESULT_UNKNOWN,
+            resultMessage: deploymentExecution?.message || null,
+            errorCode:
+                classified.status === ROLLBACK_OPERATION_STATUS.FAILED
+                    ? ROLLBACK_CODE.EXECUTION_FAILED
+                    : classified.status === ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT
+                      ? ROLLBACK_CODE.RESULT_UNKNOWN
+                      : null,
+            errorMessage:
+                classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED
+                    ? null
+                    : deploymentExecution?.message || null,
+            checkOnlyStatus: CHECK_ONLY_STATUS.SUCCESS
+        };
     }
 
     async function runRollback(args = {}) {
@@ -1035,66 +1090,48 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 operationService.classifyExecutionResult(deploymentExecution);
             const salesforceDeploymentId =
                 extractSalesforceDeploymentId(deploymentExecution);
+            const deferTerminalSuccess =
+                rollbackMode === ROLLBACK_MODE.DELETE &&
+                classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED;
 
-            try {
-                operation = await operationService.markTerminal(
-                    operation.operationId,
-                    {
-                        status: classified.status,
-                        salesforceDeploymentId,
-                        salesforceStatus: deploymentExecution?.status || null,
-                        resultCode:
-                            classified.status ===
-                            ROLLBACK_OPERATION_STATUS.SUCCEEDED
-                                ? 'ROLLBACK_SUCCEEDED'
-                                : classified.status ===
-                                    ROLLBACK_OPERATION_STATUS.FAILED
-                                  ? ROLLBACK_CODE.EXECUTION_FAILED
-                                  : ROLLBACK_CODE.RESULT_UNKNOWN,
-                        resultMessage: deploymentExecution?.message || null,
-                        errorCode:
-                            classified.status ===
-                            ROLLBACK_OPERATION_STATUS.FAILED
-                                ? ROLLBACK_CODE.EXECUTION_FAILED
-                                : classified.status ===
-                                    ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT
-                                  ? ROLLBACK_CODE.RESULT_UNKNOWN
-                                  : null,
-                        errorMessage:
-                            classified.status ===
-                            ROLLBACK_OPERATION_STATUS.SUCCEEDED
-                                ? null
-                                : deploymentExecution?.message || null,
-                        checkOnlyStatus: CHECK_ONLY_STATUS.SUCCESS
-                    }
-                );
-            } catch (persistError) {
-                outcome = withOperation(
-                    block(
-                        ROLLBACK_CODE.RESULT_PERSISTENCE_UNKNOWN,
-                        persistError.message ||
-                            'Rollback Salesforce result could not be persisted.',
-                        {
-                            snapshotId,
-                            drift,
-                            checkOnlyDeployment,
+            if (!deferTerminalSuccess) {
+                try {
+                    operation = await operationService.markTerminal(
+                        operation.operationId,
+                        buildExecutionTerminalPatch(
+                            classified,
                             deploymentExecution,
-                            generatedWorkspace
+                            salesforceDeploymentId
+                        )
+                    );
+                } catch (persistError) {
+                    outcome = withOperation(
+                        block(
+                            ROLLBACK_CODE.RESULT_PERSISTENCE_UNKNOWN,
+                            persistError.message ||
+                                'Rollback Salesforce result could not be persisted.',
+                            {
+                                snapshotId,
+                                drift,
+                                checkOnlyDeployment,
+                                deploymentExecution,
+                                generatedWorkspace
+                            }
+                        ),
+                        {
+                            ...operation,
+                            status: ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT,
+                            salesforceDeploymentId
                         }
-                    ),
-                    {
-                        ...operation,
-                        status: ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT,
-                        salesforceDeploymentId
-                    }
-                );
-                outcome.historyId = await recordHistory(
-                    args,
-                    snapshot,
-                    outcome,
-                    operation
-                );
-                return outcome;
+                    );
+                    outcome.historyId = await recordHistory(
+                        args,
+                        snapshot,
+                        outcome,
+                        operation
+                    );
+                    return outcome;
+                }
             }
 
             if (classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED) {
@@ -1102,14 +1139,15 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     let inventory;
 
                     try {
+                        const credentials =
+                            await resolvePostDeleteInventoryCredentials(args);
                         const inventoryResult = await inventoryBuilder({
                             items: members.map((member) => ({
                                 metadataType: member.metadataType,
                                 metadataName: member.metadataName
                             })),
-                            accessToken: args.accessToken || null,
-                            instanceUrl: args.instanceUrl,
-                            refreshToken: args.refreshToken
+                            accessToken: credentials.accessToken,
+                            instanceUrl: credentials.instanceUrl
                         });
                         inventory = inventoryResult.inventory;
                     } catch (error) {
@@ -1178,6 +1216,46 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                                 }
                             ),
                             operation
+                        );
+                        outcome.historyId = await recordHistory(
+                            args,
+                            snapshot,
+                            outcome,
+                            operation
+                        );
+                        return outcome;
+                    }
+                }
+
+                if (deferTerminalSuccess) {
+                    try {
+                        operation = await operationService.markTerminal(
+                            operation.operationId,
+                            buildExecutionTerminalPatch(
+                                classified,
+                                deploymentExecution,
+                                salesforceDeploymentId
+                            )
+                        );
+                    } catch (persistError) {
+                        outcome = withOperation(
+                            block(
+                                ROLLBACK_CODE.RESULT_PERSISTENCE_UNKNOWN,
+                                persistError.message ||
+                                    'Rollback Salesforce result could not be persisted.',
+                                {
+                                    snapshotId,
+                                    drift,
+                                    checkOnlyDeployment,
+                                    deploymentExecution,
+                                    generatedWorkspace
+                                }
+                            ),
+                            {
+                                ...operation,
+                                status: ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT,
+                                salesforceDeploymentId
+                            }
                         );
                         outcome.historyId = await recordHistory(
                             args,

@@ -39,6 +39,10 @@ const {
 } = require('./destinationSnapshotRestore.service');
 const { ROLLBACK_CODE } = require('./snapshotRestore.errors');
 const {
+    createRollbackOperationService
+} = require('./rollbackOperation.service');
+const { ROLLBACK_OPERATION_STATUS } = require('./rollbackOperation.types');
+const {
     createMemoryRollbackOperationStore
 } = require('./stores/memoryRollbackOperationStore');
 const {
@@ -118,15 +122,32 @@ function createDeleteRestoreHarness({
     retrieveBytes,
     checkOnlySuccess = true,
     executeSuccess = true,
-    inventoryState = DESTINATION_STATE.MISSING
+    inventoryState = DESTINATION_STATE.MISSING,
+    refreshAccessTokenResult = {
+        accessToken: 'refreshed-access-token',
+        instanceUrl: 'https://dest.example.com'
+    },
+    onPostDeleteInventory = null
 } = {}) {
     let checkOnlyWorkspace = null;
     let executeWorkspace = null;
     let executions = 0;
     const operationStore = createMemoryRollbackOperationStore();
+    const terminalTransitions = [];
+    const baseOperationService = createRollbackOperationService({
+        getStore: () => operationStore
+    });
+    const operationService = {
+        ...baseOperationService,
+        async markTerminal(operationId, outcome) {
+            terminalTransitions.push(outcome.status);
+            return baseOperationService.markTerminal(operationId, outcome);
+        }
+    };
 
     const service = createDestinationSnapshotRestoreService({
         getRollbackOperationStore: () => operationStore,
+        rollbackOperationService: operationService,
         captureService: capture,
         isSnapshotRollbackEnabled: () => true,
         isDurableSnapshotStorageReady: () => true,
@@ -161,18 +182,30 @@ function createDeleteRestoreHarness({
                 message: executeSuccess ? 'deployed' : 'deploy failed'
             };
         },
-        buildDestinationInventory: async ({ items }) => ({
-            inventory: new Map(
-                items.map((item) => [
-                    `${item.metadataType}:${item.metadataName}`,
-                    { state: inventoryState }
-                ])
-            )
-        })
+        refreshAccessToken: async () => refreshAccessTokenResult,
+        buildDestinationInventory: async ({ accessToken, items }) => {
+            if (typeof onPostDeleteInventory === 'function') {
+                await onPostDeleteInventory({
+                    accessToken,
+                    operationStore
+                });
+            }
+
+            return {
+                inventory: new Map(
+                    items.map((item) => [
+                        `${item.metadataType}:${item.metadataName}`,
+                        { state: inventoryState }
+                    ])
+                )
+            };
+        }
     });
 
     return {
         service,
+        operationStore,
+        terminalTransitions,
         getWorkspaces: () => ({
             checkOnlyWorkspace,
             executeWorkspace
@@ -644,6 +677,149 @@ function createDeleteRestoreHarness({
                 workspace.generatedManifest.destructiveChangesXml,
                 /<version>null<\/version>/
             );
+        }
+    );
+
+    await runTest(
+        'H35. DELETE rollback success transitions IN_PROGRESS -> SUCCEEDED after verification',
+        async () => {
+            const { capture, sealed, afterBytes } = await sealDeleteSnapshot();
+            const harness = createDeleteRestoreHarness({
+                capture,
+                retrieveBytes: afterBytes
+            });
+            const result = await harness.service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com',
+                destinationOrgId: '00D000000000001'
+            });
+
+            assert.strictEqual(result.blocked, false);
+            assert.strictEqual(result.operationStatus, 'SUCCEEDED');
+            assert.deepStrictEqual(harness.terminalTransitions, [
+                ROLLBACK_OPERATION_STATUS.SUCCEEDED
+            ]);
+            assert.strictEqual(
+                harness.terminalTransitions.includes(
+                    ROLLBACK_OPERATION_STATUS.FAILED
+                ),
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'H36. DELETE rollback with post-delete EXISTS transitions IN_PROGRESS -> FAILED',
+        async () => {
+            const { capture, sealed, afterBytes } = await sealDeleteSnapshot();
+            const harness = createDeleteRestoreHarness({
+                capture,
+                retrieveBytes: afterBytes,
+                inventoryState: DESTINATION_STATE.EXISTS
+            });
+            const result = await harness.service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(
+                result.code,
+                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED
+            );
+            assert.deepStrictEqual(harness.terminalTransitions, [
+                ROLLBACK_OPERATION_STATUS.FAILED
+            ]);
+            assert.strictEqual(
+                harness.terminalTransitions.includes(
+                    ROLLBACK_OPERATION_STATUS.SUCCEEDED
+                ),
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'H37. DELETE post-delete verification refreshes access token when absent',
+        async () => {
+            const { capture, sealed, afterBytes } = await sealDeleteSnapshot();
+            let inventoryAccessToken = null;
+            const harness = createDeleteRestoreHarness({
+                capture,
+                retrieveBytes: afterBytes,
+                onPostDeleteInventory: async ({ accessToken }) => {
+                    inventoryAccessToken = accessToken;
+                }
+            });
+            const result = await harness.service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(result.blocked, false);
+            assert.strictEqual(
+                inventoryAccessToken,
+                'refreshed-access-token'
+            );
+        }
+    );
+
+    await runTest(
+        'H38. DELETE rollback with UNKNOWN inventory transitions IN_PROGRESS -> FAILED',
+        async () => {
+            const { capture, sealed, afterBytes } = await sealDeleteSnapshot();
+            const harness = createDeleteRestoreHarness({
+                capture,
+                retrieveBytes: afterBytes,
+                inventoryState: DESTINATION_STATE.UNKNOWN
+            });
+            const result = await harness.service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(
+                result.code,
+                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED
+            );
+            assert.deepStrictEqual(harness.terminalTransitions, [
+                ROLLBACK_OPERATION_STATUS.FAILED
+            ]);
+        }
+    );
+
+    await runTest(
+        'H39. DELETE rollback does not mark SUCCEEDED before post-delete verification',
+        async () => {
+            const { capture, sealed, afterBytes } = await sealDeleteSnapshot();
+            let statusDuringVerification = null;
+            const harness = createDeleteRestoreHarness({
+                capture,
+                retrieveBytes: afterBytes,
+                onPostDeleteInventory: async ({ operationStore }) => {
+                    const operations = await operationStore.findBySnapshotId(
+                        sealed.snapshotId
+                    );
+                    statusDuringVerification = operations[0]?.status || null;
+                }
+            });
+            const result = await harness.service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(result.blocked, false);
+            assert.strictEqual(
+                statusDuringVerification,
+                ROLLBACK_OPERATION_STATUS.IN_PROGRESS
+            );
+            assert.deepStrictEqual(harness.terminalTransitions, [
+                ROLLBACK_OPERATION_STATUS.SUCCEEDED
+            ]);
         }
     );
 })();
