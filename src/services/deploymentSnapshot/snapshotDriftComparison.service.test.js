@@ -87,3 +87,49 @@ runTest('B missing and C != A is CHANGED_FROM_BEFORE not post-deploy drift', () 
     assert.strictEqual(result.postDeploymentDriftClaimed, false);
     assert.notStrictEqual(result.classification, DRIFT_CLASSIFICATION.DRIFTED);
 });
+
+runTest('A === B === C → MATCHES_EXPECTED_AFTER', () => {
+    const result = compareDestinationToSnapshot({
+        destinationBeforeHash: A,
+        expectedAfterHash: A,
+        currentDestinationHash: A
+    });
+
+    assert.strictEqual(
+        result.classification,
+        DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+    );
+    assert.strictEqual(result.expectedAfterAvailable, true);
+    assert.strictEqual(result.postDeploymentDriftClaimed, false);
+});
+
+runTest('C = B and C !== A → MATCHES_EXPECTED_AFTER', () => {
+    const result = compareDestinationToSnapshot({
+        destinationBeforeHash: A,
+        expectedAfterHash: B,
+        currentDestinationHash: B
+    });
+
+    assert.strictEqual(
+        result.classification,
+        DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+    );
+    assert.notStrictEqual(result.classification, DRIFT_CLASSIFICATION.UNCHANGED_FROM_BEFORE);
+});
+
+runTest('C = A and C !== B → UNCHANGED_FROM_BEFORE', () => {
+    const result = compareDestinationToSnapshot({
+        destinationBeforeHash: A,
+        expectedAfterHash: B,
+        currentDestinationHash: A
+    });
+
+    assert.strictEqual(
+        result.classification,
+        DRIFT_CLASSIFICATION.UNCHANGED_FROM_BEFORE
+    );
+    assert.notStrictEqual(
+        result.classification,
+        DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+    );
+});

@@ -618,6 +618,50 @@ function createRestore({
         );
     });
 
+    await runTest('A === B === C proceeds as MATCHES_EXPECTED_AFTER', async () => {
+        const bytes = beforeBytes();
+        const sameHash = hashBytes(bytes);
+        const capture = createSnapshotCaptureService({
+            metadataStore: createMemorySnapshotMetadataStore(),
+            blobStore: createMemorySnapshotBlobStore()
+        });
+        const ready = await capture.captureSnapshot({
+            deploymentContext: {
+                destinationOrgId: '00D000000000001',
+                sourceOrgId: '00D000000000002'
+            },
+            members: [
+                {
+                    metadataType: 'ApexClass',
+                    metadataName: 'AccountService',
+                    filePath: 'force-app/main/default/classes/AccountService.cls',
+                    changeClass: CHANGE_CLASS.MODIFIED,
+                    destinationBeforeBytes: bytes,
+                    expectedAfterHash: sameHash
+                }
+            ]
+        });
+        const sealed = await capture.sealSnapshot(ready.snapshotId);
+        const restore = createRestore({
+            capture,
+            lockService: createOrgLockService({
+                store: createMemoryOrgLockStore()
+            }),
+            retrieveBytes: bytes
+        });
+        const result = await restore.service.runRollback({
+            snapshotId: sealed.snapshotId,
+            refreshToken: 'refresh',
+            instanceUrl: 'https://dest.example.com'
+        });
+
+        assert.strictEqual(result.blocked, false);
+        assert.strictEqual(
+            result.drift[0].classification,
+            DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+        );
+    });
+
     await runTest('check-only failure skips execution; success executes once and releases lock', async () => {
         const { capture, sealed } = await sealEligible();
         const lockService = createOrgLockService({

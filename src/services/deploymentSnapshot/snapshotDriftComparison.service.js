@@ -34,6 +34,14 @@ function compareDestinationToSnapshot({
         };
     }
 
+    if (hasB && currentDestinationHash === expectedAfterHash) {
+        return {
+            classification: DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
+            expectedAfterAvailable: true,
+            postDeploymentDriftClaimed: false
+        };
+    }
+
     if (currentDestinationHash === destinationBeforeHash) {
         return {
             classification: DRIFT_CLASSIFICATION.UNCHANGED_FROM_BEFORE,
@@ -46,14 +54,6 @@ function compareDestinationToSnapshot({
         return {
             classification: DRIFT_CLASSIFICATION.CHANGED_FROM_BEFORE,
             expectedAfterAvailable: false,
-            postDeploymentDriftClaimed: false
-        };
-    }
-
-    if (currentDestinationHash === expectedAfterHash) {
-        return {
-            classification: DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
-            expectedAfterAvailable: true,
             postDeploymentDriftClaimed: false
         };
     }
