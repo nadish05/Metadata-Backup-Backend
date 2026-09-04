@@ -133,7 +133,51 @@ function generateManifest(generatedDeploymentPackage, options = {}) {
     };
 }
 
+function generateEmptyPackageXml(apiVersion = DEFAULT_API_VERSION) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+
+    <version>${escapeXml(apiVersion)}</version>
+
+</Package>`;
+}
+
+function generateDestructiveChangesXml(
+    generatedDeploymentPackage,
+    apiVersion = DEFAULT_API_VERSION
+) {
+    const metadata = generatedDeploymentPackage?.metadata || [];
+    const typeMap = groupMetadataByType(metadata);
+
+    if (!typeMap.size) {
+        throw new Error(
+            'destructiveChanges.xml requires at least one metadata member.'
+        );
+    }
+
+    for (const item of metadata) {
+        if (!item?.metadataType || !item?.metadataName) {
+            throw new Error(
+                'destructiveChanges.xml member requires metadataType and metadataName.'
+            );
+        }
+    }
+
+    const typesXml = buildTypesXml(typeMap);
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+
+${typesXml}
+
+    <version>${escapeXml(apiVersion)}</version>
+
+</Package>`;
+}
+
 module.exports = {
     generatePackageXml,
+    generateEmptyPackageXml,
+    generateDestructiveChangesXml,
     generateManifest
 };

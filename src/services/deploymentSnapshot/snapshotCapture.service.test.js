@@ -20,6 +20,7 @@ const {
     hashBytes,
     computeSnapshotIntegrityHash
 } = require('./snapshotIntegrity.service');
+const { packMemberFiles } = require('./destinationMemberArtifact.service');
 const {
     createSnapshotCaptureService
 } = require('./snapshotCapture.service');
@@ -286,6 +287,34 @@ async function main() {
         );
         assert.strictEqual(sealed.rollbackEligible, false);
         assert.strictEqual(members[0].artifactSize, 0);
+    });
+
+    await runTest('NEW with expectedAfterHash is captured for delete rollback', async () => {
+        const { service } = createService();
+        const afterBytes = packMemberFiles([
+            {
+                relativePath: 'classes/DemoDeletedClass.cls',
+                bytes: Buffer.from('public class DemoDeletedClass {}\n', 'utf8')
+            }
+        ]);
+        const snapshot = await service.captureSnapshot({
+            deploymentContext: CONTEXT,
+            members: [
+                {
+                    metadataType: 'ApexClass',
+                    metadataName: 'DemoDeletedClass',
+                    changeClass: CHANGE_CLASS.NEW,
+                    expectedAfterHash: hashBytes(afterBytes)
+                }
+            ]
+        });
+        const members = await service.getMembers(snapshot.snapshotId);
+        const sealed = await service.sealSnapshot(snapshot.snapshotId);
+
+        assert.strictEqual(members[0].expectedAfterHash, hashBytes(afterBytes));
+        assert.strictEqual(members[0].destinationBeforeHash, null);
+        assert.strictEqual(members[0].artifactId, null);
+        assert.strictEqual(sealed.rollbackEligible, true);
     });
 
     await runTest('NEW with destination-before bytes is rejected', async () => {

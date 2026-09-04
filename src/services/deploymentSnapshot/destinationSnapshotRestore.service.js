@@ -9,6 +9,7 @@ const { SnapshotNotFoundError, SnapshotIntegrityError, SnapshotValidationError }
 const { isCaptureAllowlisted } = require('./destinationSnapshotMapper.service');
 const {
     compareDestinationToSnapshot,
+    compareNewMemberForDeleteRollback,
     DRIFT_CLASSIFICATION
 } = require('./snapshotDriftComparison.service');
 const { hashBytes } = require('./snapshotIntegrity.service');
@@ -20,6 +21,19 @@ const {
     buildRestoreWorkspace,
     deleteRestoreWorkspace
 } = require('./restoreWorkspace.service');
+const {
+    buildDeleteRollbackWorkspace
+} = require('./destructiveRollbackWorkspace.service');
+const {
+    ROLLBACK_MODE,
+    isDeleteRollbackEligibleMember,
+    resolveRollbackMode
+} = require('./snapshotRollbackEligibility.service');
+const {
+    buildDestinationInventory,
+    getState,
+    DESTINATION_STATE
+} = require('../destinationInventory/destinationInventoryBuilder.service');
 const {
     isDeploymentOrgLockEnabled
 } = require('../deploymentOrgLock/deploymentOrgLock.flag');
@@ -146,33 +160,41 @@ function assertRollbackMembers(members) {
                 `Rollback metadata type is not supported: ${member.metadataType}.`
             );
         }
+    }
 
-        if (member.changeClass === CHANGE_CLASS.NEW) {
-            throw new RollbackBlockedError(
-                ROLLBACK_CODE.NEW_MEMBER_PRESENT,
-                `Rollback cannot restore NEW member ${memberKey(member)}.`
-            );
-        }
+    const mode = resolveRollbackMode(members);
 
-        if (member.changeClass !== CHANGE_CLASS.MODIFIED) {
-            throw new RollbackBlockedError(
-                ROLLBACK_CODE.MEMBER_NOT_MODIFIED,
-                `Rollback requires MODIFIED members; ${memberKey(member)} is ${member.changeClass}.`
-            );
-        }
+    if (mode === ROLLBACK_MODE.MIXED) {
+        throw new RollbackBlockedError(
+            ROLLBACK_CODE.MIXED_SNAPSHOT,
+            'Rollback v1 does not support mixed MODIFIED restore and NEW delete members.'
+        );
+    }
 
-        if (
-            member.captureStatus !== MEMBER_CAPTURE_STATUS.COMPLETE ||
-            !member.destinationBeforeHash ||
-            !member.expectedAfterHash ||
-            !member.artifactId
-        ) {
+    if (mode === ROLLBACK_MODE.INELIGIBLE) {
+        for (const member of members) {
+            if (member.changeClass === CHANGE_CLASS.NEW) {
+                throw new RollbackBlockedError(
+                    ROLLBACK_CODE.NEW_MEMBER_PRESENT,
+                    `Rollback cannot delete unsupported NEW member ${memberKey(member)}.`
+                );
+            }
+
+            if (member.changeClass !== CHANGE_CLASS.MODIFIED) {
+                throw new RollbackBlockedError(
+                    ROLLBACK_CODE.MEMBER_NOT_MODIFIED,
+                    `Rollback requires MODIFIED or delete-eligible NEW members; ${memberKey(member)} is ${member.changeClass}.`
+                );
+            }
+
             throw new RollbackBlockedError(
                 ROLLBACK_CODE.SNAPSHOT_NOT_ELIGIBLE,
                 `Rollback member ${memberKey(member)} is missing destination-before, expected-after, or artifact data.`
             );
         }
     }
+
+    return mode;
 }
 
 function extractSalesforceDeploymentId(mappedResult) {
@@ -211,6 +233,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const historyService = dependencies.historyService || null;
     const buildWorkspace =
         dependencies.buildRestoreWorkspace || buildRestoreWorkspace;
+    const buildDeleteWorkspace =
+        dependencies.buildDeleteRollbackWorkspace || buildDeleteRollbackWorkspace;
+    const inventoryBuilder =
+        dependencies.buildDestinationInventory || buildDestinationInventory;
+    const inventoryState = dependencies.getState || getState;
     const deleteWorkspace =
         dependencies.deleteRestoreWorkspace || deleteRestoreWorkspace;
     const resolveOperationStore =
@@ -426,8 +453,10 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             );
         }
 
+        let rollbackMode;
+
         try {
-            assertRollbackMembers(members);
+            rollbackMode = assertRollbackMembers(members);
         } catch (error) {
             if (error instanceof RollbackBlockedError) {
                 return block(error.code, error.message, { snapshotId });
@@ -704,6 +733,41 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     );
                 }
 
+                if (rollbackMode === ROLLBACK_MODE.DELETE) {
+                    if (!isDeleteRollbackEligibleMember(member)) {
+                        throw new RollbackBlockedError(
+                            ROLLBACK_CODE.SNAPSHOT_NOT_ELIGIBLE,
+                            `Delete rollback member ${memberKey(member)} is not eligible.`
+                        );
+                    }
+
+                    if (!retrieved?.artifactBytes || !retrieved.artifactBytes.length) {
+                        throw new RollbackBlockedError(
+                            ROLLBACK_CODE.DESTINATION_ALREADY_MISSING,
+                            `Delete rollback blocked because ${memberKey(member)} is already missing from destination.`
+                        );
+                    }
+
+                    const currentDestinationHash = hashBytes(
+                        retrieved.artifactBytes
+                    );
+                    const comparison = compareNewMemberForDeleteRollback({
+                        expectedAfterHash: member.expectedAfterHash,
+                        currentDestinationHash
+                    });
+
+                    drift.push({
+                        snapshotId: snapshot.snapshotId,
+                        metadataType: member.metadataType,
+                        metadataName: member.metadataName,
+                        classification: comparison.classification,
+                        expectedAfterHash: member.expectedAfterHash,
+                        currentHash: currentDestinationHash,
+                        rollbackMode
+                    });
+                    continue;
+                }
+
                 if (!retrieved?.artifactBytes || !retrieved.artifactBytes.length) {
                     throw new RollbackBlockedError(
                         ROLLBACK_CODE.DESTINATION_RETRIEVE_FAILED,
@@ -725,7 +789,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     classification: comparison.classification,
                     destinationBeforeHash: member.destinationBeforeHash,
                     expectedAfterHash: member.expectedAfterHash,
-                    currentHash: currentDestinationHash
+                    currentHash: currentDestinationHash,
+                    rollbackMode
                 });
             }
 
@@ -761,13 +826,20 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
 
             try {
-                generatedWorkspace = await buildWorkspace({
-                    snapshot,
-                    members,
-                    getArtifact: (id, artifactId) =>
-                        captureService.getArtifact(id, artifactId),
-                    apiVersion: args.deploymentApiVersion || null
-                });
+                if (rollbackMode === ROLLBACK_MODE.DELETE) {
+                    generatedWorkspace = await buildDeleteWorkspace({
+                        members,
+                        apiVersion: args.deploymentApiVersion || null
+                    });
+                } else {
+                    generatedWorkspace = await buildWorkspace({
+                        snapshot,
+                        members,
+                        getArtifact: (id, artifactId) =>
+                            captureService.getArtifact(id, artifactId),
+                        apiVersion: args.deploymentApiVersion || null
+                    });
+                }
             } catch (error) {
                 throw new RollbackBlockedError(
                     ROLLBACK_CODE.WORKSPACE_FAILED,
@@ -1026,6 +1098,97 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
 
             if (classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED) {
+                if (rollbackMode === ROLLBACK_MODE.DELETE) {
+                    let inventory;
+
+                    try {
+                        const inventoryResult = await inventoryBuilder({
+                            items: members.map((member) => ({
+                                metadataType: member.metadataType,
+                                metadataName: member.metadataName
+                            })),
+                            accessToken: args.accessToken || null,
+                            instanceUrl: args.instanceUrl,
+                            refreshToken: args.refreshToken
+                        });
+                        inventory = inventoryResult.inventory;
+                    } catch (error) {
+                        operation = await persistFailed(operation, {
+                            errorCode:
+                                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                            errorMessage:
+                                error.message ||
+                                'Delete rollback post-delete inventory verification failed.'
+                        });
+                        outcome = withOperation(
+                            block(
+                                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                                error.message ||
+                                    'Delete rollback post-delete inventory verification failed.',
+                                {
+                                    snapshotId,
+                                    drift,
+                                    checkOnlyDeployment,
+                                    deploymentExecution,
+                                    generatedWorkspace
+                                }
+                            ),
+                            operation
+                        );
+                        outcome.historyId = await recordHistory(
+                            args,
+                            snapshot,
+                            outcome,
+                            operation
+                        );
+                        return outcome;
+                    }
+
+                    const stillPresent = members.filter((member) => {
+                        const state = inventoryState(
+                            inventory,
+                            member.metadataType,
+                            member.metadataName
+                        );
+
+                        return state !== DESTINATION_STATE.MISSING;
+                    });
+
+                    if (stillPresent.length) {
+                        operation = await persistFailed(operation, {
+                            errorCode:
+                                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                            errorMessage:
+                                'Delete rollback completed deployment but destination member still exists.',
+                            driftSummary: `stillPresent=${stillPresent.length}`
+                        });
+                        outcome = withOperation(
+                            block(
+                                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                                'Delete rollback completed deployment but destination member still exists.',
+                                {
+                                    snapshotId,
+                                    drift,
+                                    checkOnlyDeployment,
+                                    deploymentExecution,
+                                    generatedWorkspace,
+                                    stillPresent: stillPresent.map((member) =>
+                                        memberKey(member)
+                                    )
+                                }
+                            ),
+                            operation
+                        );
+                        outcome.historyId = await recordHistory(
+                            args,
+                            snapshot,
+                            outcome,
+                            operation
+                        );
+                        return outcome;
+                    }
+                }
+
                 outcome = withOperation(
                     successResult({
                         snapshotId,

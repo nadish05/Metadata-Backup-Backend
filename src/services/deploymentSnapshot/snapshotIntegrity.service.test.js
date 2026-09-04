@@ -175,3 +175,32 @@ runTest('changing a member hash changes the aggregate', () => {
         computeSnapshotIntegrityHash(changed)
     );
 });
+
+runTest('schema v2 includes NEW expectedAfterHash in aggregate', () => {
+    const withHash = computeSnapshotIntegrityHash(
+        [
+            {
+                metadataType: 'ApexClass',
+                metadataName: 'DemoDeletedClass',
+                changeClass: CHANGE_CLASS.NEW,
+                destinationBeforeHash: null,
+                expectedAfterHash: 'after-hash'
+            }
+        ],
+        { schemaVersion: 2 }
+    );
+    const withoutHash = computeSnapshotIntegrityHash(
+        [
+            {
+                metadataType: 'ApexClass',
+                metadataName: 'DemoDeletedClass',
+                changeClass: CHANGE_CLASS.NEW,
+                destinationBeforeHash: null,
+                expectedAfterHash: null
+            }
+        ],
+        { schemaVersion: 2 }
+    );
+
+    assert.notStrictEqual(withHash, withoutHash);
+});

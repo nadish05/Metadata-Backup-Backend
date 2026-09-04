@@ -18,6 +18,10 @@ const {
     createMemorySnapshotBlobStore
 } = require('./stores/memorySnapshotBlobStore');
 const { assertSafeSnapshotArtifactId } = require('./snapshotArtifactId.service');
+const {
+    ROLLBACK_MODE,
+    isDeleteRollbackEligibleMember
+} = require('./snapshotRollbackEligibility.service');
 
 const SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE = Object.freeze({
     INVALID_REQUEST: 'ROLLBACK_SNAPSHOT_CONTEXT_INVALID_REQUEST',
@@ -149,15 +153,55 @@ function decodeArtifactBase64(contentBase64, { artifactId, expectedSize } = {}) 
     return bytes;
 }
 
-function assertModifiedOnlyMembers(members) {
-    for (const member of members) {
-        if (member.changeClass !== CHANGE_CLASS.MODIFIED) {
-            reject(
-                SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
-                `Stage 2A supports MODIFIED members only; found ${member.changeClass} for ${member.metadataType}:${member.metadataName}.`
-            );
-        }
+function classifyMemberRollbackIntent(member) {
+    if (member.changeClass === CHANGE_CLASS.MODIFIED) {
+        return ROLLBACK_MODE.RESTORE;
     }
+
+    if (member.changeClass === CHANGE_CLASS.NEW) {
+        return ROLLBACK_MODE.DELETE;
+    }
+
+    return 'UNSUPPORTED';
+}
+
+function assertRollbackSnapshotMembers(members) {
+    const normalizedMembers = members.map((member) => ({
+        ...member,
+        captureStatus: normalizeCaptureStatus(member.captureStatus)
+    }));
+    const intents = new Set(
+        normalizedMembers.map((member) => classifyMemberRollbackIntent(member))
+    );
+
+    if (intents.has('UNSUPPORTED')) {
+        reject(
+            SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
+            'Stage 2A supports MODIFIED restore or delete-eligible NEW members only.'
+        );
+    }
+
+    if (intents.has(ROLLBACK_MODE.RESTORE) && intents.has(ROLLBACK_MODE.DELETE)) {
+        reject(
+            SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
+            'Stage 2A v1 does not support mixed MODIFIED restore and NEW delete members.'
+        );
+    }
+
+    if (intents.has(ROLLBACK_MODE.DELETE)) {
+        for (const member of normalizedMembers) {
+            if (!isDeleteRollbackEligibleMember(member)) {
+                reject(
+                    SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
+                    `Delete rollback requires NEW member with ABSENT_PROVEN capture and expectedAfterHash; found unsupported NEW for ${member.metadataType}:${member.metadataName}.`
+                );
+            }
+        }
+
+        return ROLLBACK_MODE.DELETE;
+    }
+
+    return ROLLBACK_MODE.RESTORE;
 }
 
 async function createSalesforceRollbackSnapshotContext(
@@ -203,7 +247,7 @@ async function createSalesforceRollbackSnapshotContext(
         );
     }
 
-    assertModifiedOnlyMembers(members);
+    const rollbackMode = assertRollbackSnapshotMembers(members);
 
     const metadataStore = createMemorySnapshotMetadataStore();
     const blobStore = createMemorySnapshotBlobStore();
@@ -225,6 +269,29 @@ async function createSalesforceRollbackSnapshotContext(
                 SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.INVALID_REQUEST,
                 'Each snapshot member requires metadataType and metadataName.'
             );
+        }
+
+        if (rollbackMode === ROLLBACK_MODE.DELETE) {
+            if (storedMember.artifactId) {
+                reject(
+                    SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.ARTIFACT_INVALID,
+                    `Delete-eligible NEW member ${storedMember.metadataType}:${storedMember.metadataName} must not include artifactId.`
+                );
+            }
+
+            if (
+                storedMember.changeClass !== CHANGE_CLASS.NEW ||
+                storedMember.captureStatus !== MEMBER_CAPTURE_STATUS.ABSENT_PROVEN ||
+                !storedMember.expectedAfterHash
+            ) {
+                reject(
+                    SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
+                    `Delete-eligible NEW member ${storedMember.metadataType}:${storedMember.metadataName} is malformed.`
+                );
+            }
+
+            await metadataStore.addMember(storedMember);
+            continue;
         }
 
         if (!storedMember.artifactId) {

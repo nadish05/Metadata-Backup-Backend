@@ -295,7 +295,9 @@ async function runDeploymentExecution({
             deployCommand = buildProjectDeployCommand({
                 workspacePath,
                 alias,
-                deploymentApiVersion: resolvedDeploymentApiVersion
+                deploymentApiVersion: resolvedDeploymentApiVersion,
+                preDestructiveChangesPath:
+                    generatedWorkspace?.preDestructiveChangesPath || null
             });
 
             // TEMP (Phase 13.5) — adoption trace stage 8.

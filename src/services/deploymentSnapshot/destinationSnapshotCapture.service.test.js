@@ -258,7 +258,7 @@ const BASE_ARGS = {
         assert.ok(stored.includes(Buffer.from('\r\n', 'utf8')));
     });
 
-    await runTest('MISSING member is NEW with no artifact and no retrieve', async () => {
+    await runTest('MISSING member is NEW with expected-after hash and no retrieve', async () => {
         const harness = createHarness({
             buildDestinationInventory: async () =>
                 inventoryFor([
@@ -277,12 +277,13 @@ const BASE_ARGS = {
 
         assert.strictEqual(capture.ok, true);
         assert.strictEqual(harness.retrieveCalls.length, 0);
-        assert.strictEqual(harness.expectedAfterCalls.length, 0);
+        assert.strictEqual(harness.expectedAfterCalls.length, 1);
         assert.strictEqual(members[0].changeClass, CHANGE_CLASS.NEW);
         assert.strictEqual(members[0].existedBefore, false);
         assert.strictEqual(members[0].artifactId, null);
-        assert.strictEqual(members[0].expectedAfterHash, null);
-        assert.strictEqual(capture.snapshot.rollbackEligible, false);
+        assert.ok(members[0].expectedAfterHash);
+        assert.strictEqual(members[0].destinationBeforeHash, null);
+        assert.strictEqual(capture.snapshot.rollbackEligible, true);
     });
 
     await runTest('UNKNOWN destination state blocks deployment', async () => {

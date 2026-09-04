@@ -57,19 +57,24 @@ function buildProjectDeployCommand({
     workspacePath,
     alias,
     deploymentApiVersion,
-    deploymentValidationFlag = ''
-}) {
+    deploymentValidationFlag = '',
+    preDestructiveChangesPath = null
+} = {}) {
     const apiVersionFlag = deploymentApiVersion
         ? `--api-version ${shellQuote(deploymentApiVersion)} `
         : '';
     const validationFlag = deploymentValidationFlag
         ? `${deploymentValidationFlag} `
         : '';
+    const destructiveFlag = preDestructiveChangesPath
+        ? `--pre-destructive-changes ${shellQuote(preDestructiveChangesPath)} `
+        : '';
 
     return (
         `cd ${shellQuote(workspacePath)} && ` +
         `sf project deploy start ` +
         `--manifest package.xml ` +
+        destructiveFlag +
         apiVersionFlag +
         validationFlag +
         `--target-org ${shellQuote(alias)} ` +
@@ -982,7 +987,9 @@ async function runCheckOnlyDeployment({
             alias,
             deploymentApiVersion: resolvedDeploymentApiVersion,
             deploymentValidationFlag:
-                compatibility.deploymentValidationFlag
+                compatibility.deploymentValidationFlag,
+            preDestructiveChangesPath:
+                generatedWorkspace?.preDestructiveChangesPath || null
         });
 
         // TEMP (Phase 13.5) — adoption trace stage 8.

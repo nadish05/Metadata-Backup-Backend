@@ -201,11 +201,38 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
             }
 
             if (changeClass === CHANGE_CLASS.NEW) {
+                let expectedAfter;
+
+                try {
+                    expectedAfter = await collectExpectedAfter({
+                        workspacePath: generatedWorkspace?.workspacePath,
+                        member
+                    });
+                } catch (error) {
+                    return fail(
+                        error.message ||
+                            buildMissingExpectedAfterReason(
+                                member.metadataType,
+                                member.metadataName
+                            )
+                    );
+                }
+
+                if (!expectedAfter?.expectedAfterHash) {
+                    return fail(
+                        buildMissingExpectedAfterReason(
+                            member.metadataType,
+                            member.metadataName
+                        )
+                    );
+                }
+
                 captureMembers.push({
                     metadataType: member.metadataType,
                     metadataName: member.metadataName,
                     filePath: member.filePath,
-                    changeClass: CHANGE_CLASS.NEW
+                    changeClass: CHANGE_CLASS.NEW,
+                    expectedAfterHash: expectedAfter.expectedAfterHash
                 });
                 continue;
             }

@@ -28,6 +28,9 @@ const {
     computeSnapshotIntegrityHash,
     hashesMatch
 } = require('./snapshotIntegrity.service');
+const {
+    computeRollbackEligible
+} = require('./snapshotRollbackEligibility.service');
 
 function nowIso() {
     return new Date().toISOString();
@@ -228,13 +231,21 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             );
         }
 
-        if (
-            toBuffer(member.expectedAfterBytes) ||
-            member.expectedAfterHash
-        ) {
+        if (member.artifactId) {
             throw new SnapshotValidationError(
-                `NEW member ${member.metadataType}:${member.metadataName} must not include expected-after bytes.`
+                `NEW member ${member.metadataType}:${member.metadataName} must not include a destination-before artifact.`
             );
+        }
+
+        let expectedAfterHash = null;
+
+        if (toBuffer(member.expectedAfterBytes)) {
+            expectedAfterHash = hashBytes(toBuffer(member.expectedAfterBytes));
+        } else if (
+            typeof member.expectedAfterHash === 'string' &&
+            member.expectedAfterHash.length > 0
+        ) {
+            expectedAfterHash = member.expectedAfterHash;
         }
 
         return {
@@ -245,7 +256,7 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             changeClass: CHANGE_CLASS.NEW,
             existedBefore: false,
             destinationBeforeHash: null,
-            expectedAfterHash: null,
+            expectedAfterHash,
             artifactId: null,
             artifactSize: 0,
             captureStatus: MEMBER_CAPTURE_STATUS.ABSENT_PROVEN
@@ -284,6 +295,33 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             memberInput.metadataType,
             memberInput.metadataName
         );
+
+        if (existing && memberInput.changeClass === CHANGE_CLASS.NEW) {
+            let incomingAfter = null;
+
+            if (toBuffer(memberInput.expectedAfterBytes)) {
+                incomingAfter = hashBytes(toBuffer(memberInput.expectedAfterBytes));
+            } else if (
+                typeof memberInput.expectedAfterHash === 'string' &&
+                memberInput.expectedAfterHash.length > 0
+            ) {
+                incomingAfter = memberInput.expectedAfterHash;
+            }
+
+            if (
+                existing.changeClass === CHANGE_CLASS.NEW &&
+                (existing.expectedAfterHash || null) === incomingAfter
+            ) {
+                return existing;
+            }
+
+            throw new SnapshotMemberConflictError(
+                `Conflicting snapshot member already exists for ${memberIdentityKey(
+                    memberInput.metadataType,
+                    memberInput.metadataName
+                )}.`
+            );
+        }
 
         if (existing && memberInput.changeClass === CHANGE_CLASS.MODIFIED) {
             const incomingBytes = toBuffer(memberInput.destinationBeforeBytes);
@@ -353,21 +391,6 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
         });
 
         return stored;
-    }
-
-    function computeRollbackEligible(members) {
-        if (!members.length) {
-            return false;
-        }
-
-        return members.every(
-            (member) =>
-                member.changeClass === CHANGE_CLASS.MODIFIED &&
-                member.captureStatus === MEMBER_CAPTURE_STATUS.COMPLETE &&
-                member.destinationBeforeHash &&
-                member.expectedAfterHash &&
-                member.artifactId
-        );
     }
 
     async function finalizeCapture(snapshotId) {

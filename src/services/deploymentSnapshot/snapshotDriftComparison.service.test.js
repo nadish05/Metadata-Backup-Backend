@@ -133,3 +133,33 @@ runTest('C = A and C !== B → UNCHANGED_FROM_BEFORE', () => {
         DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
     );
 });
+
+const {
+    compareNewMemberForDeleteRollback,
+    DELETE_DRIFT_CLASSIFICATION
+} = require('./snapshotDriftComparison.service');
+
+runTest('delete rollback C === expectedAfterHash → MATCHES_EXPECTED_AFTER', () => {
+    const hash = 'expected-hash';
+    const result = compareNewMemberForDeleteRollback({
+        expectedAfterHash: hash,
+        currentDestinationHash: hash
+    });
+
+    assert.strictEqual(
+        result.classification,
+        DELETE_DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+    );
+});
+
+runTest('delete rollback C !== expectedAfterHash → DRIFTED', () => {
+    const result = compareNewMemberForDeleteRollback({
+        expectedAfterHash: 'expected',
+        currentDestinationHash: 'other'
+    });
+
+    assert.strictEqual(
+        result.classification,
+        DELETE_DRIFT_CLASSIFICATION.DRIFTED
+    );
+});

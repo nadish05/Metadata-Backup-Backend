@@ -13,6 +13,13 @@ const DRIFT_CLASSIFICATION = Object.freeze({
     UNKNOWN: 'UNKNOWN'
 });
 
+const DELETE_DRIFT_CLASSIFICATION = Object.freeze({
+    MATCHES_EXPECTED_AFTER: DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
+    DRIFTED: DRIFT_CLASSIFICATION.DRIFTED,
+    MISSING_EXPECTED_AFTER: 'MISSING_EXPECTED_AFTER',
+    UNKNOWN: DRIFT_CLASSIFICATION.UNKNOWN
+});
+
 function isUsableHash(value) {
     return typeof value === 'string' && value.length > 0;
 }
@@ -65,7 +72,43 @@ function compareDestinationToSnapshot({
     };
 }
 
+function compareNewMemberForDeleteRollback({
+    expectedAfterHash,
+    currentDestinationHash
+} = {}) {
+    const hasB = isUsableHash(expectedAfterHash);
+    const hasC = isUsableHash(currentDestinationHash);
+
+    if (!hasB) {
+        return {
+            classification: DELETE_DRIFT_CLASSIFICATION.MISSING_EXPECTED_AFTER,
+            expectedAfterAvailable: false
+        };
+    }
+
+    if (!hasC) {
+        return {
+            classification: DELETE_DRIFT_CLASSIFICATION.UNKNOWN,
+            expectedAfterAvailable: true
+        };
+    }
+
+    if (currentDestinationHash === expectedAfterHash) {
+        return {
+            classification: DELETE_DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
+            expectedAfterAvailable: true
+        };
+    }
+
+    return {
+        classification: DELETE_DRIFT_CLASSIFICATION.DRIFTED,
+        expectedAfterAvailable: true
+    };
+}
+
 module.exports = {
     DRIFT_CLASSIFICATION,
-    compareDestinationToSnapshot
+    DELETE_DRIFT_CLASSIFICATION,
+    compareDestinationToSnapshot,
+    compareNewMemberForDeleteRollback
 };

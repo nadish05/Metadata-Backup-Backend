@@ -77,7 +77,8 @@ function computeSnapshotIntegrityHash(members, options = {}) {
 
         if (schemaVersion >= 2) {
             const afterToken =
-                member.changeClass === CHANGE_CLASS.MODIFIED &&
+                (member.changeClass === CHANGE_CLASS.MODIFIED ||
+                    member.changeClass === CHANGE_CLASS.NEW) &&
                 member.expectedAfterHash
                     ? member.expectedAfterHash
                     : 'ABSENT';
