@@ -8,7 +8,8 @@ const util = require('util');
 
 const {
     generateEmptyPackageXml,
-    generateDestructiveChangesXml
+    generateDestructiveChangesXml,
+    generateManifest
 } = require('../packageXml.service');
 const { ROLLBACK_CODE, RollbackBlockedError } = require('./snapshotRestore.errors');
 
@@ -54,10 +55,15 @@ async function buildDeleteRollbackWorkspace({
             metadata: packageMetadata,
             dependencies: []
         };
-        const packageXml = generateEmptyPackageXml(apiVersion);
+        const manifestResult = generateManifest(
+            generatedDeploymentPackage,
+            apiVersion ? { deploymentApiVersion: apiVersion } : {}
+        );
+        const resolvedApiVersion = manifestResult.summary.apiVersion;
+        const packageXml = generateEmptyPackageXml(resolvedApiVersion);
         const destructiveChangesXml = generateDestructiveChangesXml(
             generatedDeploymentPackage,
-            apiVersion
+            resolvedApiVersion
         );
 
         await writeFile(path.join(workspacePath, 'package.xml'), packageXml, 'utf8');
@@ -81,12 +87,14 @@ async function buildDeleteRollbackWorkspace({
             generatedManifest: {
                 packageXml,
                 destructiveChangesXml,
+                deploymentApiVersionPolicy:
+                    manifestResult.deploymentApiVersionPolicy,
                 summary: {
                     metadataTypes: new Set(
                         packageMetadata.map((item) => item.metadataType)
                     ).size,
                     members: packageMetadata.length,
-                    apiVersion: apiVersion || null
+                    apiVersion: resolvedApiVersion
                 }
             },
             metadataCopied: 0,

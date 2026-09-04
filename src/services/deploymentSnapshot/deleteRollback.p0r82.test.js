@@ -32,6 +32,7 @@ const {
     generateDestructiveChangesXml,
     generateEmptyPackageXml
 } = require('../packageXml.service');
+const { DEFAULT_API_VERSION } = require('../../config/salesforce');
 const { buildProjectDeployCommand } = require('../checkOnlyDeployment.service');
 const {
     createDestinationSnapshotRestoreService
@@ -606,5 +607,43 @@ function createDeleteRestoreHarness({
             workspace.generatedManifest.packageXml,
             generateEmptyPackageXml('61.0')
         );
+        assert.strictEqual(workspace.generatedManifest.summary.apiVersion, '61.0');
     });
+
+    await runTest(
+        'delete rollback workspace resolves default API version when apiVersion is null',
+        async () => {
+            const members = [
+                {
+                    metadataType: 'ApexClass',
+                    metadataName: 'DemoDeletedClass'
+                }
+            ];
+            const workspace = await buildDeleteRollbackWorkspace({
+                members,
+                apiVersion: null
+            });
+
+            assert.strictEqual(
+                workspace.generatedManifest.summary.apiVersion,
+                DEFAULT_API_VERSION
+            );
+            assert.match(
+                workspace.generatedManifest.packageXml,
+                new RegExp(`<version>${DEFAULT_API_VERSION}</version>`)
+            );
+            assert.match(
+                workspace.generatedManifest.destructiveChangesXml,
+                new RegExp(`<version>${DEFAULT_API_VERSION}</version>`)
+            );
+            assert.doesNotMatch(
+                workspace.generatedManifest.packageXml,
+                /<version>null<\/version>/
+            );
+            assert.doesNotMatch(
+                workspace.generatedManifest.destructiveChangesXml,
+                /<version>null<\/version>/
+            );
+        }
+    );
 })();
