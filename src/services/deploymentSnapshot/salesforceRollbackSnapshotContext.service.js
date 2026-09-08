@@ -20,7 +20,8 @@ const {
 const { assertSafeSnapshotArtifactId } = require('./snapshotArtifactId.service');
 const {
     ROLLBACK_MODE,
-    isDeleteRollbackEligibleMember
+    isDeleteRollbackEligibleMember,
+    isModifiedRollbackEligibleMember
 } = require('./snapshotRollbackEligibility.service');
 const {
     NODE_CAPTURE_STATUS,
@@ -186,10 +187,22 @@ function assertRollbackSnapshotMembers(members) {
     }
 
     if (intents.has(ROLLBACK_MODE.RESTORE) && intents.has(ROLLBACK_MODE.DELETE)) {
-        reject(
-            SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
-            'Stage 2A v1 does not support mixed MODIFIED restore and NEW delete members.'
-        );
+        for (const member of normalizedMembers) {
+            if (isDeleteRollbackEligibleMember(member)) {
+                continue;
+            }
+
+            if (isModifiedRollbackEligibleMember(member)) {
+                continue;
+            }
+
+            reject(
+                SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
+                `Rollback member ${member.metadataType}:${member.metadataName} is not eligible for restore or delete rollback.`
+            );
+        }
+
+        return ROLLBACK_MODE.MIXED;
     }
 
     if (intents.has(ROLLBACK_MODE.DELETE)) {
@@ -275,7 +288,7 @@ async function createSalesforceRollbackSnapshotContext(
             );
         }
 
-        if (rollbackMode === ROLLBACK_MODE.DELETE) {
+        if (isDeleteRollbackEligibleMember(storedMember)) {
             if (storedMember.artifactId) {
                 reject(
                     SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.ARTIFACT_INVALID,
@@ -296,6 +309,13 @@ async function createSalesforceRollbackSnapshotContext(
 
             await metadataStore.addMember(storedMember);
             continue;
+        }
+
+        if (rollbackMode === ROLLBACK_MODE.DELETE) {
+            reject(
+                SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
+                `Delete rollback snapshot cannot include non-delete member ${storedMember.metadataType}:${storedMember.metadataName}.`
+            );
         }
 
         if (!storedMember.artifactId) {

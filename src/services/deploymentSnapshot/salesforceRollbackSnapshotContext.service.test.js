@@ -22,7 +22,10 @@ const {
     normalizeCaptureStatus
 } = require('./salesforceRollbackSnapshotContext.service');
 const {
-    isDeleteRollbackEligibleMember
+    isDeleteRollbackEligibleMember,
+    isModifiedRollbackEligibleMember,
+    ROLLBACK_MODE,
+    resolveRollbackMode
 } = require('./snapshotRollbackEligibility.service');
 
 function runTest(name, fn) {
@@ -453,6 +456,77 @@ function buildArtifactsMap(artifactBytes, artifactId = ARTIFACT_ID) {
         assert.ok(first.equals(firstBytes));
         assert.ok(second.equals(secondBytes));
         assert.notDeepStrictEqual(first, second);
+    });
+
+    await runTest('mixed MODIFIED + NEW context is accepted', async () => {
+        const { snapshotExport, artifactBytes } = buildSnapshotExport();
+        const expectedAfterHash = hashBytes(Buffer.from('deployed\n', 'utf8'));
+
+        snapshotExport.members.push({
+            memberKey: 'ApexClass:DemoDeletedClass',
+            metadataType: 'ApexClass',
+            metadataName: 'DemoDeletedClass',
+            filePath: 'force-app/main/default/classes/DemoDeletedClass.cls',
+            changeClass: CHANGE_CLASS.NEW,
+            existedBefore: false,
+            destinationBeforeHash: null,
+            expectedAfterHash,
+            artifactId: null,
+            artifactSize: 0,
+            contentDocumentId: null,
+            captureStatus: 'NOT_REQUIRED'
+        });
+        snapshotExport.memberCount = 2;
+
+        const { captureService } = await createSalesforceRollbackSnapshotContext(
+            snapshotExport,
+            buildArtifactsMap(artifactBytes)
+        );
+        const members = await captureService.getMembers(SNAPSHOT_ID);
+        const modified = members.find(
+            (member) => member.metadataName === 'DemoModifiedClass'
+        );
+        const deleted = members.find(
+            (member) => member.metadataName === 'DemoDeletedClass'
+        );
+
+        assert.strictEqual(
+            resolveRollbackMode(members),
+            ROLLBACK_MODE.MIXED
+        );
+        assert.strictEqual(isModifiedRollbackEligibleMember(modified), true);
+        assert.strictEqual(deleted.captureStatus, MEMBER_CAPTURE_STATUS.ABSENT_PROVEN);
+        assert.strictEqual(isDeleteRollbackEligibleMember(deleted), true);
+    });
+
+    await runTest('mixed context rejects unsupported member', async () => {
+        const { snapshotExport, artifactBytes } = buildSnapshotExport();
+
+        snapshotExport.members.push({
+            memberKey: 'ApexClass:UnsupportedClass',
+            metadataType: 'ApexClass',
+            metadataName: 'UnsupportedClass',
+            changeClass: CHANGE_CLASS.NEW,
+            existedBefore: false,
+            destinationBeforeHash: null,
+            expectedAfterHash: null,
+            artifactId: null,
+            artifactSize: 0,
+            contentDocumentId: null,
+            captureStatus: 'SKIPPED'
+        });
+        snapshotExport.memberCount = 2;
+
+        await assertRejects(
+            createSalesforceRollbackSnapshotContext(
+                snapshotExport,
+                buildArtifactsMap(artifactBytes)
+            ),
+            {
+                code: SALESFORCE_ROLLBACK_SNAPSHOT_CONTEXT_CODE.UNSUPPORTED_MEMBER,
+                messageIncludes: 'UnsupportedClass'
+            }
+        );
     });
 
     await runTest('no filesystem or durable storage is used', async () => {

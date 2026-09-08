@@ -76,7 +76,11 @@ function resolveRollbackMode(members) {
 function computeRollbackEligible(members) {
     const mode = resolveRollbackMode(members);
 
-    return mode === ROLLBACK_MODE.RESTORE || mode === ROLLBACK_MODE.DELETE;
+    return (
+        mode === ROLLBACK_MODE.RESTORE ||
+        mode === ROLLBACK_MODE.DELETE ||
+        mode === ROLLBACK_MODE.MIXED
+    );
 }
 
 module.exports = {

@@ -328,7 +328,7 @@ function createDeleteRestoreHarness({
         assert.strictEqual(computeRollbackEligible([member]), false);
     });
 
-    await runTest('C15. mixed MODIFIED + NEW is blocked', () => {
+    await runTest('C15. mixed MODIFIED + NEW is rollback eligible as MIXED', () => {
         const modified = {
             metadataType: 'ApexClass',
             metadataName: 'AccountService',
@@ -353,7 +353,7 @@ function createDeleteRestoreHarness({
             resolveRollbackMode([modified, deleted]),
             ROLLBACK_MODE.MIXED
         );
-        assert.strictEqual(computeRollbackEligible([modified, deleted]), false);
+        assert.strictEqual(computeRollbackEligible([modified, deleted]), true);
     });
 
     await runTest('C16. MODIFIED eligibility unchanged', () => {
@@ -563,7 +563,7 @@ function createDeleteRestoreHarness({
         );
     });
 
-    await runTest('G34. mixed snapshot blocked at rollback', async () => {
+    await runTest('G34. mixed snapshot is eligible but execution remains blocked', async () => {
         const capture = createSnapshotCaptureService({
             metadataStore: createMemorySnapshotMetadataStore(),
             blobStore: createMemorySnapshotBlobStore()
@@ -614,8 +614,8 @@ function createDeleteRestoreHarness({
             instanceUrl: 'https://dest.example.com'
         });
 
-        assert.strictEqual(sealed.rollbackEligible, false);
-        assert.strictEqual(result.code, ROLLBACK_CODE.SNAPSHOT_NOT_ELIGIBLE);
+        assert.strictEqual(sealed.rollbackEligible, true);
+        assert.strictEqual(result.code, ROLLBACK_CODE.MIXED_SNAPSHOT);
     });
 
     await runTest('F7. delete rollback workspace contains destructive manifest', async () => {
