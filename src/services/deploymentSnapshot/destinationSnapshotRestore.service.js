@@ -25,8 +25,13 @@ const {
     buildDeleteRollbackWorkspace
 } = require('./destructiveRollbackWorkspace.service');
 const {
+    buildMixedRollbackWorkspace,
+    partitionMixedRollbackMembers
+} = require('./mixedRollbackWorkspace.service');
+const {
     ROLLBACK_MODE,
     isDeleteRollbackEligibleMember,
+    isModifiedRollbackEligibleMember,
     resolveRollbackMode
 } = require('./snapshotRollbackEligibility.service');
 const {
@@ -165,10 +170,9 @@ function assertRollbackMembers(members) {
     const mode = resolveRollbackMode(members);
 
     if (mode === ROLLBACK_MODE.MIXED) {
-        throw new RollbackBlockedError(
-            ROLLBACK_CODE.MIXED_SNAPSHOT,
-            'Rollback v1 does not support mixed MODIFIED restore and NEW delete members.'
-        );
+        partitionMixedRollbackMembers(members);
+
+        return ROLLBACK_MODE.MIXED;
     }
 
     if (mode === ROLLBACK_MODE.INELIGIBLE) {
@@ -235,6 +239,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
         dependencies.buildRestoreWorkspace || buildRestoreWorkspace;
     const buildDeleteWorkspace =
         dependencies.buildDeleteRollbackWorkspace || buildDeleteRollbackWorkspace;
+    const buildMixedWorkspace =
+        dependencies.buildMixedRollbackWorkspace || buildMixedRollbackWorkspace;
     const inventoryBuilder =
         dependencies.buildDestinationInventory || buildDestinationInventory;
     const inventoryState = dependencies.getState || getState;
@@ -429,6 +435,101 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     : deploymentExecution?.message || null,
             checkOnlyStatus: CHECK_ONLY_STATUS.SUCCESS
         };
+    }
+
+    async function verifyMixedRollbackPostDeployment(args, members) {
+        const { restoreMembers, deleteMembers } =
+            partitionMixedRollbackMembers(members);
+
+        for (const member of restoreMembers) {
+            let retrieved;
+
+            try {
+                retrieved = await retrieveMember({
+                    refreshToken: args.refreshToken,
+                    instanceUrl: args.instanceUrl,
+                    metadataType: member.metadataType,
+                    metadataName: member.metadataName,
+                    sourceApiVersion: args.deploymentApiVersion || null
+                });
+            } catch (error) {
+                return {
+                    failed: true,
+                    code: ROLLBACK_CODE.DRIFT_DETECTED,
+                    message:
+                        `Mixed rollback post-restore verification failed for ${memberKey(member)}.`
+                };
+            }
+
+            if (!retrieved?.artifactBytes || !retrieved.artifactBytes.length) {
+                return {
+                    failed: true,
+                    code: ROLLBACK_CODE.DRIFT_DETECTED,
+                    message:
+                        `Mixed rollback post-restore verification found missing destination artifact for ${memberKey(member)}.`
+                };
+            }
+
+            const currentDestinationHash = hashBytes(retrieved.artifactBytes);
+
+            if (currentDestinationHash !== member.destinationBeforeHash) {
+                return {
+                    failed: true,
+                    code: ROLLBACK_CODE.DRIFT_DETECTED,
+                    message:
+                        `Mixed rollback post-restore verification failed because ${memberKey(member)} does not match destination-before hash.`
+                };
+            }
+        }
+
+        if (!deleteMembers.length) {
+            return { failed: false };
+        }
+
+        let inventory;
+
+        try {
+            const credentials = await resolvePostDeleteInventoryCredentials(args);
+            const inventoryResult = await inventoryBuilder({
+                items: deleteMembers.map((member) => ({
+                    metadataType: member.metadataType,
+                    metadataName: member.metadataName
+                })),
+                accessToken: credentials.accessToken,
+                instanceUrl: credentials.instanceUrl
+            });
+            inventory = inventoryResult.inventory;
+        } catch (error) {
+            return {
+                failed: true,
+                code: ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                message:
+                    error.message ||
+                    'Mixed rollback post-delete inventory verification failed.'
+            };
+        }
+
+        const stillPresent = deleteMembers.filter((member) => {
+            const state = inventoryState(
+                inventory,
+                member.metadataType,
+                member.metadataName
+            );
+
+            return state !== DESTINATION_STATE.MISSING;
+        });
+
+        if (stillPresent.length) {
+            return {
+                failed: true,
+                code: ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                message:
+                    'Mixed rollback completed deployment but destination delete member still exists.',
+                stillPresent: stillPresent.map((member) => memberKey(member))
+            };
+        }
+
+        return { failed: false };
     }
 
     async function runRollback(args = {}) {
@@ -788,7 +889,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     );
                 }
 
-                if (rollbackMode === ROLLBACK_MODE.DELETE) {
+                if (
+                    rollbackMode === ROLLBACK_MODE.DELETE ||
+                    (rollbackMode === ROLLBACK_MODE.MIXED &&
+                        isDeleteRollbackEligibleMember(member))
+                ) {
                     if (!isDeleteRollbackEligibleMember(member)) {
                         throw new RollbackBlockedError(
                             ROLLBACK_CODE.SNAPSHOT_NOT_ELIGIBLE,
@@ -821,6 +926,16 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         rollbackMode
                     });
                     continue;
+                }
+
+                if (
+                    rollbackMode === ROLLBACK_MODE.MIXED &&
+                    !isModifiedRollbackEligibleMember(member)
+                ) {
+                    throw new RollbackBlockedError(
+                        ROLLBACK_CODE.SNAPSHOT_NOT_ELIGIBLE,
+                        `Mixed rollback restore member ${memberKey(member)} is not eligible.`
+                    );
                 }
 
                 if (!retrieved?.artifactBytes || !retrieved.artifactBytes.length) {
@@ -884,6 +999,14 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 if (rollbackMode === ROLLBACK_MODE.DELETE) {
                     generatedWorkspace = await buildDeleteWorkspace({
                         members,
+                        apiVersion: args.deploymentApiVersion || null
+                    });
+                } else if (rollbackMode === ROLLBACK_MODE.MIXED) {
+                    generatedWorkspace = await buildMixedWorkspace({
+                        snapshot,
+                        members,
+                        getArtifact: (id, artifactId) =>
+                            captureService.getArtifact(id, artifactId),
                         apiVersion: args.deploymentApiVersion || null
                     });
                 } else {
@@ -1091,7 +1214,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             const salesforceDeploymentId =
                 extractSalesforceDeploymentId(deploymentExecution);
             const deferTerminalSuccess =
-                rollbackMode === ROLLBACK_MODE.DELETE &&
+                (rollbackMode === ROLLBACK_MODE.DELETE ||
+                    rollbackMode === ROLLBACK_MODE.MIXED) &&
                 classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED;
 
             if (!deferTerminalSuccess) {
@@ -1213,6 +1337,45 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                                     stillPresent: stillPresent.map((member) =>
                                         memberKey(member)
                                     )
+                                }
+                            ),
+                            operation
+                        );
+                        outcome.historyId = await recordHistory(
+                            args,
+                            snapshot,
+                            outcome,
+                            operation
+                        );
+                        return outcome;
+                    }
+                }
+
+                if (rollbackMode === ROLLBACK_MODE.MIXED) {
+                    const verification = await verifyMixedRollbackPostDeployment(
+                        args,
+                        members
+                    );
+
+                    if (verification.failed) {
+                        operation = await persistFailed(operation, {
+                            errorCode: verification.code,
+                            errorMessage: verification.message,
+                            driftSummary: verification.stillPresent
+                                ? `stillPresent=${verification.stillPresent.length}`
+                                : null
+                        });
+                        outcome = withOperation(
+                            block(
+                                verification.code,
+                                verification.message,
+                                {
+                                    snapshotId,
+                                    drift,
+                                    checkOnlyDeployment,
+                                    deploymentExecution,
+                                    generatedWorkspace,
+                                    stillPresent: verification.stillPresent || null
                                 }
                             ),
                             operation

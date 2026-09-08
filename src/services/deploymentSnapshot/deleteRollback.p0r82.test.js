@@ -563,7 +563,7 @@ function createDeleteRestoreHarness({
         );
     });
 
-    await runTest('G34. mixed snapshot is eligible but execution remains blocked', async () => {
+    await runTest('G34. mixed snapshot executes through mixed rollback path', async () => {
         const capture = createSnapshotCaptureService({
             metadataStore: createMemorySnapshotMetadataStore(),
             blobStore: createMemorySnapshotBlobStore()
@@ -574,6 +574,7 @@ function createDeleteRestoreHarness({
                 bytes: Buffer.from('before\n', 'utf8')
             }
         ]);
+        const deletedAfterBytes = deletedClassAfterBytes();
         const ready = await capture.captureSnapshot({
             deploymentContext: { destinationOrgId: '00D000000000001' },
             members: [
@@ -588,13 +589,15 @@ function createDeleteRestoreHarness({
                     metadataType: 'ApexClass',
                     metadataName: 'DemoDeletedClass',
                     changeClass: CHANGE_CLASS.NEW,
-                    expectedAfterHash: hashBytes(deletedClassAfterBytes())
+                    expectedAfterHash: hashBytes(deletedAfterBytes)
                 }
             ]
         });
         const sealed = await capture.sealSnapshot(ready.snapshotId);
+        let modifiedRetrieveCount = 0;
+        const operationStore = createMemoryRollbackOperationStore();
         const restore = createDestinationSnapshotRestoreService({
-            getRollbackOperationStore: () => createMemoryRollbackOperationStore(),
+            getRollbackOperationStore: () => operationStore,
             captureService: capture,
             isSnapshotRollbackEnabled: () => true,
             isDurableSnapshotStorageReady: () => true,
@@ -606,7 +609,46 @@ function createDeleteRestoreHarness({
                     })
                 }),
             resolveTrustedActor: () => createTestTrustedActor(),
-            resolveVerifiedDestinationOrgId: async () => '00D000000000001'
+            resolveVerifiedDestinationOrgId: async () => '00D000000000001',
+            retrieveDestinationMember: async ({ metadataName }) => {
+                if (metadataName === 'AccountService') {
+                    modifiedRetrieveCount += 1;
+                    return {
+                        artifactBytes:
+                            modifiedRetrieveCount > 1
+                                ? packed
+                                : Buffer.from('after\n', 'utf8'),
+                        files: []
+                    };
+                }
+
+                return {
+                    artifactBytes: deletedAfterBytes,
+                    files: []
+                };
+            },
+            runCheckOnlyDeployment: async () => ({
+                executed: true,
+                success: true,
+                status: 'Succeeded'
+            }),
+            runDeploymentExecution: async () => ({
+                success: true,
+                status: 'Succeeded',
+                deploymentId: '0AfMIXEDG34'
+            }),
+            refreshAccessToken: async () => ({
+                accessToken: 'token',
+                instanceUrl: 'https://dest.example.com'
+            }),
+            buildDestinationInventory: async ({ items }) => ({
+                inventory: new Map(
+                    items.map((item) => [
+                        `${item.metadataType}:${item.metadataName}`,
+                        { state: DESTINATION_STATE.MISSING }
+                    ])
+                )
+            })
         });
         const result = await restore.runRollback({
             snapshotId: sealed.snapshotId,
@@ -615,7 +657,8 @@ function createDeleteRestoreHarness({
         });
 
         assert.strictEqual(sealed.rollbackEligible, true);
-        assert.strictEqual(result.code, ROLLBACK_CODE.MIXED_SNAPSHOT);
+        assert.strictEqual(result.blocked, false);
+        assert.strictEqual(result.operationStatus, 'SUCCEEDED');
     });
 
     await runTest('F7. delete rollback workspace contains destructive manifest', async () => {
