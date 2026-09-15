@@ -49,10 +49,11 @@ runTest('collects members from generated package metadata only', () => {
     assert.strictEqual(members[0].metadataName, 'Weather_Config.Default');
 });
 
-runTest('V1 allowlist includes CustomMetadata and LWC only as listed types', () => {
+runTest('V1 allowlist includes CustomMetadata, LWC, and ListView only as listed types', () => {
     assert.strictEqual(isCaptureAllowlisted('ApexClass'), true);
     assert.strictEqual(isCaptureAllowlisted('CustomMetadata'), true);
     assert.strictEqual(isCaptureAllowlisted('LightningComponentBundle'), true);
+    assert.strictEqual(isCaptureAllowlisted('ListView'), true);
     assert.strictEqual(isCaptureAllowlisted('Flow'), false);
     assert.strictEqual(isCaptureAllowlisted('CustomMetadataType'), false);
 });

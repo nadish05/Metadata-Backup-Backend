@@ -11,7 +11,8 @@ const SNAPSHOT_CAPTURE_ALLOWLIST = Object.freeze([
     'CustomObject',
     'CustomField',
     'CustomMetadata',
-    'LightningComponentBundle'
+    'LightningComponentBundle',
+    'ListView'
 ]);
 
 const ALLOWLIST_SET = new Set(SNAPSHOT_CAPTURE_ALLOWLIST);
