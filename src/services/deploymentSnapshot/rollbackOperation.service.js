@@ -220,6 +220,30 @@ function createRollbackOperationService({ getStore } = {}) {
             );
             const decision = evaluateExistingOperations(records);
 
+            if (input.operationId) {
+                const requested = records.find(
+                    (record) => record.operationId === input.operationId
+                );
+
+                if (requested) {
+                    if (
+                        requested.status ===
+                            ROLLBACK_OPERATION_STATUS.IN_PROGRESS ||
+                        requested.status ===
+                            ROLLBACK_OPERATION_STATUS.NOT_STARTED
+                    ) {
+                        return {
+                            decision: {
+                                action: 'RESUME',
+                                existing: requested
+                            },
+                            operation: requested,
+                            scope: previousScope
+                        };
+                    }
+                }
+            }
+
             if (
                 decision.action === 'BLOCK_COMPLETED' ||
                 decision.action === 'BLOCK_UNKNOWN' ||

@@ -187,6 +187,12 @@ function createDeploymentRollbackService(dependencies = {}) {
 
         let activeRestoreService = restoreService;
 
+        if (request.rollbackOperationStore) {
+            activeRestoreService = createRestoreService({
+                getRollbackOperationStore: request.rollbackOperationStore
+            });
+        }
+
         if (hasSalesforceRollbackContext(request)) {
             const exportSnapshotId = text(request.snapshotExport.snapshotId);
 
@@ -214,6 +220,7 @@ function createDeploymentRollbackService(dependencies = {}) {
                     captureService: context.captureService,
                     isDurableSnapshotStorageReady: () => true,
                     getRollbackOperationStore:
+                        request.rollbackOperationStore ||
                         getSalesforceInlineRollbackOperationStore,
                     skipRollbackAuthorization: true
                 });
@@ -232,7 +239,10 @@ function createDeploymentRollbackService(dependencies = {}) {
             instanceUrl,
             destinationOrgId: orgId,
             historyId,
-            rollbackOfHistoryId: historyId
+            rollbackOfHistoryId: historyId,
+            ...(request.operationId
+                ? { operationId: request.operationId }
+                : {})
         });
 
         const classification = classifyRestoreResult(restoreResult);

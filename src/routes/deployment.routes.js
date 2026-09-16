@@ -43,6 +43,17 @@ router.post(
     deploymentRollbackController.rollbackDeployment
 );
 
+// Async rollback transport (start → background → poll).
+router.post(
+    '/rollback/start',
+    deploymentRollbackController.startRollback
+);
+
+router.get(
+    '/rollback/status/:operationId',
+    deploymentRollbackController.getRollbackStatus
+);
+
 router.get(
     '/snapshot-artifact',
     deploymentSnapshotArtifactController.getSnapshotArtifact

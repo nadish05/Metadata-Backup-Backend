@@ -730,6 +730,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
 
         try {
             claim = await operationService.claimOperation({
+                operationId: args.operationId || null,
                 snapshotId: snapshot.snapshotId,
                 destinationOrgId: snapshot.destinationOrgId,
                 sourceDeploymentId: args.sourceDeploymentId || null,
