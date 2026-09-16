@@ -17,6 +17,10 @@ const {
 const {
     createDeploymentRollbackService
 } = require('./deploymentRollback.service');
+const {
+    getSalesforceInlineRollbackOperationStore,
+    resetSalesforceInlineRollbackOperationStoreForTests
+} = require('./deploymentSnapshot/rollbackOperation.resolver');
 
 function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -47,6 +51,46 @@ async function waitForRelease() {
 let releaseExecution;
 
 async function main() {
+    resetSalesforceInlineRollbackOperationStoreForTests();
+    const productionStore = getSalesforceInlineRollbackOperationStore();
+    let productionStartStore = null;
+    const productionService = createDeploymentRollbackAsyncService({
+        executeRollback: async (args) => {
+            productionStartStore = args.rollbackOperationStore;
+            return {
+                success: true,
+                operationId: args.operationId,
+                operationStatus: ROLLBACK_OPERATION_STATUS.SUCCEEDED
+            };
+        }
+    });
+    const productionStart = await productionService.startRollback({
+        historyId: 'history_production_default',
+        refreshToken: 'token',
+        instanceUrl: 'https://example.my.salesforce.com',
+        snapshotId: 'snapshot_production_default',
+        orgId: '00DPRODUCTION'
+    });
+    assert.strictEqual(productionStart.success, true);
+    assert.strictEqual(
+        productionStartStore,
+        productionStore,
+        'production async transport must inject the inline singleton'
+    );
+    const productionStatus = await waitForStatus(
+        productionService,
+        productionStart.operationId,
+        ROLLBACK_OPERATION_STATUS.SUCCEEDED
+    );
+    assert.strictEqual(
+        productionStatus.operationId,
+        productionStart.operationId
+    );
+    const unknownStatus = await productionService.getRollbackStatus(
+        'rbo-does-not-exist'
+    );
+    assert.strictEqual(unknownStatus.found, false);
+
     const store = createMemoryRollbackOperationStore();
     const operationService = createRollbackOperationService({
         getStore: () => store

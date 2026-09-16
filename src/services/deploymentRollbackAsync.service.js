@@ -10,7 +10,7 @@
 const deploymentRollbackService = require('./deploymentRollback.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
 const {
-    getSharedRollbackOperationStore
+    getSalesforceInlineRollbackOperationStore
 } = require('./deploymentSnapshot/rollbackOperation.resolver');
 const {
     createRollbackOperationService,
@@ -53,7 +53,7 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
     const historyService =
         dependencies.historyService || deploymentHistoryService;
     const resolveStore =
-        dependencies.getStore || getSharedRollbackOperationStore;
+        dependencies.getStore || getSalesforceInlineRollbackOperationStore;
     const operationService =
         dependencies.rollbackOperationService ||
         createRollbackOperationService({ getStore: resolveStore });
