@@ -344,6 +344,78 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         assert.strictEqual(files.length, 1);
     });
 
+    await runTest('logs logical file selection for supported metadata types', async () => {
+        const { logs, error } = await captureConsoleLogs(() => {
+            selectLogicalMemberFiles(
+                [
+                    {
+                        relativePath:
+                            'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                        bytes: Buffer.from('object')
+                    }
+                ],
+                'CustomObject',
+                'Vehicle__c'
+            );
+            selectLogicalMemberFiles(
+                [
+                    {
+                        relativePath:
+                            'force-app/main/default/objects/Vehicle__c/fields/Model__c.field-meta.xml',
+                        bytes: Buffer.from('field')
+                    }
+                ],
+                'CustomField',
+                'Vehicle__c.Model__c'
+            );
+            selectLogicalMemberFiles(
+                [
+                    {
+                        relativePath:
+                            'force-app/main/default/objects/Vehicle__c/listViews/All.listView-meta.xml',
+                        bytes: Buffer.from('list')
+                    }
+                ],
+                'ListView',
+                'Vehicle__c.All'
+            );
+        });
+
+        assert.ifError(error);
+        const selectionLogs = logs.filter((line) =>
+            line.includes('ROLLBACK_LOGICAL_FILE_SELECTION')
+        );
+        assert.strictEqual(selectionLogs.length, 3);
+        assert.ok(
+            selectionLogs.some(
+                (line) =>
+                    line.includes('"metadataType":"CustomObject"') &&
+                    line.includes(
+                        'objects/Vehicle__c/Vehicle__c.object-meta.xml'
+                    ) &&
+                    line.includes('"selectedLogicalFileCount":1')
+            )
+        );
+        assert.ok(
+            selectionLogs.some(
+                (line) =>
+                    line.includes('"metadataType":"CustomField"') &&
+                    line.includes(
+                        'objects/Vehicle__c/fields/Model__c.field-meta.xml'
+                    )
+            )
+        );
+        assert.ok(
+            selectionLogs.some(
+                (line) =>
+                    line.includes('"metadataType":"ListView"') &&
+                    line.includes(
+                        'objects/Vehicle__c/listViews/All.listView-meta.xml'
+                    )
+            )
+        );
+    });
+
     await runTest('fails closed when the logical file is missing', () => {
         assert.throws(
             () =>

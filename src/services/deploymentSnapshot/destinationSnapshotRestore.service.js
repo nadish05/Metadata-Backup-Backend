@@ -63,7 +63,10 @@ const {
     OrgLockFenceError,
     OrgLockOwnershipError
 } = require('../deploymentOrgLock/deploymentOrgLock.errors');
-const { retrieveDestinationMember } = require('./destinationMetadataRetriever.service');
+const {
+    retrieveDestinationMember,
+    redactDiagnosticText
+} = require('./destinationMetadataRetriever.service');
 const { generateManifest } = require('../packageXml.service');
 const { runCheckOnlyDeployment, refreshAccessToken } = require('../checkOnlyDeployment.service');
 const { isCheckOnlySuccess } = require('../deploymentCheckOnlyGate.service');
@@ -148,6 +151,106 @@ function withOperation(result, operation) {
 
 function memberKey(member) {
     return `${member.metadataType}:${member.metadataName}`;
+}
+
+function logRollbackDriftCheck({
+    operationId,
+    snapshotId,
+    member,
+    comparison,
+    expectedAfterHash,
+    currentDestinationHash,
+    rollbackMode
+}) {
+    console.log(
+        'ROLLBACK_DRIFT_CHECK',
+        JSON.stringify({
+            operationId: operationId || null,
+            snapshotId,
+            metadataType: member.metadataType,
+            metadataName: member.metadataName,
+            filePath: member.filePath || null,
+            changeClass: member.changeClass || null,
+            captureStatus: member.captureStatus || null,
+            existedBefore:
+                typeof member.existedBefore === 'boolean'
+                    ? member.existedBefore
+                    : null,
+            expectedAfterHash: expectedAfterHash || null,
+            currentDestinationHash: currentDestinationHash || null,
+            classification: comparison.classification,
+            matchesExpectedAfter:
+                comparison.classification ===
+                DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
+            rollbackMode
+        })
+    );
+}
+
+function logRollbackRetrieveDiagnostic({
+    operationId,
+    snapshotId,
+    member,
+    success,
+    retrieved,
+    errorClassification = null,
+    errorMessage = null
+}) {
+    console.log(
+        'ROLLBACK_DESTINATION_RETRIEVE_DIAGNOSTIC',
+        JSON.stringify({
+            operationId: operationId || null,
+            snapshotId,
+            metadataType: member.metadataType,
+            metadataName: member.metadataName,
+            filePath: member.filePath || null,
+            success,
+            retrievedFileCount: Array.isArray(retrieved?.files)
+                ? retrieved.files.length
+                : 0,
+            retrievedFilePaths: Array.isArray(retrieved?.files)
+                ? retrieved.files.map((file) => file.relativePath)
+                : [],
+            errorClassification,
+            errorMessage: errorMessage
+                ? redactDiagnosticText(errorMessage)
+                : null
+        })
+    );
+}
+
+function logRollbackDriftSummary({
+    operationId,
+    snapshotId,
+    drift,
+    rollbackMode
+}) {
+    const count = (classification) =>
+        drift.filter((entry) => entry.classification === classification).length;
+    const drifted = drift.filter(
+        (entry) =>
+            entry.classification !== DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+    ).length;
+
+    console.log(
+        'ROLLBACK_DRIFT_SUMMARY',
+        JSON.stringify({
+            operationId: operationId || null,
+            snapshotId,
+            totalMembers: drift.length,
+            matchesExpectedAfter: count(
+                DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+            ),
+            drifted: count(DRIFT_CLASSIFICATION.DRIFTED),
+            unknown: count(DRIFT_CLASSIFICATION.UNKNOWN),
+            missingExpectedAfter: count('MISSING_EXPECTED_AFTER'),
+            destinationAlreadyMissing: count(
+                ROLLBACK_CODE.DESTINATION_ALREADY_MISSING
+            ),
+            rollbackMode,
+            overallGateResult: drifted ? 'BLOCKED' : 'ALLOWED'
+        })
+    );
 }
 
 function assertRollbackMembers(members) {
@@ -884,6 +987,16 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         sourceApiVersion: args.deploymentApiVersion || null
                     });
                 } catch (error) {
+                    logRollbackRetrieveDiagnostic({
+                        operationId: args.operationId || operation?.operationId,
+                        snapshotId,
+                        member,
+                        success: false,
+                        retrieved: null,
+                        errorClassification:
+                            ROLLBACK_CODE.DESTINATION_RETRIEVE_FAILED,
+                        errorMessage: error.message
+                    });
                     throw new RollbackBlockedError(
                         ROLLBACK_CODE.DESTINATION_RETRIEVE_FAILED,
                         `Destination retrieve failed for ${memberKey(member)}.`
@@ -903,6 +1016,18 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     }
 
                     if (!retrieved?.artifactBytes || !retrieved.artifactBytes.length) {
+                        logRollbackRetrieveDiagnostic({
+                            operationId:
+                                args.operationId || operation?.operationId,
+                            snapshotId,
+                            member,
+                            success: false,
+                            retrieved,
+                            errorClassification:
+                                ROLLBACK_CODE.DESTINATION_ALREADY_MISSING,
+                            errorMessage:
+                                `Delete rollback blocked because ${memberKey(member)} is already missing from destination.`
+                        });
                         throw new RollbackBlockedError(
                             ROLLBACK_CODE.DESTINATION_ALREADY_MISSING,
                             `Delete rollback blocked because ${memberKey(member)} is already missing from destination.`
@@ -915,6 +1040,16 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     const comparison = compareNewMemberForDeleteRollback({
                         expectedAfterHash: member.expectedAfterHash,
                         currentDestinationHash
+                    });
+
+                    logRollbackDriftCheck({
+                        operationId: args.operationId || operation?.operationId,
+                        snapshotId: snapshot.snapshotId,
+                        member,
+                        comparison,
+                        expectedAfterHash: member.expectedAfterHash,
+                        currentDestinationHash,
+                        rollbackMode
                     });
 
                     drift.push({
@@ -940,6 +1075,18 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 }
 
                 if (!retrieved?.artifactBytes || !retrieved.artifactBytes.length) {
+                    logRollbackRetrieveDiagnostic({
+                        operationId:
+                            args.operationId || operation?.operationId,
+                        snapshotId,
+                        member,
+                        success: false,
+                        retrieved,
+                        errorClassification:
+                            ROLLBACK_CODE.DESTINATION_RETRIEVE_FAILED,
+                        errorMessage:
+                            `Destination retrieve returned no artifact for ${memberKey(member)}.`
+                    });
                     throw new RollbackBlockedError(
                         ROLLBACK_CODE.DESTINATION_RETRIEVE_FAILED,
                         `Destination retrieve returned no artifact for ${memberKey(member)}.`
@@ -951,6 +1098,16 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     destinationBeforeHash: member.destinationBeforeHash,
                     expectedAfterHash: member.expectedAfterHash,
                     currentDestinationHash
+                });
+
+                logRollbackDriftCheck({
+                    operationId: args.operationId || operation?.operationId,
+                    snapshotId: snapshot.snapshotId,
+                    member,
+                    comparison,
+                    expectedAfterHash: member.expectedAfterHash,
+                    currentDestinationHash,
+                    rollbackMode
                 });
 
                 drift.push({
@@ -970,6 +1127,13 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     entry.classification !==
                     DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
             );
+
+            logRollbackDriftSummary({
+                operationId: args.operationId || operation?.operationId,
+                snapshotId: snapshot.snapshotId,
+                drift,
+                rollbackMode
+            });
 
             if (drifted.length) {
                 operation = await persistFailed(operation, {

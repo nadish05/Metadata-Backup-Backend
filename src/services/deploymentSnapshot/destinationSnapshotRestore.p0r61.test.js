@@ -64,6 +64,29 @@ function runTest(name, fn) {
         });
 }
 
+function captureConsoleLogs(fn) {
+    const logs = [];
+    const originalLog = console.log;
+
+    console.log = (...args) => {
+        logs.push(
+            args
+                .map((arg) =>
+                    typeof arg === 'string' ? arg : JSON.stringify(arg)
+                )
+                .join(' ')
+        );
+    };
+
+    return Promise.resolve()
+        .then(fn)
+        .then((result) => ({ logs, result, error: null }))
+        .catch((error) => ({ logs, result: null, error }))
+        .finally(() => {
+            console.log = originalLog;
+        });
+}
+
 function beforeBytes() {
     return packMemberFiles([
         {
@@ -659,6 +682,101 @@ function createRestore({
         assert.strictEqual(
             result.drift[0].classification,
             DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+        );
+    });
+
+    await runTest('drift diagnostics log compared members without changing result', async () => {
+        const { capture, sealed } = await sealEligible();
+        const restore = createRestore({
+            capture,
+            lockService: createOrgLockService({
+                store: createMemoryOrgLockStore()
+            })
+        });
+
+        const { logs, result, error } = await captureConsoleLogs(() =>
+            restore.service.runRollback({
+                snapshotId: sealed.snapshotId,
+                operationId: 'rbo-diagnostic-test',
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            })
+        );
+
+        assert.ifError(error);
+        assert.strictEqual(result.blocked, false);
+        assert.strictEqual(
+            result.drift[0].classification,
+            DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+        );
+
+        const driftLog = logs.find((line) =>
+            line.includes('ROLLBACK_DRIFT_CHECK')
+        );
+        assert.ok(driftLog);
+        assert.ok(driftLog.includes('"operationId":"rbo-diagnostic-test"'));
+        assert.ok(driftLog.includes('"metadataType":"ApexClass"'));
+        assert.ok(driftLog.includes('"metadataName":"AccountService"'));
+        assert.ok(
+            driftLog.includes(
+                '"filePath":"force-app/main/default/classes/AccountService.cls"'
+            )
+        );
+        assert.ok(driftLog.includes('"expectedAfterHash"'));
+        assert.ok(driftLog.includes('"currentDestinationHash"'));
+        assert.ok(
+            driftLog.includes(
+                '"classification":"MATCHES_EXPECTED_AFTER"'
+            )
+        );
+        assert.ok(driftLog.includes('"matchesExpectedAfter":true'));
+
+        const summaryLog = logs.find((line) =>
+            line.includes('ROLLBACK_DRIFT_SUMMARY')
+        );
+        assert.ok(summaryLog);
+        assert.ok(summaryLog.includes('"totalMembers":1'));
+        assert.ok(summaryLog.includes('"matchesExpectedAfter":1'));
+        assert.ok(summaryLog.includes('"drifted":0'));
+        assert.ok(summaryLog.includes('"overallGateResult":"ALLOWED"'));
+    });
+
+    await runTest('retrieve failure diagnostics preserve fail-closed behavior', async () => {
+        const { capture, sealed } = await sealEligible();
+        const restore = createRestore({
+            capture,
+            lockService: createOrgLockService({
+                store: createMemoryOrgLockStore()
+            }),
+            retrieveBytes: Buffer.alloc(0)
+        });
+
+        const { logs, result, error } = await captureConsoleLogs(() =>
+            restore.service.runRollback({
+                snapshotId: sealed.snapshotId,
+                operationId: 'rbo-retrieve-diagnostic-test',
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            })
+        );
+
+        assert.ifError(error);
+        assert.strictEqual(result.code, ROLLBACK_CODE.DESTINATION_RETRIEVE_FAILED);
+
+        const retrieveLog = logs.find((line) =>
+            line.includes('ROLLBACK_DESTINATION_RETRIEVE_DIAGNOSTIC')
+        );
+        assert.ok(retrieveLog);
+        assert.ok(
+            retrieveLog.includes(
+                '"operationId":"rbo-retrieve-diagnostic-test"'
+            )
+        );
+        assert.ok(retrieveLog.includes('"success":false'));
+        assert.ok(
+            retrieveLog.includes(
+                `"errorClassification":"${ROLLBACK_CODE.DESTINATION_RETRIEVE_FAILED}"`
+            )
         );
     });
 

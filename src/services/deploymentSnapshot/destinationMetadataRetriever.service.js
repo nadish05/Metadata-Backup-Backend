@@ -262,6 +262,26 @@ function selectLogicalMemberFiles(
         );
     }
 
+    console.log(
+        'ROLLBACK_LOGICAL_FILE_SELECTION',
+        JSON.stringify({
+            metadataType,
+            metadataName,
+            expectedLogicalPath:
+                Object.values(expectedPaths).length === 1
+                    ? Object.values(expectedPaths)[0]
+                    : Object.values(expectedPaths),
+            rawRetrievedFileCount: retrievedFiles.length,
+            rawRetrievedFilePaths: retrievedFiles.map(
+                (file) => file.relativePath
+            ),
+            selectedLogicalFilePaths: selected.map(
+                (file) => file.relativePath
+            ),
+            selectedLogicalFileCount: selected.length
+        })
+    );
+
     return selected;
 }
 
