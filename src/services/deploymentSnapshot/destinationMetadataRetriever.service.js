@@ -199,7 +199,70 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'CustomObject' && metadataName) {
+        return {
+            logical: `force-app/main/default/objects/${metadataName}/${metadataName}.object-meta.xml`
+        };
+    }
+
+    if (
+        (metadataType === 'CustomField' || metadataType === 'ListView') &&
+        metadataName
+    ) {
+        const separator = metadataName.indexOf('.');
+        const objectName =
+            separator > 0 ? metadataName.slice(0, separator) : null;
+        const memberName =
+            separator > 0 ? metadataName.slice(separator + 1) : null;
+
+        if (!objectName || !memberName) {
+            return null;
+        }
+
+        const folder = metadataType === 'CustomField' ? 'fields' : 'listViews';
+        const extension =
+            metadataType === 'CustomField'
+                ? '.field-meta.xml'
+                : '.listView-meta.xml';
+
+        return {
+            logical: `force-app/main/default/objects/${objectName}/${folder}/${memberName}${extension}`
+        };
+    }
+
     return null;
+}
+
+function selectLogicalMemberFiles(
+    retrievedFiles,
+    metadataType,
+    metadataName
+) {
+    const expectedPaths = buildExpectedMemberSourcePaths(
+        metadataType,
+        metadataName
+    );
+
+    if (
+        !expectedPaths ||
+        !['CustomObject', 'CustomField', 'ListView'].includes(metadataType)
+    ) {
+        return retrievedFiles;
+    }
+
+    const selected = retrievedFiles.filter((file) =>
+        Object.values(expectedPaths).includes(
+            String(file.relativePath || '').replace(/\\/g, '/')
+        )
+    );
+
+    if (selected.length === 0) {
+        throw new Error(
+            `Destination snapshot retrieve did not return the logical file for ${metadataType}:${metadataName}.`
+        );
+    }
+
+    return selected;
 }
 
 async function pathExists(targetPath) {
@@ -596,9 +659,15 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                 );
             }
 
+            const logicalMemberFiles = selectLogicalMemberFiles(
+                retrievedFiles,
+                metadataType,
+                metadataName
+            );
+
             return {
                 files: retrievedFiles,
-                artifactBytes: packMemberFiles(retrievedFiles)
+                artifactBytes: packMemberFiles(logicalMemberFiles)
             };
         } finally {
             await logoutAlias(alias, execAsync);
@@ -622,6 +691,7 @@ module.exports = {
     retrieveDestinationMember: defaultRetriever.retrieveDestinationMember,
     buildRetrieveCommand: defaultRetriever.buildRetrieveCommand,
     buildExpectedMemberSourcePaths,
+    selectLogicalMemberFiles,
     summarizeRetrieveCliOutput,
     redactDiagnosticText,
     buildRetrieveDiagnosticRecord,

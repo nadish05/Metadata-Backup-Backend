@@ -8,6 +8,7 @@ const path = require('path');
 const {
     createDestinationMetadataRetriever,
     buildExpectedMemberSourcePaths,
+    selectLogicalMemberFiles,
     buildRetrieveDiagnosticRecord,
     summarizeRetrieveCliOutput
 } = require('./destinationMetadataRetriever.service');
@@ -202,6 +203,220 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
             metaXml:
                 'force-app/main/default/classes/DemoModifiedClass.cls-meta.xml'
         });
+    });
+
+    await runTest('selects only the CustomObject logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                    bytes: Buffer.from('object')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/fields/Model__c.field-meta.xml',
+                    bytes: Buffer.from('field')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/listViews/All.listView-meta.xml',
+                    bytes: Buffer.from('list')
+                },
+                {
+                    relativePath: 'force-app/main/default/classes/Unrelated.cls',
+                    bytes: Buffer.from('unrelated')
+                }
+            ],
+            'CustomObject',
+            'Vehicle__c'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('selects only the CustomField logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                    bytes: Buffer.from('object')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/fields/Model__c.field-meta.xml',
+                    bytes: Buffer.from('model')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/fields/Air_Conditioner__c.field-meta.xml',
+                    bytes: Buffer.from('air')
+                }
+            ],
+            'CustomField',
+            'Vehicle__c.Model__c'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/objects/Vehicle__c/fields/Model__c.field-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('selects the correct Air_Conditioner__c field', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/fields/Air_Conditioner__c.field-meta.xml',
+                    bytes: Buffer.from('air')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/fields/Model__c.field-meta.xml',
+                    bytes: Buffer.from('model')
+                }
+            ],
+            'CustomField',
+            'Vehicle__c.Air_Conditioner__c'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/objects/Vehicle__c/fields/Air_Conditioner__c.field-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('selects only the ListView logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                    bytes: Buffer.from('object')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/listViews/All.listView-meta.xml',
+                    bytes: Buffer.from('list')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/listViews/Other.listView-meta.xml',
+                    bytes: Buffer.from('other')
+                }
+            ],
+            'ListView',
+            'Vehicle__c.All'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/objects/Vehicle__c/listViews/All.listView-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('normalizes Windows separators for logical selection', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app\\main\\default\\objects\\Vehicle__c\\fields\\Model__c.field-meta.xml',
+                    bytes: Buffer.from('model')
+                }
+            ],
+            'CustomField',
+            'Vehicle__c.Model__c'
+        );
+
+        assert.strictEqual(files.length, 1);
+    });
+
+    await runTest('fails closed when the logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                            bytes: Buffer.from('object')
+                        }
+                    ],
+                    'ListView',
+                    'Vehicle__c.All'
+                ),
+            /did not return the logical file/
+        );
+    });
+
+    await runTest('packs only the selected ListView while retaining raw diagnostics', async () => {
+        const workRoot = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'p0r4-retr-list-view-')
+        );
+        const rawPaths = [
+            'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+            'force-app/main/default/objects/Vehicle__c/listViews/All.listView-meta.xml',
+            'force-app/main/default/classes/Unrelated.cls'
+        ];
+        const retriever = buildRetrieverHarness(workRoot, async (command) => {
+            if (String(command).includes('logout')) {
+                return { stdout: '', stderr: '' };
+            }
+
+            for (const relativePath of rawPaths) {
+                await writeMemberFile(
+                    workRoot,
+                    relativePath,
+                    Buffer.from(relativePath)
+                );
+            }
+
+            return {
+                stdout: JSON.stringify({ status: 0, result: { files: [] } }),
+                stderr: ''
+            };
+        });
+
+        const { logs, result, error } = await captureConsoleLogs(() =>
+            retriever.retrieveDestinationMember({
+                refreshToken: 'refresh-secret',
+                instanceUrl: 'https://example.my.salesforce.com',
+                metadataType: 'ListView',
+                metadataName: 'Vehicle__c.All'
+            })
+        );
+
+        assert.ifError(error);
+        assert.deepStrictEqual(
+            result.files.map((file) => file.relativePath).sort(),
+            [...rawPaths].sort()
+        );
+        assert.deepStrictEqual(
+            unpackMemberFiles(result.artifactBytes).map(
+                (file) => file.relativePath
+            ),
+            [
+                'force-app/main/default/objects/Vehicle__c/listViews/All.listView-meta.xml'
+            ]
+        );
+        assert.ok(logs.join('\n').includes(rawPaths[0]));
+        assert.ok(logs.join('\n').includes(rawPaths[1]));
+        assert.ok(logs.join('\n').includes(rawPaths[2]));
+
+        await fs.promises.rm(workRoot, { recursive: true, force: true });
     });
 
     await runTest('retrieves member bytes then deletes the temp workspace', async () => {
