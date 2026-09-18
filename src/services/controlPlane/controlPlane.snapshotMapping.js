@@ -105,6 +105,22 @@ function fromSalesforceSnapshot(record) {
     };
 }
 
+function assertSalesforceCanonicalRepresentationSupported(member) {
+    const representation = member?.expectedAfterRepresentation;
+    const canonicalHash = member?.canonicalExpectedAfterHash;
+
+    if (
+        representation === 'CANONICAL_V1' ||
+        (typeof canonicalHash === 'string' && canonicalHash.length > 0)
+    ) {
+        throw new ControlPlaneError(
+            CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_SCHEMA_MISMATCH,
+            'CANONICAL_V1 snapshot members require Deployment_Snapshot_Member__c fields ' +
+                'Canonical_Expected_After_Hash__c and Expected_After_Representation__c.'
+        );
+    }
+}
+
 function toSalesforceMemberPayload(member) {
     if (Object.prototype.hasOwnProperty.call(member, 'captureFailureReason')) {
         throw new ControlPlaneError(
@@ -112,6 +128,8 @@ function toSalesforceMemberPayload(member) {
             'Capture_Failure_Reason__c belongs only to Deployment_Snapshot__c, not members.'
         );
     }
+
+    assertSalesforceCanonicalRepresentationSupported(member);
 
     return {
         metadataType: member.metadataType,
@@ -211,6 +229,7 @@ module.exports = {
     SEAL_ACKNOWLEDGED_FIELDS,
     SEAL_PATCH_FIELDS,
     assertSealFieldsCompatible,
+    assertSalesforceCanonicalRepresentationSupported,
     fromSalesforceMember,
     fromSalesforceSnapshot,
     toSalesforceMemberPayload,

@@ -10,6 +10,16 @@ const {
 } = require('../../config/metadataTypes');
 const { packMemberFiles } = require('./destinationMemberArtifact.service');
 const { hashBytes } = require('./snapshotIntegrity.service');
+const {
+    CANONICALIZATION_VERSION,
+    canonicalizeForRollback
+} = require('./rollbackMetadataCanonicalizer.service');
+const {
+    CANONICAL_EXPECTED_AFTER_TYPES,
+    EXPECTED_AFTER_REPRESENTATION
+} = require('./snapshot.types');
+
+const CANONICAL_ELIGIBLE_TYPES = new Set(CANONICAL_EXPECTED_AFTER_TYPES);
 
 const readdir = util.promisify(fs.readdir);
 const readFile = util.promisify(fs.readFile);
@@ -138,14 +148,40 @@ async function collectWorkspaceMemberFiles(workspacePath, member) {
     return files;
 }
 
+function buildCanonicalExpectedAfterMetadata(member, artifactBytes) {
+    if (!CANONICAL_ELIGIBLE_TYPES.has(member?.metadataType)) {
+        return {
+            expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
+        };
+    }
+
+    const canonical = canonicalizeForRollback({
+        metadataType: member.metadataType,
+        metadataName: member.metadataName,
+        filePath: member.filePath,
+        artifactBytes,
+        canonicalizationVersion: CANONICALIZATION_VERSION
+    });
+
+    return {
+        expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1,
+        canonicalExpectedAfterHash: canonical.canonicalHash
+    };
+}
+
 async function collectExpectedAfterArtifact({ workspacePath, member } = {}) {
     const files = await collectWorkspaceMemberFiles(workspacePath, member);
     const artifactBytes = packMemberFiles(files);
+    const canonicalMetadata = buildCanonicalExpectedAfterMetadata(
+        member,
+        artifactBytes
+    );
 
     return {
         files,
         artifactBytes,
-        expectedAfterHash: hashBytes(artifactBytes)
+        expectedAfterHash: hashBytes(artifactBytes),
+        ...canonicalMetadata
     };
 }
 

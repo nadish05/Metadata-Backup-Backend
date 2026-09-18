@@ -100,8 +100,26 @@ function membersAreIdentical(existing, incoming) {
         existing.existedBefore === incoming.existedBefore &&
         existing.destinationBeforeHash === incoming.destinationBeforeHash &&
         existing.expectedAfterHash === incoming.expectedAfterHash &&
+        (existing.expectedAfterRepresentation || null) ===
+            (incoming.expectedAfterRepresentation || null) &&
+        (existing.canonicalExpectedAfterHash || null) ===
+            (incoming.canonicalExpectedAfterHash || null) &&
         existing.artifactId === incoming.artifactId
     );
+}
+
+function pickExpectedAfterRepresentationFields(member) {
+    const fields = {};
+
+    if (member.expectedAfterRepresentation) {
+        fields.expectedAfterRepresentation = member.expectedAfterRepresentation;
+    }
+
+    if (member.canonicalExpectedAfterHash) {
+        fields.canonicalExpectedAfterHash = member.canonicalExpectedAfterHash;
+    }
+
+    return fields;
 }
 
 function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
@@ -218,6 +236,7 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             existedBefore: true,
             destinationBeforeHash,
             expectedAfterHash,
+            ...pickExpectedAfterRepresentationFields(member),
             artifactId,
             artifactSize: stored.size,
             captureStatus: MEMBER_CAPTURE_STATUS.COMPLETE
@@ -257,6 +276,7 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             existedBefore: false,
             destinationBeforeHash: null,
             expectedAfterHash,
+            ...pickExpectedAfterRepresentationFields(member),
             artifactId: null,
             artifactSize: 0,
             captureStatus: MEMBER_CAPTURE_STATUS.ABSENT_PROVEN

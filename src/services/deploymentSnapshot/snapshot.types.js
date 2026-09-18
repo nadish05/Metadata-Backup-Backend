@@ -30,6 +30,16 @@ const MEMBER_CAPTURE_STATUS = Object.freeze({
     FAILED: 'FAILED'
 });
 
+const EXPECTED_AFTER_REPRESENTATION = Object.freeze({
+    RAW: 'RAW',
+    CANONICAL_V1: 'CANONICAL_V1'
+});
+
+const CANONICAL_EXPECTED_AFTER_TYPES = Object.freeze([
+    'CustomField',
+    'CustomObject'
+]);
+
 const TERMINAL_SNAPSHOT_STATUSES = Object.freeze([
     SNAPSHOT_STATUS.SEALED,
     SNAPSHOT_STATUS.FAILED
@@ -46,6 +56,8 @@ module.exports = {
     SNAPSHOT_STATUS,
     CHANGE_CLASS,
     MEMBER_CAPTURE_STATUS,
+    EXPECTED_AFTER_REPRESENTATION,
+    CANONICAL_EXPECTED_AFTER_TYPES,
     TERMINAL_SNAPSHOT_STATUSES,
     memberIdentityKey
 };

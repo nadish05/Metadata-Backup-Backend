@@ -5,6 +5,14 @@
  * Does not retrieve, deploy, restore, or mutate snapshots.
  */
 
+const {
+    EXPECTED_AFTER_REPRESENTATION
+} = require('./snapshot.types');
+const {
+    CANONICALIZATION_VERSION,
+    canonicalizeForRollback
+} = require('./rollbackMetadataCanonicalizer.service');
+
 const DRIFT_CLASSIFICATION = Object.freeze({
     UNCHANGED_FROM_BEFORE: 'UNCHANGED_FROM_BEFORE',
     MATCHES_EXPECTED_AFTER: 'MATCHES_EXPECTED_AFTER',
@@ -22,6 +30,110 @@ const DELETE_DRIFT_CLASSIFICATION = Object.freeze({
 
 function isUsableHash(value) {
     return typeof value === 'string' && value.length > 0;
+}
+
+function resolveExpectedAfterRepresentation(expectedAfterRepresentation) {
+    if (
+        expectedAfterRepresentation === undefined ||
+        expectedAfterRepresentation === null ||
+        expectedAfterRepresentation === EXPECTED_AFTER_REPRESENTATION.RAW
+    ) {
+        return EXPECTED_AFTER_REPRESENTATION.RAW;
+    }
+
+    if (
+        expectedAfterRepresentation === EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1
+    ) {
+        return EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1;
+    }
+
+    return null;
+}
+
+function buildFailClosedResult(base = {}) {
+    return {
+        classification: DRIFT_CLASSIFICATION.UNKNOWN,
+        expectedAfterAvailable: base.expectedAfterAvailable === true,
+        postDeploymentDriftClaimed: false,
+        failClosed: true,
+        comparisonMode: base.comparisonMode || null,
+        failClosedReason: base.failClosedReason || 'UNKNOWN_REPRESENTATION'
+    };
+}
+
+function canonicalizeDestinationHash({
+    metadataType,
+    metadataName,
+    filePath,
+    currentDestinationArtifactBytes
+}) {
+    const canonical = canonicalizeForRollback({
+        metadataType,
+        metadataName,
+        filePath,
+        artifactBytes: currentDestinationArtifactBytes,
+        canonicalizationVersion: CANONICALIZATION_VERSION
+    });
+
+    return canonical.canonicalHash;
+}
+
+function compareCanonicalExpectedAfter({
+    metadataType,
+    metadataName,
+    filePath,
+    canonicalExpectedAfterHash,
+    currentDestinationArtifactBytes,
+    expectedAfterAvailable
+}) {
+    if (!isUsableHash(canonicalExpectedAfterHash)) {
+        return buildFailClosedResult({
+            expectedAfterAvailable,
+            comparisonMode: EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1,
+            failClosedReason: 'MISSING_CANONICAL_EXPECTED_AFTER_HASH'
+        });
+    }
+
+    if (!currentDestinationArtifactBytes || !currentDestinationArtifactBytes.length) {
+        return buildFailClosedResult({
+            expectedAfterAvailable,
+            comparisonMode: EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1,
+            failClosedReason: 'MISSING_DESTINATION_ARTIFACT_BYTES'
+        });
+    }
+
+    try {
+        const currentCanonicalHash = canonicalizeDestinationHash({
+            metadataType,
+            metadataName,
+            filePath,
+            currentDestinationArtifactBytes
+        });
+
+        if (currentCanonicalHash === canonicalExpectedAfterHash) {
+            return {
+                classification: DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
+                expectedAfterAvailable: true,
+                postDeploymentDriftClaimed: false,
+                comparisonMode: EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1,
+                failClosed: false
+            };
+        }
+
+        return {
+            classification: DRIFT_CLASSIFICATION.DRIFTED,
+            expectedAfterAvailable: true,
+            postDeploymentDriftClaimed: true,
+            comparisonMode: EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1,
+            failClosed: false
+        };
+    } catch (error) {
+        return buildFailClosedResult({
+            expectedAfterAvailable,
+            comparisonMode: EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1,
+            failClosedReason: 'CANONICALIZATION_FAILED'
+        });
+    }
 }
 
 function compareDestinationToSnapshot({
@@ -106,9 +218,149 @@ function compareNewMemberForDeleteRollback({
     };
 }
 
+function compareMemberExpectedAfterDrift({
+    metadataType,
+    metadataName,
+    filePath,
+    destinationBeforeHash,
+    expectedAfterHash,
+    canonicalExpectedAfterHash,
+    expectedAfterRepresentation,
+    currentDestinationHash,
+    currentDestinationArtifactBytes,
+    isDeleteRollback = false
+} = {}) {
+    const representation = resolveExpectedAfterRepresentation(
+        expectedAfterRepresentation
+    );
+
+    if (!representation) {
+        return buildFailClosedResult({
+            expectedAfterAvailable: isUsableHash(expectedAfterHash),
+            failClosedReason: 'UNKNOWN_REPRESENTATION'
+        });
+    }
+
+    if (isDeleteRollback) {
+        const rawResult = compareNewMemberForDeleteRollback({
+            expectedAfterHash,
+            currentDestinationHash
+        });
+
+        if (
+            rawResult.classification ===
+            DELETE_DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+        ) {
+            return {
+                ...rawResult,
+                comparisonMode: EXPECTED_AFTER_REPRESENTATION.RAW,
+                failClosed: false
+            };
+        }
+
+        if (representation === EXPECTED_AFTER_REPRESENTATION.RAW) {
+            return {
+                ...rawResult,
+                comparisonMode: EXPECTED_AFTER_REPRESENTATION.RAW,
+                failClosed: false
+            };
+        }
+
+        const canonicalResult = compareCanonicalExpectedAfter({
+            metadataType,
+            metadataName,
+            filePath,
+            canonicalExpectedAfterHash,
+            currentDestinationArtifactBytes,
+            expectedAfterAvailable: rawResult.expectedAfterAvailable
+        });
+
+        if (
+            canonicalResult.classification ===
+            DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+        ) {
+            return canonicalResult;
+        }
+
+        if (canonicalResult.failClosed) {
+            return canonicalResult;
+        }
+
+        return {
+            classification: DELETE_DRIFT_CLASSIFICATION.DRIFTED,
+            expectedAfterAvailable: true,
+            comparisonMode: EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1,
+            failClosed: false
+        };
+    }
+
+    const rawResult = compareDestinationToSnapshot({
+        destinationBeforeHash,
+        expectedAfterHash,
+        currentDestinationHash
+    });
+
+    if (
+        rawResult.classification === DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+    ) {
+        return {
+            ...rawResult,
+            comparisonMode: EXPECTED_AFTER_REPRESENTATION.RAW,
+            failClosed: false
+        };
+    }
+
+    if (
+        rawResult.classification === DRIFT_CLASSIFICATION.UNCHANGED_FROM_BEFORE
+    ) {
+        return {
+            ...rawResult,
+            comparisonMode: EXPECTED_AFTER_REPRESENTATION.RAW,
+            failClosed: false
+        };
+    }
+
+    if (representation === EXPECTED_AFTER_REPRESENTATION.RAW) {
+        return {
+            ...rawResult,
+            comparisonMode: EXPECTED_AFTER_REPRESENTATION.RAW,
+            failClosed: false
+        };
+    }
+
+    const canonicalResult = compareCanonicalExpectedAfter({
+        metadataType,
+        metadataName,
+        filePath,
+        canonicalExpectedAfterHash,
+        currentDestinationArtifactBytes,
+        expectedAfterAvailable: rawResult.expectedAfterAvailable
+    });
+
+    if (canonicalResult.failClosed) {
+        return canonicalResult;
+    }
+
+    if (
+        canonicalResult.classification ===
+        DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+    ) {
+        return canonicalResult;
+    }
+
+    return {
+        ...rawResult,
+        comparisonMode: EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1,
+        failClosed: false
+    };
+}
+
 module.exports = {
     DRIFT_CLASSIFICATION,
     DELETE_DRIFT_CLASSIFICATION,
+    EXPECTED_AFTER_REPRESENTATION,
     compareDestinationToSnapshot,
-    compareNewMemberForDeleteRollback
+    compareNewMemberForDeleteRollback,
+    compareMemberExpectedAfterDrift,
+    resolveExpectedAfterRepresentation
 };

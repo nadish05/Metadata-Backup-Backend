@@ -49,6 +49,8 @@ const MEMBER_FIELDS = Object.freeze([
     'existedBefore',
     'destinationBeforeHash',
     'expectedAfterHash',
+    'expectedAfterRepresentation',
+    'canonicalExpectedAfterHash',
     'artifactId',
     'artifactSize',
     'contentDocumentId',

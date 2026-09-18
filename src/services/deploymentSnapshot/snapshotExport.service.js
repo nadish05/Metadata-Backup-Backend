@@ -27,6 +27,8 @@ function sanitizeMemberForExport(member) {
         existedBefore: member.existedBefore ?? null,
         destinationBeforeHash: member.destinationBeforeHash ?? null,
         expectedAfterHash: member.expectedAfterHash ?? null,
+        expectedAfterRepresentation: member.expectedAfterRepresentation ?? null,
+        canonicalExpectedAfterHash: member.canonicalExpectedAfterHash ?? null,
         artifactId: member.artifactId ?? null,
         artifactSize: member.artifactSize ?? 0,
         captureStatus: member.captureStatus

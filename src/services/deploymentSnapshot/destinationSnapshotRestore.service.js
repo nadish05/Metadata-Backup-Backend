@@ -8,8 +8,7 @@ const {
 const { SnapshotNotFoundError, SnapshotIntegrityError, SnapshotValidationError } = require('./snapshot.errors');
 const { isCaptureAllowlisted } = require('./destinationSnapshotMapper.service');
 const {
-    compareDestinationToSnapshot,
-    compareNewMemberForDeleteRollback,
+    compareMemberExpectedAfterDrift,
     DRIFT_CLASSIFICATION
 } = require('./snapshotDriftComparison.service');
 const { hashBytes } = require('./snapshotIntegrity.service');
@@ -1037,9 +1036,19 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     const currentDestinationHash = hashBytes(
                         retrieved.artifactBytes
                     );
-                    const comparison = compareNewMemberForDeleteRollback({
+                    const comparison = compareMemberExpectedAfterDrift({
+                        metadataType: member.metadataType,
+                        metadataName: member.metadataName,
+                        filePath: member.filePath,
                         expectedAfterHash: member.expectedAfterHash,
-                        currentDestinationHash
+                        canonicalExpectedAfterHash:
+                            member.canonicalExpectedAfterHash,
+                        expectedAfterRepresentation:
+                            member.expectedAfterRepresentation,
+                        currentDestinationHash,
+                        currentDestinationArtifactBytes:
+                            retrieved.artifactBytes,
+                        isDeleteRollback: true
                     });
 
                     logRollbackDriftCheck({
@@ -1094,10 +1103,16 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 }
 
                 const currentDestinationHash = hashBytes(retrieved.artifactBytes);
-                const comparison = compareDestinationToSnapshot({
+                const comparison = compareMemberExpectedAfterDrift({
+                    metadataType: member.metadataType,
+                    metadataName: member.metadataName,
+                    filePath: member.filePath,
                     destinationBeforeHash: member.destinationBeforeHash,
                     expectedAfterHash: member.expectedAfterHash,
-                    currentDestinationHash
+                    canonicalExpectedAfterHash: member.canonicalExpectedAfterHash,
+                    expectedAfterRepresentation: member.expectedAfterRepresentation,
+                    currentDestinationHash,
+                    currentDestinationArtifactBytes: retrieved.artifactBytes
                 });
 
                 logRollbackDriftCheck({

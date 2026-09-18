@@ -232,7 +232,11 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                     metadataName: member.metadataName,
                     filePath: member.filePath,
                     changeClass: CHANGE_CLASS.NEW,
-                    expectedAfterHash: expectedAfter.expectedAfterHash
+                    expectedAfterHash: expectedAfter.expectedAfterHash,
+                    expectedAfterRepresentation:
+                        expectedAfter.expectedAfterRepresentation,
+                    canonicalExpectedAfterHash:
+                        expectedAfter.canonicalExpectedAfterHash
                 });
                 continue;
             }
@@ -298,7 +302,11 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 filePath: member.filePath,
                 changeClass: CHANGE_CLASS.MODIFIED,
                 destinationBeforeBytes: retrieved.artifactBytes,
-                expectedAfterHash: expectedAfter.expectedAfterHash
+                expectedAfterHash: expectedAfter.expectedAfterHash,
+                expectedAfterRepresentation:
+                    expectedAfter.expectedAfterRepresentation,
+                canonicalExpectedAfterHash:
+                    expectedAfter.canonicalExpectedAfterHash
             });
         }
 
