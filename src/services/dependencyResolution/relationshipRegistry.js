@@ -10,6 +10,7 @@ const permissionSetRelationshipDiscoverer = require('./discoverers/permissionSet
 const profileRelationshipDiscoverer = require('./discoverers/profileRelationship.discoverer');
 const recordTypeBusinessProcessDiscoverer = require('./discoverers/recordTypeBusinessProcess.discoverer');
 const recordTypeCompactLayoutDiscoverer = require('./discoverers/recordTypeCompactLayout.discoverer');
+const recordTypePicklistFieldDiscoverer = require('./discoverers/recordTypePicklistField.discoverer');
 const standardValueSetDiscoverer = require('./discoverers/standardValueSet.discoverer');
 
 function getRegisteredDiscoverers() {
@@ -21,6 +22,7 @@ function getRegisteredDiscoverers() {
         profileRelationshipDiscoverer,
         recordTypeBusinessProcessDiscoverer,
         recordTypeCompactLayoutDiscoverer,
+        recordTypePicklistFieldDiscoverer,
         standardValueSetDiscoverer
     ];
 }
