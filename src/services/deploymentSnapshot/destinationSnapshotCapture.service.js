@@ -15,7 +15,8 @@ const {
     mapExistenceToChangeClass,
     buildUnsupportedReason,
     buildUnknownReason,
-    buildMissingArtifactReason
+    buildMissingArtifactReason,
+    buildMissingSelectedMetadataReason
 } = require('./destinationSnapshotMapper.service');
 const {
     collectExpectedAfterArtifact,
@@ -114,6 +115,7 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
         sourceBranch = null,
         destinationBranch = null,
         generatedDeploymentPackage,
+        selectedMetadata,
         generatedWorkspace,
         refreshToken,
         instanceUrl,
@@ -129,8 +131,13 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
             return fail(DURABLE_STORAGE_UNAVAILABLE_MESSAGE);
         }
 
+        if (!Array.isArray(selectedMetadata) || selectedMetadata.length === 0) {
+            return fail(buildMissingSelectedMetadataReason());
+        }
+
         const finalMembers = collectFinalDeploymentMembers(
-            generatedDeploymentPackage
+            generatedDeploymentPackage,
+            selectedMetadata
         );
 
         if (!finalMembers.length) {

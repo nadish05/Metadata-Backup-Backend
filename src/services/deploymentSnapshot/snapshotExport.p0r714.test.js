@@ -466,6 +466,9 @@ function mockResponse() {
             captureArgs: {
                 destinationOrgId: '00D000000000001AA',
                 historyId: 'history_orchestrator',
+                selectedMetadata: [
+                    { metadataType: 'ApexClass', metadataName: 'AccountService' }
+                ],
                 generatedDeploymentPackage: {
                     metadata: [
                         {

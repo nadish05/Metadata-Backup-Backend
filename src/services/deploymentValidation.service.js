@@ -2067,6 +2067,8 @@ async function validateDeployment({
                             destinationBranch:
                                 deploymentPackage.destinationBranch || null,
                             generatedDeploymentPackage,
+                            selectedMetadata:
+                                artifactEnrichedSelectedMetadata,
                             generatedWorkspace,
                             refreshToken,
                             instanceUrl,

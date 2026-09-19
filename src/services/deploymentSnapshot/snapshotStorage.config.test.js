@@ -148,6 +148,12 @@ function restoreEnv(previousMode, previousRoot) {
                 shouldDeploy: true,
                 captureArgs: {
                     destinationOrgId: '00D1',
+                    selectedMetadata: [
+                        {
+                            metadataType: 'ApexClass',
+                            metadataName: 'AccountService'
+                        }
+                    ],
                     generatedDeploymentPackage: {
                         metadata: [
                             {
@@ -190,6 +196,12 @@ function restoreEnv(previousMode, previousRoot) {
                 shouldDeploy: true,
                 captureArgs: {
                     destinationOrgId: '00D1',
+                    selectedMetadata: [
+                        {
+                            metadataType: 'ApexClass',
+                            metadataName: 'AccountService'
+                        }
+                    ],
                     generatedDeploymentPackage: {
                         metadata: [
                             {

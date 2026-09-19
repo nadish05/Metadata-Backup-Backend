@@ -62,6 +62,9 @@ const BASE_ARGS = {
     historyId: 'hist-1',
     refreshToken: 'refresh-secret',
     instanceUrl: 'https://dest.example.com',
+    selectedMetadata: [
+        { metadataType: 'ApexClass', metadataName: 'AccountService' }
+    ],
     generatedDeploymentPackage: {
         metadata: [
             {

@@ -87,6 +87,12 @@ function restoreEnv(previous) {
                     captureArgs: {
                         destinationOrgId: '00D000000000001AA',
                         historyId: 'history_p0r1510',
+                        selectedMetadata: [
+                            {
+                                metadataType: 'ApexClass',
+                                metadataName: 'AccountService'
+                            }
+                        ],
                         generatedDeploymentPackage: {
                             metadata: [
                                 {

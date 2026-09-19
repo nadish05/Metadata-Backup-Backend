@@ -23,22 +23,57 @@ function isCaptureAllowlisted(metadataType) {
     return ALLOWLIST_SET.has(metadataType);
 }
 
-function collectFinalDeploymentMembers(generatedDeploymentPackage) {
+function buildMemberIdentityKey(item) {
+    const metadataType = item?.metadataType || item?.type || null;
+    const metadataName = item?.metadataName || item?.name || null;
+
+    if (!metadataType || !metadataName) {
+        return null;
+    }
+
+    return `${metadataType}:${metadataName}`;
+}
+
+function buildSelectedMemberKeySet(selectedMetadata) {
+    const keys = new Set();
+
+    if (!Array.isArray(selectedMetadata)) {
+        return keys;
+    }
+
+    for (const item of selectedMetadata) {
+        const key = buildMemberIdentityKey(item);
+
+        if (key) {
+            keys.add(key);
+        }
+    }
+
+    return keys;
+}
+
+/**
+ * Snapshot rollback candidates: selected primary metadata intersected with
+ * final package metadata (for filePath). Dependencies in metadata[] alone
+ * are not captured unless also present in selectedMetadata.
+ */
+function collectFinalDeploymentMembers(
+    generatedDeploymentPackage,
+    selectedMetadata
+) {
     const metadata = Array.isArray(generatedDeploymentPackage?.metadata)
         ? generatedDeploymentPackage.metadata
         : [];
+    const selectedKeys = buildSelectedMemberKeySet(selectedMetadata);
     const seen = new Set();
     const members = [];
 
     for (const item of metadata) {
-        const metadataType = item?.metadataType || item?.type || null;
-        const metadataName = item?.metadataName || item?.name || null;
+        const key = buildMemberIdentityKey(item);
 
-        if (!metadataType || !metadataName) {
+        if (!key || !selectedKeys.has(key)) {
             continue;
         }
-
-        const key = `${metadataType}:${metadataName}`;
 
         if (seen.has(key)) {
             continue;
@@ -46,13 +81,20 @@ function collectFinalDeploymentMembers(generatedDeploymentPackage) {
 
         seen.add(key);
         members.push({
-            metadataType,
-            metadataName,
+            metadataType: item.metadataType || item.type,
+            metadataName: item.metadataName || item.name,
             filePath: item.filePath || null
         });
     }
 
     return members;
+}
+
+function buildMissingSelectedMetadataReason() {
+    return (
+        'Destination snapshot capture failed: selected metadata is required ' +
+        'for snapshot capture.'
+    );
 }
 
 function mapExistenceToChangeClass(existenceState) {
@@ -91,9 +133,12 @@ function buildMissingArtifactReason(metadataType, metadataName) {
 module.exports = {
     SNAPSHOT_CAPTURE_ALLOWLIST,
     isCaptureAllowlisted,
+    buildMemberIdentityKey,
+    buildSelectedMemberKeySet,
     collectFinalDeploymentMembers,
     mapExistenceToChangeClass,
     buildUnsupportedReason,
     buildUnknownReason,
-    buildMissingArtifactReason
+    buildMissingArtifactReason,
+    buildMissingSelectedMetadataReason
 };

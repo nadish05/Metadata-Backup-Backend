@@ -69,6 +69,9 @@ function captureArgsFor(destinationOrgId, sourceOrgId) {
         historyId: `hist-${sourceOrgId}`,
         refreshToken: 'refresh-secret',
         instanceUrl: 'https://dest.example.com',
+        selectedMetadata: [
+            { metadataType: 'ApexClass', metadataName: 'AccountService' }
+        ],
         generatedDeploymentPackage: {
             metadata: [
                 {

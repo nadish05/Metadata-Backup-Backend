@@ -146,6 +146,12 @@ const RECORD_TYPE_CAPTURE_ARGS = {
     destinationBranch: 'main',
     refreshToken: 'refresh-secret',
     instanceUrl: 'https://dest.example.com',
+    selectedMetadata: [
+        {
+            metadataType: 'RecordType',
+            metadataName: 'Vehicle__c.Some_Record_Type'
+        }
+    ],
     generatedDeploymentPackage: {
         metadata: [
             {
@@ -165,6 +171,12 @@ const VALIDATION_RULE_CAPTURE_ARGS = {
     destinationBranch: 'main',
     refreshToken: 'refresh-secret',
     instanceUrl: 'https://dest.example.com',
+    selectedMetadata: [
+        {
+            metadataType: 'ValidationRule',
+            metadataName: 'Vehicle__c.Require_Model'
+        }
+    ],
     generatedDeploymentPackage: {
         metadata: [
             {
@@ -184,10 +196,10 @@ const BASE_ARGS = {
     destinationBranch: 'main',
     refreshToken: 'refresh-secret',
     instanceUrl: 'https://dest.example.com',
+    selectedMetadata: [
+        { metadataType: 'ApexClass', metadataName: 'AccountService' }
+    ],
     generatedDeploymentPackage: {
-        selectedMetadata: [
-            { metadataType: 'ApexClass', metadataName: 'ShouldIgnore' }
-        ],
         metadata: [
             {
                 metadataType: 'ApexClass',
@@ -197,6 +209,9 @@ const BASE_ARGS = {
         ]
     }
 };
+
+const OPPORTUNITY_RECORD_TYPE_PATH =
+    'force-app/main/default/objects/Opportunity/recordTypes/Enterprise_Deal.recordType-meta.xml';
 
 (async () => {
     await runTest('flag OFF skips snapshot and deploys unchanged', async () => {
@@ -372,6 +387,9 @@ const BASE_ARGS = {
             shouldDeploy: true,
             captureArgs: {
                 ...BASE_ARGS,
+                selectedMetadata: [
+                    { metadataType: 'Flow', metadataName: 'Onboarding' }
+                ],
                 generatedDeploymentPackage: {
                     metadata: [
                         { metadataType: 'Flow', metadataName: 'Onboarding' }
@@ -412,6 +430,12 @@ const BASE_ARGS = {
 
         const capture = await harness.service.captureAndSealForDeploy({
             ...BASE_ARGS,
+            selectedMetadata: [
+                {
+                    metadataType: 'CustomMetadata',
+                    metadataName: 'Weather_Config.Default'
+                }
+            ],
             generatedDeploymentPackage: {
                 metadata: [
                     {
@@ -719,4 +743,102 @@ const BASE_ARGS = {
             /expected-after workspace artifact is missing/
         );
     });
+
+    await runTest(
+        'missing selectedMetadata fails closed without capturing package dependencies',
+        async () => {
+            const harness = createHarness();
+            const capture = await harness.service.captureAndSealForDeploy({
+                ...BASE_ARGS,
+                selectedMetadata: undefined
+            });
+
+            assert.strictEqual(capture.ok, false);
+            assert.match(capture.message, /selected metadata is required/);
+            assert.strictEqual(harness.events.length, 0);
+        }
+    );
+
+    await runTest(
+        'TEST 11: RecordType selected with dependency-only package members succeeds',
+        async () => {
+            const afterPacked = packMemberFiles([
+                {
+                    relativePath: OPPORTUNITY_RECORD_TYPE_PATH,
+                    bytes: Buffer.from('<RecordType/>', 'utf8')
+                }
+            ]);
+            const harness = createHarness({
+                buildDestinationInventory: async () =>
+                    inventoryFor([
+                        {
+                            metadataType: 'RecordType',
+                            metadataName: 'Opportunity.Enterprise_Deal',
+                            state: DESTINATION_STATE.MISSING
+                        }
+                    ]),
+                collectExpectedAfterArtifact: async () => ({
+                    artifactBytes: afterPacked,
+                    expectedAfterHash: hashBytes(afterPacked),
+                    expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
+                })
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                destinationOrgId: BASE_ARGS.destinationOrgId,
+                sourceOrgId: BASE_ARGS.sourceOrgId,
+                historyId: 'hist-enterprise-deal',
+                refreshToken: BASE_ARGS.refreshToken,
+                instanceUrl: BASE_ARGS.instanceUrl,
+                selectedMetadata: [
+                    {
+                        metadataType: 'RecordType',
+                        metadataName: 'Opportunity.Enterprise_Deal'
+                    }
+                ],
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'RecordType',
+                            metadataName: 'Opportunity.Enterprise_Deal',
+                            filePath: OPPORTUNITY_RECORD_TYPE_PATH
+                        },
+                        {
+                            metadataType: 'CustomField',
+                            metadataName: 'Opportunity.Approval_Status__c',
+                            filePath:
+                                'force-app/main/default/objects/Opportunity/fields/Approval_Status__c.field-meta.xml'
+                        },
+                        {
+                            metadataType: 'BusinessProcess',
+                            metadataName: 'Opportunity.New Sales Process',
+                            filePath:
+                                'force-app/main/default/objects/Opportunity/businessProcesses/New Sales Process.businessProcess-meta.xml'
+                        }
+                    ]
+                }
+            });
+
+            assert.strictEqual(capture.ok, true);
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+            assert.strictEqual(members.length, 1);
+            assert.strictEqual(members[0].metadataType, 'RecordType');
+            assert.strictEqual(
+                members[0].metadataName,
+                'Opportunity.Enterprise_Deal'
+            );
+            assert.strictEqual(
+                members[0].captureStatus,
+                MEMBER_CAPTURE_STATUS.ABSENT_PROVEN
+            );
+            assert.ok(
+                !members.some((m) => m.metadataType === 'BusinessProcess')
+            );
+            assert.ok(
+                !members.some((m) => m.metadataType === 'CustomField')
+            );
+        }
+    );
 })();
