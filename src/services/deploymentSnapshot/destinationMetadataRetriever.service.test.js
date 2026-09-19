@@ -297,6 +297,97 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves RecordType logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'RecordType',
+            'Vehicle__c.Some_Record_Type'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/objects/Vehicle__c/recordTypes/Some_Record_Type.recordType-meta.xml'
+        });
+    });
+
+    await runTest('RecordType logical path distinguishes object names', () => {
+        const vehicle = buildExpectedMemberSourcePaths(
+            'RecordType',
+            'Vehicle__c.Some_Record_Type'
+        );
+        const account = buildExpectedMemberSourcePaths(
+            'RecordType',
+            'Account.Some_Record_Type'
+        );
+
+        assert.notStrictEqual(vehicle.logical, account.logical);
+        assert.ok(vehicle.logical.includes('/objects/Vehicle__c/'));
+        assert.ok(account.logical.includes('/objects/Account/'));
+    });
+
+    await runTest('selects only the RecordType logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                    bytes: Buffer.from('object')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/recordTypes/Some_Record_Type.recordType-meta.xml',
+                    bytes: Buffer.from('record-type')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/recordTypes/Another_Record_Type.recordType-meta.xml',
+                    bytes: Buffer.from('other-record-type')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/fields/Model__c.field-meta.xml',
+                    bytes: Buffer.from('field')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/validationRules/Require_Model.validationRule-meta.xml',
+                    bytes: Buffer.from('rule')
+                }
+            ],
+            'RecordType',
+            'Vehicle__c.Some_Record_Type'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/objects/Vehicle__c/recordTypes/Some_Record_Type.recordType-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when RecordType logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                            bytes: Buffer.from('object')
+                        },
+                        {
+                            relativePath:
+                                'force-app/main/default/objects/Vehicle__c/recordTypes/Another_Record_Type.recordType-meta.xml',
+                            bytes: Buffer.from('other')
+                        }
+                    ],
+                    'RecordType',
+                    'Vehicle__c.Some_Record_Type'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('buildExpectedMemberSourcePaths resolves ValidationRule logical path', () => {
         const paths = buildExpectedMemberSourcePaths(
             'ValidationRule',

@@ -13,7 +13,8 @@ const SNAPSHOT_CAPTURE_ALLOWLIST = Object.freeze([
     'CustomMetadata',
     'LightningComponentBundle',
     'ListView',
-    'ValidationRule'
+    'ValidationRule',
+    'RecordType'
 ]);
 
 const ALLOWLIST_SET = new Set(SNAPSHOT_CAPTURE_ALLOWLIST);

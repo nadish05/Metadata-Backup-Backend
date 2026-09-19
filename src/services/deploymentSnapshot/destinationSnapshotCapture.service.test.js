@@ -135,6 +135,28 @@ function createHarness(overrides = {}) {
 const VALIDATION_RULE_PATH =
     'force-app/main/default/objects/Vehicle__c/validationRules/Require_Model.validationRule-meta.xml';
 
+const RECORD_TYPE_PATH =
+    'force-app/main/default/objects/Vehicle__c/recordTypes/Some_Record_Type.recordType-meta.xml';
+
+const RECORD_TYPE_CAPTURE_ARGS = {
+    destinationOrgId: '00D000000000001',
+    sourceOrgId: '00D000000000002',
+    historyId: 'hist-record-type',
+    sourceBranch: 'feature',
+    destinationBranch: 'main',
+    refreshToken: 'refresh-secret',
+    instanceUrl: 'https://dest.example.com',
+    generatedDeploymentPackage: {
+        metadata: [
+            {
+                metadataType: 'RecordType',
+                metadataName: 'Vehicle__c.Some_Record_Type',
+                filePath: RECORD_TYPE_PATH
+            }
+        ]
+    }
+};
+
 const VALIDATION_RULE_CAPTURE_ARGS = {
     destinationOrgId: '00D000000000001',
     sourceOrgId: '00D000000000002',
@@ -534,6 +556,121 @@ const BASE_ARGS = {
             EXPECTED_AFTER_REPRESENTATION.RAW
         );
         assert.strictEqual(member.artifactId, null);
+    });
+
+    await runTest('RecordType EXISTS capture is MODIFIED with RAW representation', async () => {
+        const destRecordTypeXml = Buffer.from(
+            '<?xml version="1.0" encoding="UTF-8"?><RecordType xmlns="http://soap.sforce.com/2006/04/metadata"><active>true</active></RecordType>',
+            'utf8'
+        );
+        const destPacked = packMemberFiles([
+            { relativePath: RECORD_TYPE_PATH, bytes: destRecordTypeXml }
+        ]);
+        const afterRecordTypeXml = Buffer.from(
+            '<?xml version="1.0" encoding="UTF-8"?><RecordType xmlns="http://soap.sforce.com/2006/04/metadata"><active>true</active><label>Some Record Type</label></RecordType>',
+            'utf8'
+        );
+        const afterPacked = packMemberFiles([
+            { relativePath: RECORD_TYPE_PATH, bytes: afterRecordTypeXml }
+        ]);
+        const harness = createHarness({
+            retrieveDestinationMember: async () => ({
+                artifactBytes: destPacked
+            }),
+            collectExpectedAfterArtifact: async () => ({
+                artifactBytes: afterPacked,
+                expectedAfterHash: hashBytes(afterPacked),
+                expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
+            })
+        });
+
+        const capture = await harness.service.captureAndSealForDeploy(
+            RECORD_TYPE_CAPTURE_ARGS
+        );
+        const members = await harness.captureService.getMembers(
+            capture.snapshot.snapshotId
+        );
+        const [member] = members;
+
+        assert.strictEqual(capture.ok, true);
+        assert.strictEqual(member.metadataType, 'RecordType');
+        assert.strictEqual(member.metadataName, 'Vehicle__c.Some_Record_Type');
+        assert.strictEqual(member.changeClass, CHANGE_CLASS.MODIFIED);
+        assert.strictEqual(member.existedBefore, true);
+        assert.strictEqual(member.captureStatus, MEMBER_CAPTURE_STATUS.COMPLETE);
+        assert.strictEqual(member.destinationBeforeHash, hashBytes(destPacked));
+        assert.ok(member.expectedAfterHash);
+        assert.strictEqual(
+            member.expectedAfterRepresentation,
+            EXPECTED_AFTER_REPRESENTATION.RAW
+        );
+        assert.ok(member.artifactId);
+    });
+
+    await runTest('RecordType MISSING capture is NEW with ABSENT_PROVEN', async () => {
+        const afterPacked = packMemberFiles([
+            {
+                relativePath: RECORD_TYPE_PATH,
+                bytes: Buffer.from('<RecordType/>', 'utf8')
+            }
+        ]);
+        const harness = createHarness({
+            buildDestinationInventory: async () =>
+                inventoryFor([
+                    {
+                        metadataType: 'RecordType',
+                        metadataName: 'Vehicle__c.Some_Record_Type',
+                        state: DESTINATION_STATE.MISSING
+                    }
+                ]),
+            collectExpectedAfterArtifact: async () => ({
+                artifactBytes: afterPacked,
+                expectedAfterHash: hashBytes(afterPacked),
+                expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
+            })
+        });
+
+        const capture = await harness.service.captureAndSealForDeploy(
+            RECORD_TYPE_CAPTURE_ARGS
+        );
+        const members = await harness.captureService.getMembers(
+            capture.snapshot.snapshotId
+        );
+        const [member] = members;
+
+        assert.strictEqual(capture.ok, true);
+        assert.strictEqual(harness.retrieveCalls.length, 0);
+        assert.strictEqual(member.changeClass, CHANGE_CLASS.NEW);
+        assert.strictEqual(member.existedBefore, false);
+        assert.strictEqual(member.captureStatus, MEMBER_CAPTURE_STATUS.ABSENT_PROVEN);
+        assert.strictEqual(member.destinationBeforeHash, null);
+        assert.ok(member.expectedAfterHash);
+        assert.strictEqual(
+            member.expectedAfterRepresentation,
+            EXPECTED_AFTER_REPRESENTATION.RAW
+        );
+        assert.strictEqual(member.artifactId, null);
+    });
+
+    await runTest('RecordType UNKNOWN destination state blocks capture', async () => {
+        const harness = createHarness({
+            buildDestinationInventory: async () =>
+                inventoryFor([
+                    {
+                        metadataType: 'RecordType',
+                        metadataName: 'Vehicle__c.Some_Record_Type',
+                        state: DESTINATION_STATE.UNKNOWN
+                    }
+                ])
+        });
+
+        const capture = await harness.service.captureAndSealForDeploy(
+            RECORD_TYPE_CAPTURE_ARGS
+        );
+
+        assert.strictEqual(capture.ok, false);
+        assert.match(capture.message, /RecordType:Vehicle__c.Some_Record_Type/);
+        assert.match(capture.message, /UNKNOWN/);
     });
 
     await runTest('ValidationRule UNKNOWN destination state blocks capture', async () => {

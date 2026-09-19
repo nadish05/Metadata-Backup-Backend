@@ -57,8 +57,8 @@ runTest('V1 allowlist includes ValidationRule alongside proven snapshot types', 
     assert.strictEqual(isCaptureAllowlisted('LightningComponentBundle'), true);
     assert.strictEqual(isCaptureAllowlisted('ListView'), true);
     assert.strictEqual(isCaptureAllowlisted('ValidationRule'), true);
+    assert.strictEqual(isCaptureAllowlisted('RecordType'), true);
     assert.strictEqual(isCaptureAllowlisted('Flow'), false);
-    assert.strictEqual(isCaptureAllowlisted('RecordType'), false);
     assert.strictEqual(isCaptureAllowlisted('CustomMetadataType'), false);
 });
 

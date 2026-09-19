@@ -246,6 +246,22 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'RecordType' && metadataName) {
+        const separator = metadataName.indexOf('.');
+        const objectName =
+            separator > 0 ? metadataName.slice(0, separator) : null;
+        const recordTypeName =
+            separator > 0 ? metadataName.slice(separator + 1) : null;
+
+        if (!objectName || !recordTypeName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/objects/${objectName}/recordTypes/${recordTypeName}.recordType-meta.xml`
+        };
+    }
+
     return null;
 }
 
@@ -261,9 +277,13 @@ function selectLogicalMemberFiles(
 
     if (
         !expectedPaths ||
-        !['CustomObject', 'CustomField', 'ListView', 'ValidationRule'].includes(
-            metadataType
-        )
+        ![
+            'CustomObject',
+            'CustomField',
+            'ListView',
+            'ValidationRule',
+            'RecordType'
+        ].includes(metadataType)
     ) {
         return retrievedFiles;
     }
