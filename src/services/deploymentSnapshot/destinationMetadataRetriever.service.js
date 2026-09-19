@@ -230,6 +230,22 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'ValidationRule' && metadataName) {
+        const separator = metadataName.indexOf('.');
+        const objectName =
+            separator > 0 ? metadataName.slice(0, separator) : null;
+        const ruleName =
+            separator > 0 ? metadataName.slice(separator + 1) : null;
+
+        if (!objectName || !ruleName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/objects/${objectName}/validationRules/${ruleName}.validationRule-meta.xml`
+        };
+    }
+
     return null;
 }
 
@@ -245,7 +261,9 @@ function selectLogicalMemberFiles(
 
     if (
         !expectedPaths ||
-        !['CustomObject', 'CustomField', 'ListView'].includes(metadataType)
+        !['CustomObject', 'CustomField', 'ListView', 'ValidationRule'].includes(
+            metadataType
+        )
     ) {
         return retrievedFiles;
     }

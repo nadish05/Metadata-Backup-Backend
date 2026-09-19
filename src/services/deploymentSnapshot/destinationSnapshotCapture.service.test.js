@@ -8,7 +8,8 @@ const {
 const {
     SNAPSHOT_STATUS,
     CHANGE_CLASS,
-    MEMBER_CAPTURE_STATUS
+    MEMBER_CAPTURE_STATUS,
+    EXPECTED_AFTER_REPRESENTATION
 } = require('./snapshot.types');
 const { hashBytes } = require('./snapshotIntegrity.service');
 const {
@@ -130,6 +131,28 @@ function createHarness(overrides = {}) {
         captureService
     };
 }
+
+const VALIDATION_RULE_PATH =
+    'force-app/main/default/objects/Vehicle__c/validationRules/Require_Model.validationRule-meta.xml';
+
+const VALIDATION_RULE_CAPTURE_ARGS = {
+    destinationOrgId: '00D000000000001',
+    sourceOrgId: '00D000000000002',
+    historyId: 'hist-validation-rule',
+    sourceBranch: 'feature',
+    destinationBranch: 'main',
+    refreshToken: 'refresh-secret',
+    instanceUrl: 'https://dest.example.com',
+    generatedDeploymentPackage: {
+        metadata: [
+            {
+                metadataType: 'ValidationRule',
+                metadataName: 'Vehicle__c.Require_Model',
+                filePath: VALIDATION_RULE_PATH
+            }
+        ]
+    }
+};
 
 const BASE_ARGS = {
     destinationOrgId: '00D000000000001',
@@ -419,6 +442,119 @@ const BASE_ARGS = {
         assert.strictEqual(deployed, false);
         assert.strictEqual(harness.retrieveCalls.length, 0);
         assert.strictEqual(result.deploymentExecution, undefined);
+    });
+
+    await runTest('ValidationRule EXISTS capture is MODIFIED with RAW representation', async () => {
+        const destRuleXml = Buffer.from(
+            '<?xml version="1.0" encoding="UTF-8"?><ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata"><active>true</active></ValidationRule>',
+            'utf8'
+        );
+        const destPacked = packMemberFiles([
+            { relativePath: VALIDATION_RULE_PATH, bytes: destRuleXml }
+        ]);
+        const afterRuleXml = Buffer.from(
+            '<?xml version="1.0" encoding="UTF-8"?><ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata"><active>true</active><errorMessage>Model required</errorMessage></ValidationRule>',
+            'utf8'
+        );
+        const afterPacked = packMemberFiles([
+            { relativePath: VALIDATION_RULE_PATH, bytes: afterRuleXml }
+        ]);
+        const harness = createHarness({
+            retrieveDestinationMember: async () => ({
+                artifactBytes: destPacked
+            }),
+            collectExpectedAfterArtifact: async () => ({
+                artifactBytes: afterPacked,
+                expectedAfterHash: hashBytes(afterPacked),
+                expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
+            })
+        });
+
+        const capture = await harness.service.captureAndSealForDeploy(
+            VALIDATION_RULE_CAPTURE_ARGS
+        );
+        const members = await harness.captureService.getMembers(
+            capture.snapshot.snapshotId
+        );
+        const [member] = members;
+
+        assert.strictEqual(capture.ok, true);
+        assert.strictEqual(member.changeClass, CHANGE_CLASS.MODIFIED);
+        assert.strictEqual(member.existedBefore, true);
+        assert.strictEqual(member.captureStatus, MEMBER_CAPTURE_STATUS.COMPLETE);
+        assert.strictEqual(member.destinationBeforeHash, hashBytes(destPacked));
+        assert.ok(member.expectedAfterHash);
+        assert.strictEqual(
+            member.expectedAfterRepresentation,
+            EXPECTED_AFTER_REPRESENTATION.RAW
+        );
+        assert.ok(member.artifactId);
+    });
+
+    await runTest('ValidationRule MISSING capture is NEW with ABSENT_PROVEN', async () => {
+        const afterPacked = packMemberFiles([
+            {
+                relativePath: VALIDATION_RULE_PATH,
+                bytes: Buffer.from('<ValidationRule/>', 'utf8')
+            }
+        ]);
+        const harness = createHarness({
+            buildDestinationInventory: async () =>
+                inventoryFor([
+                    {
+                        metadataType: 'ValidationRule',
+                        metadataName: 'Vehicle__c.Require_Model',
+                        state: DESTINATION_STATE.MISSING
+                    }
+                ]),
+            collectExpectedAfterArtifact: async () => ({
+                artifactBytes: afterPacked,
+                expectedAfterHash: hashBytes(afterPacked),
+                expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
+            })
+        });
+
+        const capture = await harness.service.captureAndSealForDeploy(
+            VALIDATION_RULE_CAPTURE_ARGS
+        );
+        const members = await harness.captureService.getMembers(
+            capture.snapshot.snapshotId
+        );
+        const [member] = members;
+
+        assert.strictEqual(capture.ok, true);
+        assert.strictEqual(harness.retrieveCalls.length, 0);
+        assert.strictEqual(member.changeClass, CHANGE_CLASS.NEW);
+        assert.strictEqual(member.existedBefore, false);
+        assert.strictEqual(member.captureStatus, MEMBER_CAPTURE_STATUS.ABSENT_PROVEN);
+        assert.strictEqual(member.destinationBeforeHash, null);
+        assert.ok(member.expectedAfterHash);
+        assert.strictEqual(
+            member.expectedAfterRepresentation,
+            EXPECTED_AFTER_REPRESENTATION.RAW
+        );
+        assert.strictEqual(member.artifactId, null);
+    });
+
+    await runTest('ValidationRule UNKNOWN destination state blocks capture', async () => {
+        const harness = createHarness({
+            buildDestinationInventory: async () =>
+                inventoryFor([
+                    {
+                        metadataType: 'ValidationRule',
+                        metadataName: 'Vehicle__c.Require_Model',
+                        state: DESTINATION_STATE.UNKNOWN
+                    }
+                ])
+        });
+
+        const capture = await harness.service.captureAndSealForDeploy(
+            VALIDATION_RULE_CAPTURE_ARGS
+        );
+
+        assert.strictEqual(capture.ok, false);
+        assert.match(capture.message, /ValidationRule:Vehicle__c.Require_Model/);
+        assert.match(capture.message, /UNKNOWN/);
     });
 
     await runTest('missing expected-after workspace artifact blocks deploy', async () => {

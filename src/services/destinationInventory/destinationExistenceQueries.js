@@ -18,6 +18,7 @@ function usesToolingApi(type) {
         type === 'ApexTrigger' ||
         type === 'ApexPage' ||
         type === 'CustomField' ||
+        type === 'ValidationRule' ||
         type === 'CustomApplication' ||
         type === 'FlexiPage' ||
         type === 'LightningComponentBundle' ||
@@ -214,6 +215,27 @@ function buildCustomFieldSoql(name) {
     );
 }
 
+function buildValidationRuleSoql(name) {
+    if (!name.includes('.')) {
+        return null;
+    }
+
+    const separator = name.indexOf('.');
+    const objectApiName = name.slice(0, separator).trim();
+    const validationName = name.slice(separator + 1).trim();
+
+    if (!objectApiName || !validationName) {
+        return null;
+    }
+
+    return (
+        'SELECT Id, ValidationName, EntityDefinition.QualifiedApiName FROM ValidationRule ' +
+        `WHERE ValidationName = '${escapeSoql(validationName)}' ` +
+        `AND EntityDefinition.QualifiedApiName = '${escapeSoql(objectApiName)}' ` +
+        'LIMIT 1'
+    );
+}
+
 function buildListViewSoql(name) {
     if (!name.includes('.')) {
         return null;
@@ -307,6 +329,9 @@ function buildExistenceQuery(type, name) {
         case 'ListView':
             return buildListViewSoql(name);
 
+        case 'ValidationRule':
+            return buildValidationRuleSoql(name);
+
         case 'RecordType':
             return buildRecordTypeSoql(name);
 
@@ -377,6 +402,7 @@ module.exports = {
     buildCustomMetadataSoql,
     buildCustomPermissionSoql,
     buildCustomFieldSoql,
+    buildValidationRuleSoql,
     buildListViewSoql,
     buildRecordTypeSoql,
     buildExistenceQuery

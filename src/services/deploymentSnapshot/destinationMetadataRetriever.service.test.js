@@ -297,6 +297,82 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves ValidationRule logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'ValidationRule',
+            'Vehicle__c.Require_Model'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/objects/Vehicle__c/validationRules/Require_Model.validationRule-meta.xml'
+        });
+    });
+
+    await runTest('ValidationRule logical path distinguishes object names', () => {
+        const vehicle = buildExpectedMemberSourcePaths(
+            'ValidationRule',
+            'Vehicle__c.Require_Model'
+        );
+        const account = buildExpectedMemberSourcePaths(
+            'ValidationRule',
+            'Account.Require_Model'
+        );
+
+        assert.notStrictEqual(vehicle.logical, account.logical);
+        assert.ok(vehicle.logical.includes('/objects/Vehicle__c/'));
+        assert.ok(account.logical.includes('/objects/Account/'));
+    });
+
+    await runTest('selects only the ValidationRule logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                    bytes: Buffer.from('object')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/validationRules/Require_Model.validationRule-meta.xml',
+                    bytes: Buffer.from('rule')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Vehicle__c/validationRules/AnotherRule.validationRule-meta.xml',
+                    bytes: Buffer.from('other')
+                }
+            ],
+            'ValidationRule',
+            'Vehicle__c.Require_Model'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/objects/Vehicle__c/validationRules/Require_Model.validationRule-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when ValidationRule logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml',
+                            bytes: Buffer.from('object')
+                        }
+                    ],
+                    'ValidationRule',
+                    'Vehicle__c.Require_Model'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('selects only the ListView logical file', () => {
         const files = selectLogicalMemberFiles(
             [
