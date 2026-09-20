@@ -27,6 +27,10 @@ const {
     retrieveDestinationMember
 } = require('./destinationMetadataRetriever.service');
 const {
+    classifyExistingMemberChange,
+    EXISTING_MEMBER_CHANGE
+} = require('./effectiveMemberChange.service');
+const {
     buildDestinationInventory,
     getState,
     DESTINATION_STATE
@@ -94,6 +98,9 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
     const startHeartbeat =
         dependencies.startLockHeartbeat || startLockHeartbeat;
     const createLockOwnerId = dependencies.createOwnerId || createOwnerId;
+    const classifyExistingMember =
+        dependencies.classifyExistingMemberChange ||
+        classifyExistingMemberChange;
     // P0-R7.15.10: DEPLOY capture for Application Org persistence uses temporary
     // Node storage (MEMORY by default). Rollback still requires durable Node
     // storage via isDurableSnapshotStorageReady() in restore paths.
@@ -316,6 +323,39 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 );
             }
 
+            const effectiveChange = classifyExistingMember({
+                metadataType: member.metadataType,
+                metadataName: member.metadataName,
+                filePath: member.filePath,
+                destinationBeforeArtifactBytes: retrieved.artifactBytes,
+                expectedAfterArtifactBytes: expectedAfter.artifactBytes,
+                expectedAfterHash: expectedAfter.expectedAfterHash,
+                canonicalExpectedAfterHash:
+                    expectedAfter.canonicalExpectedAfterHash,
+                expectedAfterRepresentation:
+                    expectedAfter.expectedAfterRepresentation
+            });
+
+            if (
+                effectiveChange.classification ===
+                EXISTING_MEMBER_CHANGE.UNKNOWN
+            ) {
+                return fail(
+                    buildUnknownReason(
+                        member.metadataType,
+                        member.metadataName,
+                        effectiveChange.detail
+                    )
+                );
+            }
+
+            if (
+                effectiveChange.classification ===
+                EXISTING_MEMBER_CHANGE.UNCHANGED
+            ) {
+                continue;
+            }
+
             captureMembers.push({
                 metadataType: member.metadataType,
                 metadataName: member.metadataName,
@@ -328,6 +368,13 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 canonicalExpectedAfterHash:
                     expectedAfter.canonicalExpectedAfterHash
             });
+        }
+
+        if (!captureMembers.length) {
+            return {
+                ok: true,
+                snapshot: null
+            };
         }
 
         try {

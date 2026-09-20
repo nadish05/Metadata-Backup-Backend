@@ -25,6 +25,25 @@ const { packMemberFiles } = require('./destinationMemberArtifact.service');
 const {
     createDestinationSnapshotCaptureService
 } = require('./destinationSnapshotCapture.service');
+const {
+    CANONICALIZATION_VERSION,
+    canonicalizeForRollback
+} = require('./rollbackMetadataCanonicalizer.service');
+const VEHICLE_OBJECT_PATH =
+    'force-app/main/default/objects/Vehicle__c/Vehicle__c.object-meta.xml';
+const VEHICLE_FIELD_PATH =
+    'force-app/main/default/objects/Vehicle__c/fields/Model__c.field-meta.xml';
+const VEHICLE_OBJECT_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Vehicle__c</fullName>
+    <deploymentStatus>Deployed</deploymentStatus>
+</CustomObject>`;
+const VEHICLE_FIELD_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Model__c</fullName>
+    <label>Model</label>
+    <type>Text</type>
+</CustomField>`;
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -888,6 +907,367 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
             assert.strictEqual(capture.ok, false);
             assert.match(capture.message, /BusinessProcess/);
             assert.match(capture.message, /not in the V1 snapshot allowlist/);
+        }
+    );
+
+    await runTest(
+        'TEST 1 capture — existing ApexClass unchanged omits snapshot member',
+        async () => {
+            const apexPath = 'force-app/main/default/classes/AccountService.cls';
+            const packed = packMemberFiles([
+                {
+                    relativePath: apexPath,
+                    bytes: Buffer.from('public class AccountService {}', 'utf8')
+                }
+            ]);
+            const harness = createHarness({
+                retrieveDestinationMember: async () => ({
+                    artifactBytes: packed
+                }),
+                collectExpectedAfterArtifact: async () => ({
+                    artifactBytes: packed,
+                    expectedAfterHash: hashBytes(packed)
+                })
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy(
+                BASE_ARGS
+            );
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(capture.snapshot, null);
+            assert.strictEqual(harness.retrieveCalls.length, 1);
+        }
+    );
+
+    await runTest(
+        'TEST 2 capture — existing ApexClass changed remains MODIFIED with artifact',
+        async () => {
+            const apexPath = 'force-app/main/default/classes/AccountService.cls';
+            const beforePacked = packMemberFiles([
+                {
+                    relativePath: apexPath,
+                    bytes: Buffer.from('public class AccountService { void old() {} }', 'utf8')
+                }
+            ]);
+            const afterPacked = packMemberFiles([
+                {
+                    relativePath: apexPath,
+                    bytes: Buffer.from('public class AccountService { void new() {} }', 'utf8')
+                }
+            ]);
+            const harness = createHarness({
+                retrieveDestinationMember: async () => ({
+                    artifactBytes: beforePacked
+                }),
+                collectExpectedAfterArtifact: async () => ({
+                    artifactBytes: afterPacked,
+                    expectedAfterHash: hashBytes(afterPacked)
+                })
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy(
+                BASE_ARGS
+            );
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(members.length, 1);
+            assert.strictEqual(members[0].changeClass, CHANGE_CLASS.MODIFIED);
+            assert.ok(members[0].artifactId);
+        }
+    );
+
+    await runTest(
+        'TEST 5 capture — CustomObject canonical comparison failure blocks capture',
+        async () => {
+            const beforePacked = packMemberFiles([
+                {
+                    relativePath: VEHICLE_OBJECT_PATH,
+                    bytes: Buffer.from(VEHICLE_OBJECT_XML, 'utf8')
+                }
+            ]);
+            const afterPacked = packMemberFiles([
+                {
+                    relativePath: VEHICLE_OBJECT_PATH,
+                    bytes: Buffer.from(
+                        VEHICLE_OBJECT_XML.replace(
+                            'Deployed',
+                            'Deployed</CustomObject><broken'
+                        ),
+                        'utf8'
+                    )
+                }
+            ]);
+            const harness = createHarness({
+                buildDestinationInventory: async (args) =>
+                    inventoryFor(
+                        (args.items || []).map((item) => ({
+                            ...item,
+                            state:
+                                item.metadataType === 'CustomObject'
+                                    ? DESTINATION_STATE.EXISTS
+                                    : DESTINATION_STATE.MISSING
+                        }))
+                    ),
+                retrieveDestinationMember: async (args) => {
+                    if (args.metadataType === 'CustomObject') {
+                        return { artifactBytes: beforePacked };
+                    }
+                    throw new Error('unexpected retrieve');
+                },
+                collectExpectedAfterArtifact: async (args) => {
+                    const member = args.member;
+                    if (member.metadataType === 'CustomObject') {
+                        return {
+                            artifactBytes: afterPacked,
+                            expectedAfterHash: hashBytes(afterPacked),
+                            expectedAfterRepresentation:
+                                EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1
+                        };
+                    }
+                    throw new Error('unexpected expected-after');
+                }
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                ...BASE_ARGS,
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'CustomObject',
+                            metadataName: 'Vehicle__c',
+                            filePath: VEHICLE_OBJECT_PATH
+                        }
+                    ]
+                }
+            });
+
+            assert.strictEqual(capture.ok, false);
+            assert.match(capture.message, /Vehicle__c/);
+            assert.match(capture.message, /canonical expected-after hash/i);
+        }
+    );
+
+    await runTest(
+        'TEST 8 capture — unchanged object + NEW field snapshots field only',
+        async () => {
+            const objectPacked = packMemberFiles([
+                {
+                    relativePath: VEHICLE_OBJECT_PATH,
+                    bytes: Buffer.from(VEHICLE_OBJECT_XML, 'utf8')
+                }
+            ]);
+            const fieldPacked = packMemberFiles([
+                {
+                    relativePath: VEHICLE_FIELD_PATH,
+                    bytes: Buffer.from(VEHICLE_FIELD_XML, 'utf8')
+                }
+            ]);
+            const fieldCanonical = canonicalizeForRollback({
+                metadataType: 'CustomField',
+                metadataName: 'Vehicle__c.Model__c',
+                filePath: VEHICLE_FIELD_PATH,
+                artifactBytes: fieldPacked,
+                canonicalizationVersion: CANONICALIZATION_VERSION
+            });
+            const objectCanonical = canonicalizeForRollback({
+                metadataType: 'CustomObject',
+                metadataName: 'Vehicle__c',
+                filePath: VEHICLE_OBJECT_PATH,
+                artifactBytes: objectPacked,
+                canonicalizationVersion: CANONICALIZATION_VERSION
+            });
+
+            const harness = createHarness({
+                buildDestinationInventory: async (args) =>
+                    inventoryFor(
+                        (args.items || []).map((item) => ({
+                            ...item,
+                            state:
+                                item.metadataType === 'CustomField'
+                                    ? DESTINATION_STATE.MISSING
+                                    : DESTINATION_STATE.EXISTS
+                        }))
+                    ),
+                retrieveDestinationMember: async (args) => {
+                    if (args.metadataType === 'CustomObject') {
+                        return { artifactBytes: objectPacked };
+                    }
+                    throw new Error('field should not be retrieved for NEW');
+                },
+                collectExpectedAfterArtifact: async (args) => {
+                    const member = args.member;
+                    if (member.metadataType === 'CustomObject') {
+                        return {
+                            artifactBytes: objectPacked,
+                            expectedAfterHash: hashBytes(objectPacked),
+                            canonicalExpectedAfterHash:
+                                objectCanonical.canonicalHash,
+                            expectedAfterRepresentation:
+                                EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1
+                        };
+                    }
+                    if (member.metadataType === 'CustomField') {
+                        return {
+                            artifactBytes: fieldPacked,
+                            expectedAfterHash: hashBytes(fieldPacked),
+                            canonicalExpectedAfterHash:
+                                fieldCanonical.canonicalHash,
+                            expectedAfterRepresentation:
+                                EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1
+                        };
+                    }
+                    throw new Error('unexpected member');
+                }
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                ...BASE_ARGS,
+                historyId: 'hist-vehicle-field',
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'CustomObject',
+                            metadataName: 'Vehicle__c',
+                            filePath: VEHICLE_OBJECT_PATH
+                        },
+                        {
+                            metadataType: 'CustomField',
+                            metadataName: 'Vehicle__c.Model__c',
+                            filePath: VEHICLE_FIELD_PATH
+                        }
+                    ]
+                }
+            });
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(members.length, 1);
+            assert.strictEqual(members[0].metadataType, 'CustomField');
+            assert.strictEqual(members[0].metadataName, 'Vehicle__c.Model__c');
+            assert.strictEqual(members[0].changeClass, CHANGE_CLASS.NEW);
+            assert.strictEqual(harness.retrieveCalls.length, 1);
+            assert.strictEqual(harness.retrieveCalls[0].metadataType, 'CustomObject');
+        }
+    );
+
+    await runTest(
+        'TEST 9 capture — unchanged object + MODIFIED field restores field only',
+        async () => {
+            const objectPacked = packMemberFiles([
+                {
+                    relativePath: VEHICLE_OBJECT_PATH,
+                    bytes: Buffer.from(VEHICLE_OBJECT_XML, 'utf8')
+                }
+            ]);
+            const fieldBeforePacked = packMemberFiles([
+                {
+                    relativePath: VEHICLE_FIELD_PATH,
+                    bytes: Buffer.from(
+                        VEHICLE_FIELD_XML.replace('Model', 'Old Model'),
+                        'utf8'
+                    )
+                }
+            ]);
+            const fieldAfterPacked = packMemberFiles([
+                {
+                    relativePath: VEHICLE_FIELD_PATH,
+                    bytes: Buffer.from(VEHICLE_FIELD_XML, 'utf8')
+                }
+            ]);
+            const fieldCanonical = canonicalizeForRollback({
+                metadataType: 'CustomField',
+                metadataName: 'Vehicle__c.Model__c',
+                filePath: VEHICLE_FIELD_PATH,
+                artifactBytes: fieldAfterPacked,
+                canonicalizationVersion: CANONICALIZATION_VERSION
+            });
+            const objectCanonical = canonicalizeForRollback({
+                metadataType: 'CustomObject',
+                metadataName: 'Vehicle__c',
+                filePath: VEHICLE_OBJECT_PATH,
+                artifactBytes: objectPacked,
+                canonicalizationVersion: CANONICALIZATION_VERSION
+            });
+
+            const harness = createHarness({
+                buildDestinationInventory: async (args) =>
+                    inventoryFor(
+                        (args.items || []).map((item) => ({
+                            ...item,
+                            state: DESTINATION_STATE.EXISTS
+                        }))
+                    ),
+                retrieveDestinationMember: async (args) => {
+                    if (args.metadataType === 'CustomObject') {
+                        return { artifactBytes: objectPacked };
+                    }
+                    if (args.metadataType === 'CustomField') {
+                        return { artifactBytes: fieldBeforePacked };
+                    }
+                    throw new Error('unexpected retrieve');
+                },
+                collectExpectedAfterArtifact: async (args) => {
+                    const member = args.member;
+                    if (member.metadataType === 'CustomObject') {
+                        return {
+                            artifactBytes: objectPacked,
+                            expectedAfterHash: hashBytes(objectPacked),
+                            canonicalExpectedAfterHash:
+                                objectCanonical.canonicalHash,
+                            expectedAfterRepresentation:
+                                EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1
+                        };
+                    }
+                    if (member.metadataType === 'CustomField') {
+                        return {
+                            artifactBytes: fieldAfterPacked,
+                            expectedAfterHash: hashBytes(fieldAfterPacked),
+                            canonicalExpectedAfterHash:
+                                fieldCanonical.canonicalHash,
+                            expectedAfterRepresentation:
+                                EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1
+                        };
+                    }
+                    throw new Error('unexpected member');
+                }
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                ...BASE_ARGS,
+                historyId: 'hist-vehicle-mod-field',
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'CustomObject',
+                            metadataName: 'Vehicle__c',
+                            filePath: VEHICLE_OBJECT_PATH
+                        },
+                        {
+                            metadataType: 'CustomField',
+                            metadataName: 'Vehicle__c.Model__c',
+                            filePath: VEHICLE_FIELD_PATH
+                        }
+                    ]
+                }
+            });
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(members.length, 1);
+            assert.strictEqual(members[0].metadataType, 'CustomField');
+            assert.strictEqual(members[0].changeClass, CHANGE_CLASS.MODIFIED);
+            assert.strictEqual(
+                members[0].destinationBeforeHash,
+                hashBytes(fieldBeforePacked)
+            );
         }
     );
 })();
