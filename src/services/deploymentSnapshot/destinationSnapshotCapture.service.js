@@ -11,12 +11,13 @@ const {
 } = require('./snapshotCapture.flag');
 const {
     collectFinalDeploymentMembers,
+    collapseRedundantNewCustomObjectChildren,
     isCaptureAllowlisted,
     mapExistenceToChangeClass,
     buildUnsupportedReason,
     buildUnknownReason,
     buildMissingArtifactReason,
-    buildMissingSelectedMetadataReason
+    buildMissingDeployedMetadataReason
 } = require('./destinationSnapshotMapper.service');
 const {
     collectExpectedAfterArtifact,
@@ -131,11 +132,17 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
             return fail(DURABLE_STORAGE_UNAVAILABLE_MESSAGE);
         }
 
-        if (!Array.isArray(selectedMetadata) || selectedMetadata.length === 0) {
-            return fail(buildMissingSelectedMetadataReason());
+        const deployedMetadata = Array.isArray(
+            generatedDeploymentPackage?.metadata
+        )
+            ? generatedDeploymentPackage.metadata
+            : [];
+
+        if (!deployedMetadata.length) {
+            return fail(buildMissingDeployedMetadataReason());
         }
 
-        const finalMembers = collectFinalDeploymentMembers(
+        let finalMembers = collectFinalDeploymentMembers(
             generatedDeploymentPackage,
             selectedMetadata
         );
@@ -181,6 +188,12 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 )
             );
         }
+
+        finalMembers = collapseRedundantNewCustomObjectChildren(
+            finalMembers,
+            inventory,
+            inventoryState
+        );
 
         const captureMembers = [];
 

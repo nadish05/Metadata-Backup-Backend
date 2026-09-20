@@ -5,9 +5,12 @@ const assert = require('assert');
 const {
     DESTINATION_STATE
 } = require('../destinationInventory/destinationInventoryBuilder.service');
+const { getState } = require('../destinationInventory/destinationInventoryBuilder.service');
 const { CHANGE_CLASS } = require('./snapshot.types');
 const {
     collectFinalDeploymentMembers,
+    collapseRedundantNewCustomObjectChildren,
+    resolveCustomObjectChildOwner,
     isCaptureAllowlisted,
     mapExistenceToChangeClass,
     buildMemberIdentityKey
@@ -22,6 +25,18 @@ function runTest(name, fn) {
         console.error(error);
         process.exitCode = 1;
     }
+}
+
+function inventoryFor(states) {
+    const inventory = new Map();
+
+    for (const row of states) {
+        inventory.set(`${row.metadataType}:${row.metadataName}`, {
+            state: row.state
+        });
+    }
+
+    return inventory;
 }
 
 const FULL_PACKAGE = {
@@ -54,7 +69,7 @@ const FULL_PACKAGE = {
 };
 
 runTest(
-    'collects only selected members intersected with package metadata',
+    'collects every deployed package member regardless of selectedMetadata',
     () => {
         const members = collectFinalDeploymentMembers(
             {
@@ -68,6 +83,11 @@ runTest(
                         type: 'ApexClass',
                         name: 'AccountService',
                         filePath: 'classes/AccountService.cls'
+                    },
+                    {
+                        metadataType: 'ApexClass',
+                        metadataName: 'DependencyClass',
+                        filePath: 'classes/DependencyClass.cls'
                     }
                 ]
             },
@@ -75,67 +95,164 @@ runTest(
         );
 
         assert.deepStrictEqual(
-            members.map((member) => `${member.metadataType}:${member.metadataName}`),
-            ['ApexClass:AccountService']
+            members
+                .map((member) => `${member.metadataType}:${member.metadataName}`)
+                .sort(),
+            [
+                'ApexClass:AccountService',
+                'ApexClass:DependencyClass',
+                'CustomMetadata:Weather_Config.Default'
+            ].sort()
         );
-        assert.strictEqual(members[0].filePath, 'classes/AccountService.cls');
     }
 );
 
-runTest('TEST 1: dependency excluded when not selected', () => {
-    const members = collectFinalDeploymentMembers(FULL_PACKAGE, [
-        { metadataType: 'RecordType', metadataName: 'Opportunity.Enterprise_Deal' }
-    ]);
+runTest(
+    'TEST 1: AUTO_INCLUDED ApexClass:B is a rollback candidate when not selected',
+    () => {
+        const members = collectFinalDeploymentMembers(
+            {
+                metadata: [
+                    {
+                        metadataType: 'ApexClass',
+                        metadataName: 'A',
+                        filePath: 'classes/A.cls'
+                    },
+                    {
+                        metadataType: 'ApexClass',
+                        metadataName: 'B',
+                        filePath: 'classes/B.cls'
+                    }
+                ]
+            },
+            [{ metadataType: 'ApexClass', metadataName: 'A' }]
+        );
 
-    assert.deepStrictEqual(
-        members.map((m) => `${m.metadataType}:${m.metadataName}`),
-        ['RecordType:Opportunity.Enterprise_Deal']
-    );
-});
+        assert.deepStrictEqual(
+            members.map((m) => `${m.metadataType}:${m.metadataName}`).sort(),
+            ['ApexClass:A', 'ApexClass:B'].sort()
+        );
+    }
+);
 
-runTest('TEST 2: explicit CustomField selected is included', () => {
-    const members = collectFinalDeploymentMembers(FULL_PACKAGE, [
-        { metadataType: 'RecordType', metadataName: 'Opportunity.Enterprise_Deal' },
-        {
-            metadataType: 'CustomField',
-            metadataName: 'Opportunity.Approval_Status__c'
-        }
-    ]);
+runTest(
+    'TEST 2: AUTO_INCLUDED CustomField when parent exists in deployment package',
+    () => {
+        const members = collectFinalDeploymentMembers(
+            {
+                metadata: [
+                    {
+                        metadataType: 'CustomObject',
+                        metadataName: 'Vehicle__c',
+                        filePath:
+                            'objects/Vehicle__c/Vehicle__c.object-meta.xml'
+                    },
+                    {
+                        metadataType: 'CustomField',
+                        metadataName: 'Vehicle__c.Model__c',
+                        filePath:
+                            'objects/Vehicle__c/fields/Model__c.field-meta.xml'
+                    }
+                ]
+            },
+            [{ metadataType: 'CustomObject', metadataName: 'Vehicle__c' }]
+        );
 
-    assert.deepStrictEqual(
-        members.map((m) => `${m.metadataType}:${m.metadataName}`).sort(),
-        [
-            'CustomField:Opportunity.Approval_Status__c',
-            'RecordType:Opportunity.Enterprise_Deal'
-        ].sort()
-    );
-});
+        assert.ok(
+            members.some(
+                (m) =>
+                    m.metadataType === 'CustomField' &&
+                    m.metadataName === 'Vehicle__c.Model__c'
+            )
+        );
+    }
+);
 
-runTest('TEST 3: BusinessProcess never auto-captured', () => {
+runTest('TEST 3: AUTO_INCLUDED ListView in deployment package', () => {
     const members = collectFinalDeploymentMembers(
         {
             metadata: [
-                FULL_PACKAGE.metadata[0],
-                FULL_PACKAGE.metadata[1]
+                {
+                    metadataType: 'CustomObject',
+                    metadataName: 'Vehicle__c',
+                    filePath: 'objects/Vehicle__c/Vehicle__c.object-meta.xml'
+                },
+                {
+                    metadataType: 'ListView',
+                    metadataName: 'Vehicle__c.All',
+                    filePath:
+                        'objects/Vehicle__c/listViews/All.listView-meta.xml'
+                }
             ]
         },
-        [{ metadataType: 'RecordType', metadataName: 'Opportunity.Enterprise_Deal' }]
+        [{ metadataType: 'CustomObject', metadataName: 'Vehicle__c' }]
     );
 
     assert.ok(
-        !members.some((m) => m.metadataType === 'BusinessProcess')
+        members.some(
+            (m) =>
+                m.metadataType === 'ListView' &&
+                m.metadataName === 'Vehicle__c.All'
+        )
     );
 });
 
-runTest('TEST 4: StandardValueSet dependency excluded', () => {
-    const members = collectFinalDeploymentMembers(FULL_PACKAGE, [
-        { metadataType: 'RecordType', metadataName: 'Opportunity.Enterprise_Deal' }
-    ]);
+runTest('TEST 4: AUTO_INCLUDED ValidationRule in deployment package', () => {
+    const members = collectFinalDeploymentMembers(
+        {
+            metadata: [
+                {
+                    metadataType: 'ValidationRule',
+                    metadataName: 'Vehicle__c.Require_Model',
+                    filePath:
+                        'objects/Vehicle__c/validationRules/Require_Model.validationRule-meta.xml'
+                }
+            ]
+        },
+        [{ metadataType: 'CustomObject', metadataName: 'Vehicle__c' }]
+    );
 
-    assert.ok(!members.some((m) => m.metadataType === 'StandardValueSet'));
+    assert.strictEqual(members.length, 1);
+    assert.strictEqual(members[0].metadataType, 'ValidationRule');
 });
 
-runTest('TEST 5: type + name match is exact', () => {
+runTest('TEST 5: AUTO_INCLUDED RecordType in deployment package', () => {
+    const members = collectFinalDeploymentMembers(
+        {
+            metadata: [
+                {
+                    metadataType: 'RecordType',
+                    metadataName: 'Vehicle__c.Some_RT',
+                    filePath:
+                        'objects/Vehicle__c/recordTypes/Some_RT.recordType-meta.xml'
+                }
+            ]
+        },
+        [{ metadataType: 'CustomObject', metadataName: 'Vehicle__c' }]
+    );
+
+    assert.strictEqual(members.length, 1);
+    assert.strictEqual(members[0].metadataType, 'RecordType');
+});
+
+runTest(
+    'TEST 6: unsupported types remain in deployed member list for fail-closed capture',
+    () => {
+        const members = collectFinalDeploymentMembers(FULL_PACKAGE, [
+            { metadataType: 'RecordType', metadataName: 'Opportunity.Enterprise_Deal' }
+        ]);
+
+        assert.ok(
+            members.some((m) => m.metadataType === 'BusinessProcess')
+        );
+        assert.ok(
+            members.some((m) => m.metadataType === 'StandardValueSet')
+        );
+        assert.ok(!isCaptureAllowlisted('BusinessProcess'));
+    }
+);
+
+runTest('dedupes identical deployed members', () => {
     const members = collectFinalDeploymentMembers(
         {
             metadata: [
@@ -151,22 +268,207 @@ runTest('TEST 5: type + name match is exact', () => {
                 }
             ]
         },
-        [{ metadataType: 'RecordType', metadataName: 'Opportunity.Enterprise_Deal' }]
+        []
     );
 
-    assert.strictEqual(members.length, 1);
-    assert.strictEqual(members[0].metadataName, 'Opportunity.Enterprise_Deal');
+    assert.strictEqual(members.length, 2);
 });
 
-runTest('TEST 6: missing selectedMetadata yields no members', () => {
-    assert.deepStrictEqual(
-        collectFinalDeploymentMembers(FULL_PACKAGE, undefined),
-        []
+runTest('empty deployment package yields no members', () => {
+    assert.deepStrictEqual(collectFinalDeploymentMembers({ metadata: [] }), []);
+    assert.deepStrictEqual(collectFinalDeploymentMembers(null), []);
+});
+
+runTest(
+    'TEST 7: collapse NEW CustomObject removes NEW child members only',
+    () => {
+        const members = [
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Vehicle__c',
+                filePath: 'objects/Vehicle__c/Vehicle__c.object-meta.xml'
+            },
+            {
+                metadataType: 'CustomField',
+                metadataName: 'Vehicle__c.Model__c',
+                filePath: 'objects/Vehicle__c/fields/Model__c.field-meta.xml'
+            },
+            {
+                metadataType: 'ListView',
+                metadataName: 'Vehicle__c.All',
+                filePath: 'objects/Vehicle__c/listViews/All.listView-meta.xml'
+            }
+        ];
+        const inventory = inventoryFor([
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Vehicle__c',
+                state: DESTINATION_STATE.MISSING
+            },
+            {
+                metadataType: 'CustomField',
+                metadataName: 'Vehicle__c.Model__c',
+                state: DESTINATION_STATE.MISSING
+            },
+            {
+                metadataType: 'ListView',
+                metadataName: 'Vehicle__c.All',
+                state: DESTINATION_STATE.MISSING
+            }
+        ]);
+
+        const collapsed = collapseRedundantNewCustomObjectChildren(
+            members,
+            inventory,
+            getState
+        );
+
+        assert.deepStrictEqual(
+            collapsed.map((m) => `${m.metadataType}:${m.metadataName}`),
+            ['CustomObject:Vehicle__c']
+        );
+    }
+);
+
+runTest(
+    'TEST 8: existing parent + NEW child does not collapse child away',
+    () => {
+        const members = [
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Vehicle__c',
+                filePath: 'objects/Vehicle__c/Vehicle__c.object-meta.xml'
+            },
+            {
+                metadataType: 'CustomField',
+                metadataName: 'Vehicle__c.Model__c',
+                filePath: 'objects/Vehicle__c/fields/Model__c.field-meta.xml'
+            }
+        ];
+        const inventory = inventoryFor([
+            {
+                metadataType: 'CustomObject',
+                metadataName: 'Vehicle__c',
+                state: DESTINATION_STATE.EXISTS
+            },
+            {
+                metadataType: 'CustomField',
+                metadataName: 'Vehicle__c.Model__c',
+                state: DESTINATION_STATE.MISSING
+            }
+        ]);
+
+        const collapsed = collapseRedundantNewCustomObjectChildren(
+            members,
+            inventory,
+            getState
+        );
+
+        assert.strictEqual(collapsed.length, 2);
+        assert.ok(
+            collapsed.some(
+                (m) =>
+                    m.metadataType === 'CustomField' &&
+                    m.metadataName === 'Vehicle__c.Model__c'
+            )
+        );
+    }
+);
+
+runTest(
+    'TEST 9: existing parent + MODIFIED child keeps independent child member',
+    () => {
+        const members = [
+            {
+                metadataType: 'CustomField',
+                metadataName: 'Vehicle__c.Model__c',
+                filePath: 'objects/Vehicle__c/fields/Model__c.field-meta.xml'
+            }
+        ];
+        const inventory = inventoryFor([
+            {
+                metadataType: 'CustomField',
+                metadataName: 'Vehicle__c.Model__c',
+                state: DESTINATION_STATE.EXISTS
+            }
+        ]);
+
+        const collapsed = collapseRedundantNewCustomObjectChildren(
+            members,
+            inventory,
+            getState
+        );
+
+        assert.strictEqual(collapsed.length, 1);
+        assert.strictEqual(
+            mapExistenceToChangeClass(
+                getState(
+                    inventory,
+                    'CustomField',
+                    'Vehicle__c.Model__c'
+                )
+            ),
+            CHANGE_CLASS.MODIFIED
+        );
+    }
+);
+
+runTest('collapse skipped when unrelated deployed member exists', () => {
+    const members = [
+        {
+            metadataType: 'CustomObject',
+            metadataName: 'Vehicle__c',
+            filePath: 'x'
+        },
+        {
+            metadataType: 'CustomField',
+            metadataName: 'Vehicle__c.Model__c',
+            filePath: 'y'
+        },
+        {
+            metadataType: 'ApexClass',
+            metadataName: 'Helper',
+            filePath: 'classes/Helper.cls'
+        }
+    ];
+    const inventory = inventoryFor([
+        {
+            metadataType: 'CustomObject',
+            metadataName: 'Vehicle__c',
+            state: DESTINATION_STATE.MISSING
+        },
+        {
+            metadataType: 'CustomField',
+            metadataName: 'Vehicle__c.Model__c',
+            state: DESTINATION_STATE.MISSING
+        },
+        {
+            metadataType: 'ApexClass',
+            metadataName: 'Helper',
+            state: DESTINATION_STATE.MISSING
+        }
+    ]);
+
+    const collapsed = collapseRedundantNewCustomObjectChildren(
+        members,
+        inventory,
+        getState
     );
-    assert.deepStrictEqual(collectFinalDeploymentMembers(FULL_PACKAGE, null), []);
-    assert.deepStrictEqual(
-        collectFinalDeploymentMembers(FULL_PACKAGE, []),
-        []
+
+    assert.strictEqual(collapsed.length, 3);
+});
+
+runTest('resolveCustomObjectChildOwner parses object API name', () => {
+    assert.strictEqual(
+        resolveCustomObjectChildOwner(
+            'CustomField',
+            'Vehicle__c.Model__c'
+        ),
+        'Vehicle__c'
+    );
+    assert.strictEqual(
+        resolveCustomObjectChildOwner('ApexClass', 'Foo'),
+        null
     );
 });
 

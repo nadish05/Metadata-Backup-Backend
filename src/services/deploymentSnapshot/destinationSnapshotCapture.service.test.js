@@ -745,22 +745,94 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
     });
 
     await runTest(
-        'missing selectedMetadata fails closed without capturing package dependencies',
+        'missing deployment package metadata fails closed',
         async () => {
             const harness = createHarness();
             const capture = await harness.service.captureAndSealForDeploy({
                 ...BASE_ARGS,
-                selectedMetadata: undefined
+                generatedDeploymentPackage: { metadata: [] }
             });
 
             assert.strictEqual(capture.ok, false);
-            assert.match(capture.message, /selected metadata is required/);
+            assert.match(capture.message, /final deployment package metadata/);
             assert.strictEqual(harness.events.length, 0);
         }
     );
 
     await runTest(
-        'TEST 11: RecordType selected with dependency-only package members succeeds',
+        'AUTO_INCLUDED allowlisted dependency is captured when not in selectedMetadata',
+        async () => {
+            const harness = createHarness({
+                buildDestinationInventory: async () =>
+                    inventoryFor([
+                        {
+                            metadataType: 'ApexClass',
+                            metadataName: 'AccountService',
+                            state: DESTINATION_STATE.EXISTS
+                        },
+                        {
+                            metadataType: 'ApexClass',
+                            metadataName: 'AutoIncludedHelper',
+                            state: DESTINATION_STATE.MISSING
+                        }
+                    ]),
+                collectExpectedAfterArtifact: async ({ member }) => {
+                    const packed = packMemberFiles([
+                        {
+                            relativePath: `classes/${member.metadataName}.cls`,
+                            bytes: Buffer.from('public class X {}\n', 'utf8')
+                        }
+                    ]);
+
+                    return {
+                        artifactBytes: packed,
+                        expectedAfterHash: hashBytes(packed),
+                        expectedAfterRepresentation:
+                            EXPECTED_AFTER_REPRESENTATION.RAW
+                    };
+                }
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                ...BASE_ARGS,
+                selectedMetadata: [
+                    { metadataType: 'ApexClass', metadataName: 'AccountService' }
+                ],
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'ApexClass',
+                            metadataName: 'AccountService',
+                            filePath: 'classes/AccountService.cls'
+                        },
+                        {
+                            metadataType: 'ApexClass',
+                            metadataName: 'AutoIncludedHelper',
+                            filePath: 'classes/AutoIncludedHelper.cls'
+                        }
+                    ]
+                },
+                generatedWorkspace: {
+                    workspacePath: '/tmp/ws-auto-dep'
+                }
+            });
+
+            assert.strictEqual(capture.ok, true);
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+            assert.ok(
+                members.some(
+                    (m) =>
+                        m.metadataType === 'ApexClass' &&
+                        m.metadataName === 'AutoIncludedHelper'
+                )
+            );
+        }
+    );
+
+    await runTest(
+        'TEST 11: unsupported BusinessProcess in deployment package fails closed',
         async () => {
             const afterPacked = packMemberFiles([
                 {
@@ -804,12 +876,6 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
                             filePath: OPPORTUNITY_RECORD_TYPE_PATH
                         },
                         {
-                            metadataType: 'CustomField',
-                            metadataName: 'Opportunity.Approval_Status__c',
-                            filePath:
-                                'force-app/main/default/objects/Opportunity/fields/Approval_Status__c.field-meta.xml'
-                        },
-                        {
                             metadataType: 'BusinessProcess',
                             metadataName: 'Opportunity.New Sales Process',
                             filePath:
@@ -819,26 +885,9 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
                 }
             });
 
-            assert.strictEqual(capture.ok, true);
-            const members = await harness.captureService.getMembers(
-                capture.snapshot.snapshotId
-            );
-            assert.strictEqual(members.length, 1);
-            assert.strictEqual(members[0].metadataType, 'RecordType');
-            assert.strictEqual(
-                members[0].metadataName,
-                'Opportunity.Enterprise_Deal'
-            );
-            assert.strictEqual(
-                members[0].captureStatus,
-                MEMBER_CAPTURE_STATUS.ABSENT_PROVEN
-            );
-            assert.ok(
-                !members.some((m) => m.metadataType === 'BusinessProcess')
-            );
-            assert.ok(
-                !members.some((m) => m.metadataType === 'CustomField')
-            );
+            assert.strictEqual(capture.ok, false);
+            assert.match(capture.message, /BusinessProcess/);
+            assert.match(capture.message, /not in the V1 snapshot allowlist/);
         }
     );
 })();

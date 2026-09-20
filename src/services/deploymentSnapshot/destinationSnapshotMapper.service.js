@@ -19,6 +19,15 @@ const SNAPSHOT_CAPTURE_ALLOWLIST = Object.freeze([
 
 const ALLOWLIST_SET = new Set(SNAPSHOT_CAPTURE_ALLOWLIST);
 
+const CUSTOM_OBJECT_CHILD_METADATA_TYPES = Object.freeze(
+    new Set([
+        'CustomField',
+        'ListView',
+        'ValidationRule',
+        'RecordType'
+    ])
+);
+
 function isCaptureAllowlisted(metadataType) {
     return ALLOWLIST_SET.has(metadataType);
 }
@@ -52,49 +61,192 @@ function buildSelectedMemberKeySet(selectedMetadata) {
     return keys;
 }
 
+function normalizeDeployedMember(item) {
+    const metadataType = item?.metadataType || item?.type || null;
+    const metadataName = item?.metadataName || item?.name || null;
+
+    if (!metadataType || !metadataName) {
+        return null;
+    }
+
+    return {
+        metadataType,
+        metadataName,
+        filePath: item.filePath || null
+    };
+}
+
 /**
- * Snapshot rollback candidates: selected primary metadata intersected with
- * final package metadata (for filePath). Dependencies in metadata[] alone
- * are not captured unless also present in selectedMetadata.
+ * Rollback evaluation candidates: every member in the final deployment
+ * package metadata[] (actual CLI deploy set). User selectedMetadata is not
+ * used for membership; allowlist gating happens at capture time.
+ *
+ * @param {object|null|undefined} generatedDeploymentPackage
+ * @param {Array<object>|null|undefined} [_selectedMetadata] ignored; provenance/UI only
  */
 function collectFinalDeploymentMembers(
     generatedDeploymentPackage,
-    selectedMetadata
+    _selectedMetadata
 ) {
     const metadata = Array.isArray(generatedDeploymentPackage?.metadata)
         ? generatedDeploymentPackage.metadata
         : [];
-    const selectedKeys = buildSelectedMemberKeySet(selectedMetadata);
     const seen = new Set();
     const members = [];
 
     for (const item of metadata) {
-        const key = buildMemberIdentityKey(item);
+        const normalized = normalizeDeployedMember(item);
 
-        if (!key || !selectedKeys.has(key)) {
+        if (!normalized) {
             continue;
         }
 
-        if (seen.has(key)) {
+        const key = buildMemberIdentityKey(normalized);
+
+        if (!key || seen.has(key)) {
             continue;
         }
 
         seen.add(key);
-        members.push({
-            metadataType: item.metadataType || item.type,
-            metadataName: item.metadataName || item.name,
-            filePath: item.filePath || null
-        });
+        members.push(normalized);
     }
 
     return members;
 }
 
-function buildMissingSelectedMetadataReason() {
+function resolveCustomObjectChildOwner(metadataType, metadataName) {
+    if (!CUSTOM_OBJECT_CHILD_METADATA_TYPES.has(metadataType)) {
+        return null;
+    }
+
+    const separator = String(metadataName || '').indexOf('.');
+
+    if (separator <= 0) {
+        return null;
+    }
+
+    return metadataName.slice(0, separator);
+}
+
+function memberKey(member) {
+    return buildMemberIdentityKey(member);
+}
+
+/**
+ * When a CustomObject is NEW and every other deployed rollback candidate is a
+ * NEW child of that object, snapshot/rollback may use DELETE CustomObject only.
+ *
+ * @param {Array<object>} members deployed rollback candidates (pre-allowlist or post)
+ * @param {Map} inventory destination inventory from buildDestinationInventory
+ * @param {Function} inventoryStateFn (inventory, type, name) => state
+ */
+function collapseRedundantNewCustomObjectChildren(
+    members,
+    inventory,
+    inventoryStateFn
+) {
+    if (!Array.isArray(members) || members.length === 0) {
+        return members;
+    }
+
+    const resolveState =
+        typeof inventoryStateFn === 'function'
+            ? inventoryStateFn
+            : () => DESTINATION_STATE.UNKNOWN;
+
+    const changeClassFor = (member) =>
+        mapExistenceToChangeClass(
+            resolveState(
+                inventory,
+                member.metadataType,
+                member.metadataName
+            )
+        );
+
+    const memberByKey = new Map(members.map((m) => [memberKey(m), m]));
+    const keysToRemove = new Set();
+
+    for (const objectMember of members) {
+        if (objectMember.metadataType !== 'CustomObject') {
+            continue;
+        }
+
+        const objectApiName = objectMember.metadataName;
+
+        if (changeClassFor(objectMember) !== CHANGE_CLASS.NEW) {
+            continue;
+        }
+
+        const childMembers = members.filter((candidate) => {
+            if (candidate.metadataType === 'CustomObject') {
+                return false;
+            }
+
+            return (
+                resolveCustomObjectChildOwner(
+                    candidate.metadataType,
+                    candidate.metadataName
+                ) === objectApiName
+            );
+        });
+
+        const unrelatedMembers = members.filter((candidate) => {
+            const key = memberKey(candidate);
+
+            if (key === memberKey(objectMember)) {
+                return false;
+            }
+
+            if (
+                resolveCustomObjectChildOwner(
+                    candidate.metadataType,
+                    candidate.metadataName
+                ) === objectApiName
+            ) {
+                return false;
+            }
+
+            return true;
+        });
+
+        if (unrelatedMembers.length > 0) {
+            continue;
+        }
+
+        if (!childMembers.length) {
+            continue;
+        }
+
+        const allChildrenNew = childMembers.every(
+            (child) => changeClassFor(child) === CHANGE_CLASS.NEW
+        );
+
+        if (!allChildrenNew) {
+            continue;
+        }
+
+        for (const child of childMembers) {
+            keysToRemove.add(memberKey(child));
+        }
+    }
+
+    if (!keysToRemove.size) {
+        return members;
+    }
+
+    return members.filter((member) => !keysToRemove.has(memberKey(member)));
+}
+
+function buildMissingDeployedMetadataReason() {
     return (
-        'Destination snapshot capture failed: selected metadata is required ' +
-        'for snapshot capture.'
+        'Destination snapshot capture failed: final deployment package metadata ' +
+        'is required for snapshot capture.'
     );
+}
+
+/** @deprecated use buildMissingDeployedMetadataReason */
+function buildMissingSelectedMetadataReason() {
+    return buildMissingDeployedMetadataReason();
 }
 
 function mapExistenceToChangeClass(existenceState) {
@@ -132,13 +284,17 @@ function buildMissingArtifactReason(metadataType, metadataName) {
 
 module.exports = {
     SNAPSHOT_CAPTURE_ALLOWLIST,
+    CUSTOM_OBJECT_CHILD_METADATA_TYPES,
     isCaptureAllowlisted,
     buildMemberIdentityKey,
     buildSelectedMemberKeySet,
     collectFinalDeploymentMembers,
+    collapseRedundantNewCustomObjectChildren,
+    resolveCustomObjectChildOwner,
     mapExistenceToChangeClass,
     buildUnsupportedReason,
     buildUnknownReason,
     buildMissingArtifactReason,
+    buildMissingDeployedMetadataReason,
     buildMissingSelectedMetadataReason
 };
