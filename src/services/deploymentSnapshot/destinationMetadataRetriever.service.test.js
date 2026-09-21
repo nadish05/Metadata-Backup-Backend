@@ -464,6 +464,84 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves StandardValueSet logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'StandardValueSet',
+            'LeadSource'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/standardValueSets/LeadSource.standardValueSet-meta.xml'
+        });
+    });
+
+    await runTest('StandardValueSet logical paths for Opportunity picklists', () => {
+        const stage = buildExpectedMemberSourcePaths(
+            'StandardValueSet',
+            'OpportunityStage'
+        );
+        const type = buildExpectedMemberSourcePaths(
+            'StandardValueSet',
+            'OpportunityType'
+        );
+
+        assert.ok(
+            stage.logical.endsWith(
+                '/standardValueSets/OpportunityStage.standardValueSet-meta.xml'
+            )
+        );
+        assert.ok(
+            type.logical.endsWith(
+                '/standardValueSets/OpportunityType.standardValueSet-meta.xml'
+            )
+        );
+    });
+
+    await runTest('selects only the StandardValueSet logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/standardValueSets/LeadSource.standardValueSet-meta.xml',
+                    bytes: Buffer.from('lead')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/standardValueSets/OpportunityStage.standardValueSet-meta.xml',
+                    bytes: Buffer.from('stage')
+                }
+            ],
+            'StandardValueSet',
+            'LeadSource'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/standardValueSets/LeadSource.standardValueSet-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when StandardValueSet logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/standardValueSets/OpportunityStage.standardValueSet-meta.xml',
+                            bytes: Buffer.from('stage')
+                        }
+                    ],
+                    'StandardValueSet',
+                    'LeadSource'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('buildExpectedMemberSourcePaths resolves BusinessProcess logical path', () => {
         const paths = buildExpectedMemberSourcePaths(
             'BusinessProcess',

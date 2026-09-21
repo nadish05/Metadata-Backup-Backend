@@ -7,6 +7,7 @@ const {
     buildExistenceQuery,
     buildValidationRuleSoql,
     buildBusinessProcessSoql,
+    buildStandardValueSetSoql,
     usesToolingApi
 } = require('./destinationExistenceQueries');
 const {
@@ -272,6 +273,105 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
                 result.inventory.get(
                     'BusinessProcess:Opportunity.New Sales Process'
                 ).state,
+                DESTINATION_STATE.UNKNOWN
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('buildStandardValueSetSoql targets FullName', () => {
+        const soql = buildStandardValueSetSoql('LeadSource');
+
+        assert.ok(soql.includes("FullName = 'LeadSource'"));
+        assert.ok(soql.includes('FROM StandardValueSet'));
+    });
+
+    await runTest('buildStandardValueSetSoql returns null for unsafe names', () => {
+        assert.strictEqual(buildStandardValueSetSoql(''), null);
+        assert.strictEqual(buildStandardValueSetSoql('bad name'), null);
+    });
+
+    await runTest('buildExistenceQuery wires StandardValueSet to Tooling SOQL', () => {
+        assert.strictEqual(usesToolingApi('StandardValueSet'), true);
+        const soql = buildExistenceQuery('StandardValueSet', 'OpportunityStage');
+
+        assert.ok(soql.includes("FullName = 'OpportunityStage'"));
+    });
+
+    await runTest('inventory reports EXISTS when StandardValueSet query returns rows', async () => {
+        const stub = stubToolingQuery({ totalSize: 1, records: [{ Id: '0' }] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'StandardValueSet',
+                        metadataName: 'LeadSource'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('StandardValueSet:LeadSource').state,
+                DESTINATION_STATE.EXISTS
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) => url.includes('/tooling/query'))
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes("FullName = 'LeadSource'")
+                )
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports MISSING when StandardValueSet query is empty', async () => {
+        const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'StandardValueSet',
+                        metadataName: 'OpportunityType'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('StandardValueSet:OpportunityType').state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when StandardValueSet query fails', async () => {
+        const stub = stubToolingQuery({ fail: true });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'StandardValueSet',
+                        metadataName: 'OpportunityStage'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('StandardValueSet:OpportunityStage').state,
                 DESTINATION_STATE.UNKNOWN
             );
         } finally {

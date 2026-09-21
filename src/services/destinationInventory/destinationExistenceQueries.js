@@ -22,7 +22,8 @@ function usesToolingApi(type) {
         type === 'CustomApplication' ||
         type === 'FlexiPage' ||
         type === 'LightningComponentBundle' ||
-        type === 'Flow'
+        type === 'Flow' ||
+        type === 'StandardValueSet'
     );
 }
 
@@ -255,6 +256,20 @@ function buildListViewSoql(name) {
     );
 }
 
+function buildStandardValueSetSoql(name) {
+    const memberName = String(name || '').trim();
+
+    if (!isSafeSalesforceApiName(memberName)) {
+        return null;
+    }
+
+    return (
+        'SELECT Id, FullName FROM StandardValueSet ' +
+        `WHERE FullName = '${escapeSoql(memberName)}' ` +
+        'LIMIT 1'
+    );
+}
+
 function buildBusinessProcessSoql(name) {
     const separator = String(name || '').indexOf('.');
 
@@ -407,10 +422,8 @@ function buildExistenceQuery(type, name) {
         case 'EmailAlert':
             return null;
 
-        // StandardValueSet: no supported SOQL/Tooling existence query in this
-        // catalog. Destination remains UNKNOWN. Do not invent a query.
         case 'StandardValueSet':
-            return null;
+            return buildStandardValueSetSoql(name);
 
         default:
             return null;
@@ -431,5 +444,6 @@ module.exports = {
     buildListViewSoql,
     buildRecordTypeSoql,
     buildBusinessProcessSoql,
+    buildStandardValueSetSoql,
     buildExistenceQuery
 };

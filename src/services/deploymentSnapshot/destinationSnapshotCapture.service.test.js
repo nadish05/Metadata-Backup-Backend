@@ -867,7 +867,7 @@ const BASE_ARGS = {
     );
 
     await runTest(
-        'TEST 11: unsupported StandardValueSet in deployment package fails closed',
+        'TEST 11: unsupported Flow in deployment package fails closed',
         async () => {
             const afterPacked = packMemberFiles([
                 {
@@ -884,8 +884,8 @@ const BASE_ARGS = {
                             state: DESTINATION_STATE.MISSING
                         },
                         {
-                            metadataType: 'StandardValueSet',
-                            metadataName: 'OpportunityStage',
+                            metadataType: 'Flow',
+                            metadataName: 'My_Flow',
                             state: DESTINATION_STATE.EXISTS
                         }
                     ]),
@@ -916,18 +916,158 @@ const BASE_ARGS = {
                             filePath: OPPORTUNITY_RECORD_TYPE_PATH
                         },
                         {
-                            metadataType: 'StandardValueSet',
-                            metadataName: 'OpportunityStage',
+                            metadataType: 'Flow',
+                            metadataName: 'My_Flow',
                             filePath:
-                                'force-app/main/default/standardValueSets/OpportunityStage.standardValueSet-meta.xml'
+                                'force-app/main/default/flows/My_Flow.flow-meta.xml'
                         }
                     ]
                 }
             });
 
             assert.strictEqual(capture.ok, false);
-            assert.match(capture.message, /StandardValueSet/);
+            assert.match(capture.message, /Flow/);
             assert.match(capture.message, /not in the V1 snapshot allowlist/);
+        }
+    );
+
+    await runTest(
+        'StandardValueSet EXISTS unchanged omits snapshot member',
+        async () => {
+            const svsPath =
+                'force-app/main/default/standardValueSets/LeadSource.standardValueSet-meta.xml';
+            const packed = packMemberFiles([
+                {
+                    relativePath: svsPath,
+                    bytes: Buffer.from(
+                        '<?xml version="1.0" encoding="UTF-8"?><StandardValueSet xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>LeadSource</fullName></StandardValueSet>',
+                        'utf8'
+                    )
+                }
+            ]);
+            const harness = createHarness({
+                retrieveDestinationMember: async () => ({
+                    artifactBytes: packed
+                }),
+                collectExpectedAfterArtifact: async () => ({
+                    artifactBytes: packed,
+                    expectedAfterHash: hashBytes(packed),
+                    expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
+                })
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                ...BASE_ARGS,
+                historyId: 'hist-svs-unchanged',
+                selectedMetadata: [],
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'StandardValueSet',
+                            metadataName: 'LeadSource',
+                            filePath: svsPath
+                        }
+                    ]
+                }
+            });
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(capture.snapshot, null);
+            assert.strictEqual(harness.retrieveCalls.length, 1);
+            assert.strictEqual(
+                harness.retrieveCalls[0].metadataType,
+                'StandardValueSet'
+            );
+        }
+    );
+
+    await runTest(
+        'AUTO_INCLUDED StandardValueSet in generated package is captured when NEW',
+        async () => {
+            const svsPath =
+                'force-app/main/default/standardValueSets/LeadSource.standardValueSet-meta.xml';
+            const svsAfter = packMemberFiles([
+                {
+                    relativePath: svsPath,
+                    bytes: Buffer.from(
+                        '<?xml version="1.0" encoding="UTF-8"?><StandardValueSet xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>LeadSource</fullName></StandardValueSet>',
+                        'utf8'
+                    )
+                }
+            ]);
+            const recordTypeAfter = packMemberFiles([
+                {
+                    relativePath: OPPORTUNITY_RECORD_TYPE_PATH,
+                    bytes: Buffer.from('<RecordType/>', 'utf8')
+                }
+            ]);
+            const harness = createHarness({
+                buildDestinationInventory: async ({ items }) =>
+                    inventoryFor(
+                        items.map((item) => ({
+                            ...item,
+                            state: DESTINATION_STATE.MISSING
+                        }))
+                    ),
+                collectExpectedAfterArtifact: async (args) => {
+                    if (args.metadataType === 'StandardValueSet') {
+                        return {
+                            artifactBytes: svsAfter,
+                            expectedAfterHash: hashBytes(svsAfter),
+                            expectedAfterRepresentation:
+                                EXPECTED_AFTER_REPRESENTATION.RAW
+                        };
+                    }
+
+                    return {
+                        artifactBytes: recordTypeAfter,
+                        expectedAfterHash: hashBytes(recordTypeAfter),
+                        expectedAfterRepresentation:
+                            EXPECTED_AFTER_REPRESENTATION.RAW
+                    };
+                }
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                destinationOrgId: BASE_ARGS.destinationOrgId,
+                sourceOrgId: BASE_ARGS.sourceOrgId,
+                historyId: 'hist-auto-svs',
+                refreshToken: BASE_ARGS.refreshToken,
+                instanceUrl: BASE_ARGS.instanceUrl,
+                selectedMetadata: [
+                    {
+                        metadataType: 'RecordType',
+                        metadataName: 'Opportunity.Enterprise_Deal'
+                    }
+                ],
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'RecordType',
+                            metadataName: 'Opportunity.Enterprise_Deal',
+                            filePath: OPPORTUNITY_RECORD_TYPE_PATH
+                        },
+                        {
+                            metadataType: 'StandardValueSet',
+                            metadataName: 'LeadSource',
+                            filePath: svsPath
+                        }
+                    ]
+                }
+            });
+
+            assert.strictEqual(capture.ok, true);
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+            assert.ok(
+                members.some(
+                    (m) =>
+                        m.metadataType === 'StandardValueSet' &&
+                        m.metadataName === 'LeadSource' &&
+                        m.changeClass === CHANGE_CLASS.NEW
+                )
+            );
         }
     );
 

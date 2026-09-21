@@ -15,7 +15,8 @@ const SNAPSHOT_CAPTURE_ALLOWLIST = Object.freeze([
     'ListView',
     'ValidationRule',
     'RecordType',
-    'BusinessProcess'
+    'BusinessProcess',
+    'StandardValueSet'
 ]);
 
 const ALLOWLIST_SET = new Set(SNAPSHOT_CAPTURE_ALLOWLIST);

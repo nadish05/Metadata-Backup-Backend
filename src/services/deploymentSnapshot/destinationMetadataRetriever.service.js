@@ -262,6 +262,18 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'StandardValueSet' && metadataName) {
+        const setName = String(metadataName).trim();
+
+        if (!setName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/standardValueSets/${setName}.standardValueSet-meta.xml`
+        };
+    }
+
     if (metadataType === 'BusinessProcess' && metadataName) {
         const separator = metadataName.indexOf('.');
         const objectName =
@@ -299,7 +311,8 @@ function selectLogicalMemberFiles(
             'ListView',
             'ValidationRule',
             'RecordType',
-            'BusinessProcess'
+            'BusinessProcess',
+            'StandardValueSet'
         ].includes(metadataType)
     ) {
         return retrievedFiles;
