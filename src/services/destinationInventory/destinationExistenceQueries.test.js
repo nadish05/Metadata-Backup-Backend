@@ -169,8 +169,8 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         assert.strictEqual(buildBusinessProcessSoql(''), null);
     });
 
-    await runTest('buildExistenceQuery wires BusinessProcess to Tooling SOQL', () => {
-        assert.strictEqual(usesToolingApi('BusinessProcess'), true);
+    await runTest('buildExistenceQuery wires BusinessProcess to REST SOQL', () => {
+        assert.strictEqual(usesToolingApi('BusinessProcess'), false);
         const soql = buildExistenceQuery(
             'BusinessProcess',
             'Opportunity.New Sales Process'
@@ -178,6 +178,7 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
 
         assert.ok(soql.includes("TableEnumOrId = 'Opportunity'"));
         assert.ok(soql.includes("Name = 'New Sales Process'"));
+        assert.ok(soql.includes('FROM BusinessProcess'));
     });
 
     await runTest('inventory reports EXISTS when BusinessProcess query returns rows', async () => {
@@ -200,6 +201,26 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
                     'BusinessProcess:Opportunity.New Sales Process'
                 ).state,
                 DESTINATION_STATE.EXISTS
+            );
+            assert.ok(
+                stub.requestedUrls.some(
+                    (url) =>
+                        url.includes('/query') && !url.includes('/tooling/query')
+                )
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes(
+                        "Name = 'New Sales Process'"
+                    )
+                )
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes(
+                        "TableEnumOrId = 'Opportunity'"
+                    )
+                )
             );
         } finally {
             stub.restore();

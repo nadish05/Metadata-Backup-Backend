@@ -19,7 +19,6 @@ function usesToolingApi(type) {
         type === 'ApexPage' ||
         type === 'CustomField' ||
         type === 'ValidationRule' ||
-        type === 'BusinessProcess' ||
         type === 'CustomApplication' ||
         type === 'FlexiPage' ||
         type === 'LightningComponentBundle' ||
