@@ -249,10 +249,23 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         }
     });
 
-    await runTest('TEST 4 endpoint — Tooling query with FullName filter', () => {
+    await runTest('TEST 4 endpoint — Tooling query with DurableId filter', () => {
         assert.strictEqual(usesToolingApi('StandardValueSet'), true);
         const soql = buildStandardValueSetSoql(LEAD_SOURCE);
-        assert.ok(soql.includes("FullName = 'LeadSource'"));
+        assert.ok(soql.includes("DurableId = 'LeadSource'"));
+        assert.ok(!soql.includes('WHERE FullName'));
+        assert.strictEqual(
+            buildStandardValueSetSoql(OPPORTUNITY_STAGE).includes(
+                "DurableId = 'OpportunityStage'"
+            ),
+            true
+        );
+        assert.strictEqual(
+            buildStandardValueSetSoql(OPPORTUNITY_TYPE).includes(
+                "DurableId = 'OpportunityType'"
+            ),
+            true
+        );
         const paths = buildExpectedMemberSourcePaths('StandardValueSet', LEAD_SOURCE);
         assert.strictEqual(paths.logical, LEAD_SOURCE_PATH);
     });

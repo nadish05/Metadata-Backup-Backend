@@ -280,11 +280,17 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         }
     });
 
-    await runTest('buildStandardValueSetSoql targets FullName', () => {
-        const soql = buildStandardValueSetSoql('LeadSource');
+    await runTest('buildStandardValueSetSoql targets DurableId for Tooling filter', () => {
+        const leadSource = buildStandardValueSetSoql('LeadSource');
+        const opportunityStage = buildStandardValueSetSoql('OpportunityStage');
+        const opportunityType = buildStandardValueSetSoql('OpportunityType');
 
-        assert.ok(soql.includes("FullName = 'LeadSource'"));
-        assert.ok(soql.includes('FROM StandardValueSet'));
+        assert.ok(leadSource.includes("DurableId = 'LeadSource'"));
+        assert.ok(opportunityStage.includes("DurableId = 'OpportunityStage'"));
+        assert.ok(opportunityType.includes("DurableId = 'OpportunityType'"));
+        assert.ok(leadSource.includes('FROM StandardValueSet'));
+        assert.ok(!leadSource.includes('WHERE FullName'));
+        assert.ok(!opportunityStage.includes('WHERE FullName'));
     });
 
     await runTest('buildStandardValueSetSoql returns null for unsafe names', () => {
@@ -296,7 +302,8 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         assert.strictEqual(usesToolingApi('StandardValueSet'), true);
         const soql = buildExistenceQuery('StandardValueSet', 'OpportunityStage');
 
-        assert.ok(soql.includes("FullName = 'OpportunityStage'"));
+        assert.ok(soql.includes("DurableId = 'OpportunityStage'"));
+        assert.ok(!soql.includes('WHERE FullName'));
     });
 
     await runTest('inventory reports EXISTS when StandardValueSet query returns rows', async () => {
@@ -323,7 +330,12 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
             );
             assert.ok(
                 stub.requestedUrls.some((url) =>
-                    decodeURIComponent(url).includes("FullName = 'LeadSource'")
+                    decodeURIComponent(url).includes("DurableId = 'LeadSource'")
+                )
+            );
+            assert.ok(
+                !stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes("WHERE FullName")
                 )
             );
         } finally {

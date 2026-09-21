@@ -263,9 +263,11 @@ function buildStandardValueSetSoql(name) {
         return null;
     }
 
+    // Tooling StandardValueSet requires DurableId (or MasterLabel) in WHERE;
+    // MDAPI member fullName matches DurableId (e.g. LeadSource, OpportunityStage).
     return (
-        'SELECT Id, FullName FROM StandardValueSet ' +
-        `WHERE FullName = '${escapeSoql(memberName)}' ` +
+        'SELECT Id, DurableId FROM StandardValueSet ' +
+        `WHERE DurableId = '${escapeSoql(memberName)}' ` +
         'LIMIT 1'
     );
 }
