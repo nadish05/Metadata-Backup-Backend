@@ -21,6 +21,9 @@ const {
 const {
     buildRecordTypeSemanticFromWorkspaceArtifact
 } = require('./recordTypeSemanticExpectedAfter.service');
+const {
+    buildExpectedMemberSourcePaths
+} = require('./destinationMetadataRetriever.service');
 
 const CANONICAL_ELIGIBLE_TYPES = new Set(CANONICAL_EXPECTED_AFTER_TYPES);
 
@@ -78,10 +81,31 @@ async function collectDirectoryFiles(workspacePath, directoryRelative, acc = [])
     return acc;
 }
 
+function resolveWorkspaceRelativeFilePath(member) {
+    const metadataType = member?.metadataType;
+    const metadataName = member?.metadataName;
+    const explicitPath = toPosix(member?.filePath);
+
+    if (explicitPath) {
+        return explicitPath;
+    }
+
+    if (metadataType === 'CompactLayout' && metadataName) {
+        const expectedPaths = buildExpectedMemberSourcePaths(
+            metadataType,
+            metadataName
+        );
+
+        return expectedPaths?.logical ? toPosix(expectedPaths.logical) : null;
+    }
+
+    return null;
+}
+
 async function collectWorkspaceMemberFiles(workspacePath, member) {
     const metadataType = member?.metadataType;
     const metadataName = member?.metadataName;
-    const relativeFilePath = toPosix(member?.filePath);
+    const relativeFilePath = resolveWorkspaceRelativeFilePath(member);
 
     if (!workspacePath) {
         throw new Error(

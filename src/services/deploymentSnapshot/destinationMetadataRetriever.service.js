@@ -290,6 +290,22 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'CompactLayout' && metadataName) {
+        const separator = metadataName.indexOf('.');
+        const objectName =
+            separator > 0 ? metadataName.slice(0, separator) : null;
+        const layoutName =
+            separator > 0 ? metadataName.slice(separator + 1) : null;
+
+        if (!objectName || !layoutName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/objects/${objectName}/compactLayouts/${layoutName}.compactLayout-meta.xml`
+        };
+    }
+
     return null;
 }
 
@@ -312,6 +328,7 @@ function selectLogicalMemberFiles(
             'ValidationRule',
             'RecordType',
             'BusinessProcess',
+            'CompactLayout',
             'StandardValueSet'
         ].includes(metadataType)
     ) {

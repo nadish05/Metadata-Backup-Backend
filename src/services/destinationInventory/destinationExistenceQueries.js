@@ -23,7 +23,8 @@ function usesToolingApi(type) {
         type === 'FlexiPage' ||
         type === 'LightningComponentBundle' ||
         type === 'Flow' ||
-        type === 'StandardValueSet'
+        type === 'StandardValueSet' ||
+        type === 'CompactLayout'
     );
 }
 
@@ -237,6 +238,28 @@ function buildValidationRuleSoql(name) {
     );
 }
 
+function buildCompactLayoutSoql(name) {
+    const separator = String(name || '').indexOf('.');
+
+    if (separator <= 0) {
+        return null;
+    }
+
+    const objectApiName = name.slice(0, separator).trim();
+    const layoutDeveloperName = name.slice(separator + 1).trim();
+
+    if (!objectApiName || !layoutDeveloperName) {
+        return null;
+    }
+
+    return (
+        'SELECT Id, DeveloperName, SobjectType FROM CompactLayout ' +
+        `WHERE DeveloperName = '${escapeSoql(layoutDeveloperName)}' ` +
+        `AND SobjectType = '${escapeSoql(objectApiName)}' ` +
+        'LIMIT 1'
+    );
+}
+
 function buildListViewSoql(name) {
     if (!name.includes('.')) {
         return null;
@@ -368,6 +391,9 @@ function buildExistenceQuery(type, name) {
         case 'ListView':
             return buildListViewSoql(name);
 
+        case 'CompactLayout':
+            return buildCompactLayoutSoql(name);
+
         case 'ValidationRule':
             return buildValidationRuleSoql(name);
 
@@ -444,6 +470,7 @@ module.exports = {
     buildCustomFieldSoql,
     buildValidationRuleSoql,
     buildListViewSoql,
+    buildCompactLayoutSoql,
     buildRecordTypeSoql,
     buildBusinessProcessSoql,
     buildStandardValueSetSoql,

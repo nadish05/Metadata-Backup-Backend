@@ -117,4 +117,34 @@ function runTest(name, fn) {
         assert.ok(result.files[0].bytes.equals(crlf));
         await fs.promises.rm(root, { recursive: true, force: true });
     });
+
+    await runTest(
+        'CompactLayout expected-after derives logical path when filePath is null',
+        async () => {
+            const root = fs.mkdtempSync(
+                path.join(os.tmpdir(), 'p0r51-after-compact-layout-')
+            );
+            const rel =
+                'force-app/main/default/objects/Opportunity/compactLayouts/Opportunity_Highlights.compactLayout-meta.xml';
+            const xml = Buffer.from('<CompactLayout/>');
+
+            await fs.promises.mkdir(path.dirname(path.join(root, rel)), {
+                recursive: true
+            });
+            await fs.promises.writeFile(path.join(root, rel), xml);
+
+            const result = await collectExpectedAfterArtifact({
+                workspacePath: root,
+                member: {
+                    metadataType: 'CompactLayout',
+                    metadataName: 'Opportunity.Opportunity_Highlights',
+                    filePath: null
+                }
+            });
+
+            assert.strictEqual(result.files[0].relativePath, rel);
+            assert.ok(result.expectedAfterHash);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
 })();

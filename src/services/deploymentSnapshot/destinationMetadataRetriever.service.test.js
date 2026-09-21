@@ -607,6 +607,79 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves CompactLayout logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'CompactLayout',
+            'Opportunity.Opportunity_Highlights'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/objects/Opportunity/compactLayouts/Opportunity_Highlights.compactLayout-meta.xml'
+        });
+    });
+
+    await runTest('buildExpectedMemberSourcePaths resolves custom object CompactLayout path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'CompactLayout',
+            'Invoice__c.Invoice_Compact'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/objects/Invoice__c/compactLayouts/Invoice_Compact.compactLayout-meta.xml'
+        });
+    });
+
+    await runTest('selects only the CompactLayout logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/compactLayouts/Opportunity_Highlights.compactLayout-meta.xml',
+                    bytes: Buffer.from('layout')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/fields/Amount.field-meta.xml',
+                    bytes: Buffer.from('field')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/listViews/All.listView-meta.xml',
+                    bytes: Buffer.from('list')
+                }
+            ],
+            'CompactLayout',
+            'Opportunity.Opportunity_Highlights'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/objects/Opportunity/compactLayouts/Opportunity_Highlights.compactLayout-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when CompactLayout logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/objects/Opportunity/fields/Amount.field-meta.xml',
+                            bytes: Buffer.from('field')
+                        }
+                    ],
+                    'CompactLayout',
+                    'Opportunity.Opportunity_Highlights'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('fails closed when BusinessProcess logical file is missing', () => {
         assert.throws(
             () =>

@@ -7,6 +7,7 @@ const {
     buildExistenceQuery,
     buildValidationRuleSoql,
     buildBusinessProcessSoql,
+    buildCompactLayoutSoql,
     buildStandardValueSetSoql,
     usesToolingApi
 } = require('./destinationExistenceQueries');
@@ -150,6 +151,134 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
 
             assert.strictEqual(
                 result.inventory.get('ValidationRule:Vehicle__c.Require_Model').state,
+                DESTINATION_STATE.UNKNOWN
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('buildCompactLayoutSoql targets object and layout developer names', () => {
+        const soql = buildCompactLayoutSoql('Opportunity.Opportunity_Highlights');
+
+        assert.ok(soql.includes("DeveloperName = 'Opportunity_Highlights'"));
+        assert.ok(soql.includes("SobjectType = 'Opportunity'"));
+        assert.ok(soql.includes('FROM CompactLayout'));
+        assert.ok(soql.includes('LIMIT 1'));
+    });
+
+    await runTest('buildCompactLayoutSoql supports custom object members', () => {
+        const soql = buildCompactLayoutSoql('Invoice__c.Invoice_Compact');
+
+        assert.ok(soql.includes("DeveloperName = 'Invoice_Compact'"));
+        assert.ok(soql.includes("SobjectType = 'Invoice__c'"));
+    });
+
+    await runTest('buildCompactLayoutSoql returns null for missing dot', () => {
+        assert.strictEqual(buildCompactLayoutSoql('Opportunity_Highlights'), null);
+    });
+
+    await runTest('buildCompactLayoutSoql returns null for empty object segment', () => {
+        assert.strictEqual(buildCompactLayoutSoql('.Layout'), null);
+    });
+
+    await runTest('buildCompactLayoutSoql returns null for empty layout segment', () => {
+        assert.strictEqual(buildCompactLayoutSoql('Opportunity.'), null);
+    });
+
+    await runTest('buildCompactLayoutSoql escapes SOQL quotes', () => {
+        const soql = buildCompactLayoutSoql("Opportunity.Opp's_Layout");
+
+        assert.ok(soql.includes("DeveloperName = 'Opp\\'s_Layout'"));
+        assert.ok(soql.includes("SobjectType = 'Opportunity'"));
+    });
+
+    await runTest('buildExistenceQuery wires CompactLayout to Tooling SOQL', () => {
+        assert.strictEqual(usesToolingApi('CompactLayout'), true);
+        const soql = buildExistenceQuery(
+            'CompactLayout',
+            'Opportunity.Opportunity_Highlights'
+        );
+
+        assert.ok(soql.includes("DeveloperName = 'Opportunity_Highlights'"));
+        assert.ok(soql.includes("SobjectType = 'Opportunity'"));
+        assert.ok(soql.includes('FROM CompactLayout'));
+    });
+
+    await runTest('inventory reports EXISTS when CompactLayout query returns rows', async () => {
+        const stub = stubToolingQuery({ totalSize: 1, records: [{ Id: '0' }] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CompactLayout',
+                        metadataName: 'Opportunity.Opportunity_Highlights'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get(
+                    'CompactLayout:Opportunity.Opportunity_Highlights'
+                ).state,
+                DESTINATION_STATE.EXISTS
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) => url.includes('/tooling/query'))
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports MISSING when CompactLayout query is empty', async () => {
+        const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CompactLayout',
+                        metadataName: 'Opportunity.Opportunity_Highlights'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get(
+                    'CompactLayout:Opportunity.Opportunity_Highlights'
+                ).state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when CompactLayout query fails', async () => {
+        const stub = stubToolingQuery({ fail: true });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CompactLayout',
+                        metadataName: 'Opportunity.Opportunity_Highlights'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get(
+                    'CompactLayout:Opportunity.Opportunity_Highlights'
+                ).state,
                 DESTINATION_STATE.UNKNOWN
             );
         } finally {

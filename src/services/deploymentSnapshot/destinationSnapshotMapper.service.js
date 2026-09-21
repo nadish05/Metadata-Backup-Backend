@@ -16,6 +16,7 @@ const SNAPSHOT_CAPTURE_ALLOWLIST = Object.freeze([
     'ValidationRule',
     'RecordType',
     'BusinessProcess',
+    'CompactLayout',
     'StandardValueSet'
 ]);
 
