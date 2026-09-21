@@ -18,6 +18,9 @@ const {
     CANONICAL_EXPECTED_AFTER_TYPES,
     EXPECTED_AFTER_REPRESENTATION
 } = require('./snapshot.types');
+const {
+    buildRecordTypeSemanticFromWorkspaceArtifact
+} = require('./recordTypeSemanticExpectedAfter.service');
 
 const CANONICAL_ELIGIBLE_TYPES = new Set(CANONICAL_EXPECTED_AFTER_TYPES);
 
@@ -148,8 +151,33 @@ async function collectWorkspaceMemberFiles(workspacePath, member) {
     return files;
 }
 
+function buildRecordTypeSemanticExpectedAfterMetadata(member, artifactBytes) {
+    if (member?.metadataType !== 'RecordType') {
+        return {};
+    }
+
+    const semantic = buildRecordTypeSemanticFromWorkspaceArtifact(
+        artifactBytes,
+        member.metadataName
+    );
+
+    return {
+        expectedAfterRepresentation:
+            EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1,
+        canonicalExpectedAfterHash: semantic.canonicalHash,
+        recordTypeSemanticCaptureSpec: semantic.captureSpec
+    };
+}
+
 function buildCanonicalExpectedAfterMetadata(member, artifactBytes) {
     if (!CANONICAL_ELIGIBLE_TYPES.has(member?.metadataType)) {
+        if (member?.metadataType === 'RecordType') {
+            return buildRecordTypeSemanticExpectedAfterMetadata(
+                member,
+                artifactBytes
+            );
+        }
+
         return {
             expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
         };
@@ -172,7 +200,7 @@ function buildCanonicalExpectedAfterMetadata(member, artifactBytes) {
 async function collectExpectedAfterArtifact({ workspacePath, member } = {}) {
     const files = await collectWorkspaceMemberFiles(workspacePath, member);
     const artifactBytes = packMemberFiles(files);
-    const canonicalMetadata = buildCanonicalExpectedAfterMetadata(
+    const representationMetadata = buildCanonicalExpectedAfterMetadata(
         member,
         artifactBytes
     );
@@ -181,7 +209,7 @@ async function collectExpectedAfterArtifact({ workspacePath, member } = {}) {
         files,
         artifactBytes,
         expectedAfterHash: hashBytes(artifactBytes),
-        ...canonicalMetadata
+        ...representationMetadata
     };
 }
 

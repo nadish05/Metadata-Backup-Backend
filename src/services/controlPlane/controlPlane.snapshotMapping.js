@@ -105,14 +105,29 @@ function fromSalesforceSnapshot(record) {
     };
 }
 
+function isRecordTypeSemanticV1Member(member) {
+    return (
+        member?.metadataType === 'RecordType' &&
+        member?.expectedAfterRepresentation === 'RECORDTYPE_SEMANTIC_V1'
+    );
+}
+
 function assertSalesforceCanonicalRepresentationSupported(member) {
     const representation = member?.expectedAfterRepresentation;
     const canonicalHash = member?.canonicalExpectedAfterHash;
+    const hasCanonicalHash =
+        typeof canonicalHash === 'string' && canonicalHash.length > 0;
 
-    if (
-        representation === 'CANONICAL_V1' ||
-        (typeof canonicalHash === 'string' && canonicalHash.length > 0)
-    ) {
+    if (isRecordTypeSemanticV1Member(member) && hasCanonicalHash) {
+        throw new ControlPlaneError(
+            CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_SCHEMA_MISMATCH,
+            'RECORDTYPE_SEMANTIC_V1 snapshot members cannot be persisted to the ' +
+                'Salesforce control-plane Deployment_Snapshot_Member__c schema until ' +
+                'RecordType semantic member fields are configured.'
+        );
+    }
+
+    if (representation === 'CANONICAL_V1' || hasCanonicalHash) {
         throw new ControlPlaneError(
             CONTROL_PLANE_ERROR_CODE.CONTROL_PLANE_SCHEMA_MISMATCH,
             'CANONICAL_V1 snapshot members require Deployment_Snapshot_Member__c fields ' +

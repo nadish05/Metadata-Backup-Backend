@@ -51,6 +51,7 @@ const MEMBER_FIELDS = Object.freeze([
     'expectedAfterHash',
     'expectedAfterRepresentation',
     'canonicalExpectedAfterHash',
+    'recordTypeSemanticCaptureSpec',
     'artifactId',
     'artifactSize',
     'contentDocumentId',

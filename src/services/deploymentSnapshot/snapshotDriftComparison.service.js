@@ -47,7 +47,69 @@ function resolveExpectedAfterRepresentation(expectedAfterRepresentation) {
         return EXPECTED_AFTER_REPRESENTATION.CANONICAL_V1;
     }
 
+    if (
+        expectedAfterRepresentation ===
+        EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1
+    ) {
+        return EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1;
+    }
+
     return null;
+}
+
+function compareRecordTypeSemanticExpectedAfter({
+    canonicalExpectedAfterHash,
+    currentRecordTypeSemanticHash,
+    recordTypeSemanticCaptureSpec,
+    expectedAfterAvailable
+} = {}) {
+    const comparisonMode = EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1;
+
+    if (!isUsableHash(canonicalExpectedAfterHash)) {
+        return buildFailClosedResult({
+            expectedAfterAvailable,
+            comparisonMode,
+            failClosedReason: 'MISSING_CANONICAL_EXPECTED_AFTER_HASH'
+        });
+    }
+
+    if (
+        !recordTypeSemanticCaptureSpec ||
+        !Array.isArray(recordTypeSemanticCaptureSpec.picklistFieldApiNames) ||
+        !recordTypeSemanticCaptureSpec.picklistFieldApiNames.length
+    ) {
+        return buildFailClosedResult({
+            expectedAfterAvailable,
+            comparisonMode,
+            failClosedReason: 'MISSING_RECORDTYPE_SEMANTIC_CAPTURE_SPEC'
+        });
+    }
+
+    if (!isUsableHash(currentRecordTypeSemanticHash)) {
+        return buildFailClosedResult({
+            expectedAfterAvailable,
+            comparisonMode,
+            failClosedReason: 'MISSING_DESTINATION_RECORDTYPE_SEMANTIC_HASH'
+        });
+    }
+
+    if (currentRecordTypeSemanticHash === canonicalExpectedAfterHash) {
+        return {
+            classification: DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
+            expectedAfterAvailable: expectedAfterAvailable === true,
+            postDeploymentDriftClaimed: false,
+            comparisonMode,
+            failClosed: false
+        };
+    }
+
+    return {
+        classification: DRIFT_CLASSIFICATION.DRIFTED,
+        expectedAfterAvailable: expectedAfterAvailable === true,
+        postDeploymentDriftClaimed: true,
+        comparisonMode,
+        failClosed: false
+    };
 }
 
 function buildFailClosedResult(base = {}) {
@@ -228,6 +290,8 @@ function compareMemberExpectedAfterDrift({
     expectedAfterRepresentation,
     currentDestinationHash,
     currentDestinationArtifactBytes,
+    currentRecordTypeSemanticHash,
+    recordTypeSemanticCaptureSpec,
     isDeleteRollback = false
 } = {}) {
     const representation = resolveExpectedAfterRepresentation(
@@ -238,6 +302,26 @@ function compareMemberExpectedAfterDrift({
         return buildFailClosedResult({
             expectedAfterAvailable: isUsableHash(expectedAfterHash),
             failClosedReason: 'UNKNOWN_REPRESENTATION'
+        });
+    }
+
+    if (
+        metadataType === 'RecordType' &&
+        representation === EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1
+    ) {
+        if (isDeleteRollback) {
+            return buildFailClosedResult({
+                expectedAfterAvailable: isUsableHash(expectedAfterHash),
+                comparisonMode: EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1,
+                failClosedReason: 'RECORDTYPE_SEMANTIC_DELETE_UNSUPPORTED'
+            });
+        }
+
+        return compareRecordTypeSemanticExpectedAfter({
+            canonicalExpectedAfterHash,
+            currentRecordTypeSemanticHash,
+            recordTypeSemanticCaptureSpec,
+            expectedAfterAvailable: isUsableHash(expectedAfterHash)
         });
     }
 
@@ -362,5 +446,6 @@ module.exports = {
     compareDestinationToSnapshot,
     compareNewMemberForDeleteRollback,
     compareMemberExpectedAfterDrift,
+    compareRecordTypeSemanticExpectedAfter,
     resolveExpectedAfterRepresentation
 };

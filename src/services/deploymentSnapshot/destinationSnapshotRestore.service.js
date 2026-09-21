@@ -3,7 +3,8 @@
 const {
     SNAPSHOT_STATUS,
     CHANGE_CLASS,
-    MEMBER_CAPTURE_STATUS
+    MEMBER_CAPTURE_STATUS,
+    EXPECTED_AFTER_REPRESENTATION
 } = require('./snapshot.types');
 const { SnapshotNotFoundError, SnapshotIntegrityError, SnapshotValidationError } = require('./snapshot.errors');
 const { isCaptureAllowlisted } = require('./destinationSnapshotMapper.service');
@@ -68,6 +69,10 @@ const {
 } = require('./destinationMetadataRetriever.service');
 const { generateManifest } = require('../packageXml.service');
 const { runCheckOnlyDeployment, refreshAccessToken } = require('../checkOnlyDeployment.service');
+const {
+    buildRecordTypeSemanticFromDestination
+} = require('./recordTypeSemanticDestination.service');
+const { DEFAULT_API_VERSION } = require('../../config/salesforce');
 const { isCheckOnlySuccess } = require('../deploymentCheckOnlyGate.service');
 const { runDeploymentExecution } = require('../deploymentExecution.service');
 const {
@@ -348,6 +353,9 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const inventoryState = dependencies.getState || getState;
     const refreshAccessTokenFn =
         dependencies.refreshAccessToken || refreshAccessToken;
+    const buildRecordTypeSemanticDestinationFn =
+        dependencies.buildRecordTypeSemanticFromDestination ||
+        buildRecordTypeSemanticFromDestination;
     const deleteWorkspace =
         dependencies.deleteRestoreWorkspace || deleteRestoreWorkspace;
     const resolveOperationStore =
@@ -507,6 +515,68 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             accessToken: tokenResult.accessToken,
             instanceUrl: tokenResult.instanceUrl || args.instanceUrl
         };
+    }
+
+    async function resolveMemberExpectedAfterComparison({
+        member,
+        retrieved,
+        credentials,
+        deploymentApiVersion,
+        isDeleteRollback = false
+    }) {
+        const currentDestinationHash = hashBytes(retrieved.artifactBytes);
+        const comparisonInput = {
+            metadataType: member.metadataType,
+            metadataName: member.metadataName,
+            filePath: member.filePath,
+            destinationBeforeHash: member.destinationBeforeHash,
+            expectedAfterHash: member.expectedAfterHash,
+            canonicalExpectedAfterHash: member.canonicalExpectedAfterHash,
+            expectedAfterRepresentation: member.expectedAfterRepresentation,
+            currentDestinationHash,
+            currentDestinationArtifactBytes: retrieved.artifactBytes,
+            recordTypeSemanticCaptureSpec: member.recordTypeSemanticCaptureSpec,
+            isDeleteRollback
+        };
+
+        if (
+            member.metadataType === 'RecordType' &&
+            member.expectedAfterRepresentation ===
+                EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1
+        ) {
+            if (!credentials?.accessToken || !credentials?.instanceUrl) {
+                return compareMemberExpectedAfterDrift({
+                    ...comparisonInput,
+                    currentRecordTypeSemanticHash: null
+                });
+            }
+
+            try {
+                const semantic = await buildRecordTypeSemanticDestinationFn({
+                    accessToken: credentials.accessToken,
+                    instanceUrl: credentials.instanceUrl,
+                    metadataName: member.metadataName,
+                    recordTypeSemanticCaptureSpec:
+                        member.recordTypeSemanticCaptureSpec,
+                    destinationArtifactBytes: retrieved.artifactBytes,
+                    apiVersion: deploymentApiVersion || DEFAULT_API_VERSION
+                });
+
+                return compareMemberExpectedAfterDrift({
+                    ...comparisonInput,
+                    currentRecordTypeSemanticHash: semantic.canonicalHash
+                });
+            } catch (error) {
+                void error;
+
+                return compareMemberExpectedAfterDrift({
+                    ...comparisonInput,
+                    currentRecordTypeSemanticHash: null
+                });
+            }
+        }
+
+        return compareMemberExpectedAfterDrift(comparisonInput);
     }
 
     function buildExecutionTerminalPatch(
@@ -973,6 +1043,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
 
             const drift = [];
+            const driftCredentials = await resolvePostDeleteInventoryCredentials(args);
 
             for (const member of members) {
                 let retrieved;
@@ -1036,18 +1107,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     const currentDestinationHash = hashBytes(
                         retrieved.artifactBytes
                     );
-                    const comparison = compareMemberExpectedAfterDrift({
-                        metadataType: member.metadataType,
-                        metadataName: member.metadataName,
-                        filePath: member.filePath,
-                        expectedAfterHash: member.expectedAfterHash,
-                        canonicalExpectedAfterHash:
-                            member.canonicalExpectedAfterHash,
-                        expectedAfterRepresentation:
-                            member.expectedAfterRepresentation,
-                        currentDestinationHash,
-                        currentDestinationArtifactBytes:
-                            retrieved.artifactBytes,
+                    const comparison = await resolveMemberExpectedAfterComparison({
+                        member,
+                        retrieved,
+                        credentials: driftCredentials,
+                        deploymentApiVersion: args.deploymentApiVersion,
                         isDeleteRollback: true
                     });
 
@@ -1103,16 +1167,12 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 }
 
                 const currentDestinationHash = hashBytes(retrieved.artifactBytes);
-                const comparison = compareMemberExpectedAfterDrift({
-                    metadataType: member.metadataType,
-                    metadataName: member.metadataName,
-                    filePath: member.filePath,
-                    destinationBeforeHash: member.destinationBeforeHash,
-                    expectedAfterHash: member.expectedAfterHash,
-                    canonicalExpectedAfterHash: member.canonicalExpectedAfterHash,
-                    expectedAfterRepresentation: member.expectedAfterRepresentation,
-                    currentDestinationHash,
-                    currentDestinationArtifactBytes: retrieved.artifactBytes
+                const comparison = await resolveMemberExpectedAfterComparison({
+                    member,
+                    retrieved,
+                    credentials: driftCredentials,
+                    deploymentApiVersion: args.deploymentApiVersion,
+                    isDeleteRollback: false
                 });
 
                 logRollbackDriftCheck({

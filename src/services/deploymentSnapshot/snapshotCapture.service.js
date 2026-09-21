@@ -119,6 +119,10 @@ function pickExpectedAfterRepresentationFields(member) {
         fields.canonicalExpectedAfterHash = member.canonicalExpectedAfterHash;
     }
 
+    if (member.recordTypeSemanticCaptureSpec) {
+        fields.recordTypeSemanticCaptureSpec = member.recordTypeSemanticCaptureSpec;
+    }
+
     return fields;
 }
 

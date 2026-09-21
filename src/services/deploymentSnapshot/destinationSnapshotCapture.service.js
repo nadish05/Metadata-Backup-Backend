@@ -263,7 +263,9 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                     expectedAfterRepresentation:
                         expectedAfter.expectedAfterRepresentation,
                     canonicalExpectedAfterHash:
-                        expectedAfter.canonicalExpectedAfterHash
+                        expectedAfter.canonicalExpectedAfterHash,
+                    recordTypeSemanticCaptureSpec:
+                        expectedAfter.recordTypeSemanticCaptureSpec
                 });
                 continue;
             }
@@ -366,7 +368,9 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 expectedAfterRepresentation:
                     expectedAfter.expectedAfterRepresentation,
                 canonicalExpectedAfterHash:
-                    expectedAfter.canonicalExpectedAfterHash
+                    expectedAfter.canonicalExpectedAfterHash,
+                recordTypeSemanticCaptureSpec:
+                    expectedAfter.recordTypeSemanticCaptureSpec
             });
         }
 

@@ -29,6 +29,7 @@ function sanitizeMemberForExport(member) {
         expectedAfterHash: member.expectedAfterHash ?? null,
         expectedAfterRepresentation: member.expectedAfterRepresentation ?? null,
         canonicalExpectedAfterHash: member.canonicalExpectedAfterHash ?? null,
+        recordTypeSemanticCaptureSpec: member.recordTypeSemanticCaptureSpec ?? null,
         artifactId: member.artifactId ?? null,
         artifactSize: member.artifactSize ?? 0,
         captureStatus: member.captureStatus
