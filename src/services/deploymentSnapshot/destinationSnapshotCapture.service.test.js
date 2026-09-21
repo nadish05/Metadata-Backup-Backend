@@ -111,18 +111,21 @@ function createHarness(overrides = {}) {
                     }))
                 );
             }),
-        retrieveDestinationMember:
-            overrides.retrieveDestinationMember ||
-            (async (args) => {
-                retrieveCalls.push(args);
-                const bytes = packMemberFiles([
-                    {
-                        relativePath: 'classes/AccountService.cls',
-                        bytes: Buffer.from('destination-before\r\n', 'utf8')
-                    }
-                ]);
-                return { artifactBytes: bytes, files: [] };
-            }),
+        retrieveDestinationMember: overrides.retrieveDestinationMember
+            ? async (args) => {
+                  retrieveCalls.push(args);
+                  return overrides.retrieveDestinationMember(args);
+              }
+            : async (args) => {
+                  retrieveCalls.push(args);
+                  const bytes = packMemberFiles([
+                      {
+                          relativePath: 'classes/AccountService.cls',
+                          bytes: Buffer.from('destination-before\r\n', 'utf8')
+                      }
+                  ]);
+                  return { artifactBytes: bytes, files: [] };
+              },
         collectExpectedAfterArtifact:
             overrides.collectExpectedAfterArtifact ||
             (async (args) => {
@@ -937,6 +940,10 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
             assert.strictEqual(capture.ok, true);
             assert.strictEqual(capture.snapshot, null);
             assert.strictEqual(harness.retrieveCalls.length, 1);
+            assert.strictEqual(
+                harness.retrieveCalls[0].metadataType,
+                'ApexClass'
+            );
         }
     );
 
@@ -1142,17 +1149,21 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
                     ]
                 }
             });
+
+            assert.strictEqual(capture.ok, true);
+            assert.ok(capture.snapshot !== null);
             const members = await harness.captureService.getMembers(
                 capture.snapshot.snapshotId
             );
-
-            assert.strictEqual(capture.ok, true);
             assert.strictEqual(members.length, 1);
             assert.strictEqual(members[0].metadataType, 'CustomField');
             assert.strictEqual(members[0].metadataName, 'Vehicle__c.Model__c');
             assert.strictEqual(members[0].changeClass, CHANGE_CLASS.NEW);
             assert.strictEqual(harness.retrieveCalls.length, 1);
-            assert.strictEqual(harness.retrieveCalls[0].metadataType, 'CustomObject');
+            assert.strictEqual(
+                harness.retrieveCalls[0].metadataType,
+                'CustomObject'
+            );
         }
     );
 
