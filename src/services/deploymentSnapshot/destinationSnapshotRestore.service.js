@@ -106,9 +106,16 @@ const {
 const {
     createAuthorizedRollbackReconciliation
 } = require('./authorizedRollbackReconciliation.service');
+const { unpackMemberFiles } = require('./destinationMemberArtifact.service');
+const {
+    buildSemanticModelFromRecordTypeXml
+} = require('./recordTypeSemanticExpectedAfter.service');
+const {
+    partitionRollbackExecutionMembers
+} = require('./rollbackMemberExecutionPolicy.service');
 
 function block(code, message, extra = {}) {
-    return {
+    const result = {
         blocked: true,
         success: false,
         code,
@@ -123,10 +130,18 @@ function block(code, message, extra = {}) {
         operationId: extra.operationId || null,
         operationStatus: extra.operationStatus || null
     };
+
+    if (extra.manualRollbackRequired === true) {
+        result.manualRollbackRequired = true;
+        result.manualRollbackItems = extra.manualRollbackItems || [];
+        result.partialSuccess = extra.partialSuccess === true;
+    }
+
+    return result;
 }
 
 function successResult(extra = {}) {
-    return {
+    const result = {
         blocked: false,
         success: true,
         code: extra.code || null,
@@ -141,6 +156,62 @@ function successResult(extra = {}) {
         operationId: extra.operationId || null,
         operationStatus: extra.operationStatus || ROLLBACK_OPERATION_STATUS.SUCCEEDED
     };
+
+    if (extra.manualRollbackRequired === true) {
+        result.manualRollbackRequired = true;
+        result.manualRollbackItems = extra.manualRollbackItems || [];
+        result.partialSuccess = true;
+        result.message =
+            extra.message ||
+            'Rollback completed for supported members; manual action is required for other snapshot members.';
+    }
+
+    return result;
+}
+
+function extractRecordTypeXmlFromArtifact(artifactBytes) {
+    const files = unpackMemberFiles(artifactBytes);
+    const recordTypeFile = files.find((file) =>
+        String(file.relativePath || '').endsWith('.recordType-meta.xml')
+    );
+
+    if (!recordTypeFile?.bytes?.length) {
+        return null;
+    }
+
+    return recordTypeFile.bytes.toString('utf8');
+}
+
+function captureRecordTypeBusinessProcessAssociation(
+    member,
+    retrieved,
+    recordTypeBusinessProcessByMemberKey
+) {
+    if (member.metadataType !== 'RecordType' || !retrieved?.artifactBytes?.length) {
+        return;
+    }
+
+    try {
+        const xml = extractRecordTypeXmlFromArtifact(retrieved.artifactBytes);
+
+        if (!xml) {
+            return;
+        }
+
+        const model = buildSemanticModelFromRecordTypeXml(
+            xml,
+            member.metadataName
+        );
+
+        if (model.businessProcess) {
+            recordTypeBusinessProcessByMemberKey.set(
+                memberKey(member),
+                model.businessProcess
+            );
+        }
+    } catch (error) {
+        void error;
+    }
 }
 
 function withOperation(result, operation) {
@@ -1043,6 +1114,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
 
             const drift = [];
+            const recordTypeBusinessProcessByMemberKey = new Map();
             const driftCredentials = await resolvePostDeleteInventoryCredentials(args);
 
             for (const member of members) {
@@ -1072,6 +1144,12 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         `Destination retrieve failed for ${memberKey(member)}.`
                     );
                 }
+
+                captureRecordTypeBusinessProcessAssociation(
+                    member,
+                    retrieved,
+                    recordTypeBusinessProcessByMemberKey
+                );
 
                 if (
                     rollbackMode === ROLLBACK_MODE.DELETE ||
@@ -1235,16 +1313,62 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 return outcome;
             }
 
+            const executionPartition = partitionRollbackExecutionMembers(
+                members,
+                { recordTypeBusinessProcessByMemberKey }
+            );
+            const automaticMembers = executionPartition.automaticMembers;
+            const manualRollbackItems = executionPartition.manualRollbackItems;
+            const manualRollbackRequired = manualRollbackItems.length > 0;
+
+            if (automaticMembers.length === 0 && manualRollbackRequired) {
+                operation = await persistFailed(operation, {
+                    errorCode: ROLLBACK_CODE.MANUAL_ROLLBACK_REQUIRED,
+                    errorMessage:
+                        'Rollback requires manual action for all snapshot members; no automatic deployment was performed.'
+                });
+                outcome = withOperation(
+                    block(
+                        ROLLBACK_CODE.MANUAL_ROLLBACK_REQUIRED,
+                        'Rollback requires manual action for all snapshot members; no automatic deployment was performed.',
+                        {
+                            snapshotId,
+                            drift,
+                            manualRollbackRequired: true,
+                            partialSuccess: false,
+                            manualRollbackItems
+                        }
+                    ),
+                    operation
+                );
+                outcome.historyId = await recordHistory(
+                    args,
+                    snapshot,
+                    outcome,
+                    operation
+                );
+                return outcome;
+            }
+
+            const executionRollbackMode = resolveRollbackMode(automaticMembers);
+
+            if (executionRollbackMode === ROLLBACK_MODE.INELIGIBLE) {
+                throw new RollbackBlockedError(
+                    ROLLBACK_CODE.SNAPSHOT_NOT_ELIGIBLE,
+                    'Rollback automatic member partition is not eligible for deployment.'
+                );
+            }
+
             try {
-                if (rollbackMode === ROLLBACK_MODE.DELETE) {
+                if (executionRollbackMode === ROLLBACK_MODE.DELETE) {
                     generatedWorkspace = await buildDeleteWorkspace({
-                        members,
+                        members: automaticMembers,
                         apiVersion: args.deploymentApiVersion || null
                     });
-                } else if (rollbackMode === ROLLBACK_MODE.MIXED) {
+                } else if (executionRollbackMode === ROLLBACK_MODE.MIXED) {
                     generatedWorkspace = await buildMixedWorkspace({
                         snapshot,
-                        members,
+                        members: automaticMembers,
                         getArtifact: (id, artifactId) =>
                             captureService.getArtifact(id, artifactId),
                         apiVersion: args.deploymentApiVersion || null
@@ -1252,7 +1376,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 } else {
                     generatedWorkspace = await buildWorkspace({
                         snapshot,
-                        members,
+                        members: automaticMembers,
                         getArtifact: (id, artifactId) =>
                             captureService.getArtifact(id, artifactId),
                         apiVersion: args.deploymentApiVersion || null
@@ -1454,8 +1578,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             const salesforceDeploymentId =
                 extractSalesforceDeploymentId(deploymentExecution);
             const deferTerminalSuccess =
-                (rollbackMode === ROLLBACK_MODE.DELETE ||
-                    rollbackMode === ROLLBACK_MODE.MIXED) &&
+                (executionRollbackMode === ROLLBACK_MODE.DELETE ||
+                    executionRollbackMode === ROLLBACK_MODE.MIXED) &&
                 classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED;
 
             if (!deferTerminalSuccess) {
@@ -1499,14 +1623,14 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
 
             if (classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED) {
-                if (rollbackMode === ROLLBACK_MODE.DELETE) {
+                if (executionRollbackMode === ROLLBACK_MODE.DELETE) {
                     let inventory;
 
                     try {
                         const credentials =
                             await resolvePostDeleteInventoryCredentials(args);
                         const inventoryResult = await inventoryBuilder({
-                            items: members.map((member) => ({
+                            items: automaticMembers.map((member) => ({
                                 metadataType: member.metadataType,
                                 metadataName: member.metadataName
                             })),
@@ -1546,7 +1670,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         return outcome;
                     }
 
-                    const stillPresent = members.filter((member) => {
+                    const stillPresent = automaticMembers.filter((member) => {
                         const state = inventoryState(
                             inventory,
                             member.metadataType,
@@ -1591,10 +1715,10 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     }
                 }
 
-                if (rollbackMode === ROLLBACK_MODE.MIXED) {
+                if (executionRollbackMode === ROLLBACK_MODE.MIXED) {
                     const verification = await verifyMixedRollbackPostDeployment(
                         args,
-                        members
+                        automaticMembers
                     );
 
                     if (verification.failed) {
@@ -1676,7 +1800,13 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         drift,
                         checkOnlyDeployment,
                         deploymentExecution,
-                        generatedWorkspace
+                        generatedWorkspace,
+                        ...(manualRollbackRequired
+                            ? {
+                                  manualRollbackRequired: true,
+                                  manualRollbackItems
+                              }
+                            : {})
                     }),
                     operation
                 );

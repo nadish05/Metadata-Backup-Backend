@@ -272,7 +272,15 @@ function createDeploymentRollbackService(dependencies = {}) {
                     restoreResult?.checkOnlyDeployment || null,
                 deploymentExecution:
                     restoreResult?.deploymentExecution || null,
-                deploymentHistory
+                deploymentHistory,
+                ...(restoreResult?.manualRollbackRequired
+                    ? {
+                          manualRollbackRequired: true,
+                          manualRollbackItems:
+                              restoreResult.manualRollbackItems || [],
+                          partialSuccess: restoreResult.partialSuccess === true
+                      }
+                    : {})
             }
         };
     }
