@@ -464,6 +464,89 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves BusinessProcess logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'BusinessProcess',
+            'Opportunity.New Sales Process'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/objects/Opportunity/businessProcesses/New Sales Process.businessProcess-meta.xml'
+        });
+    });
+
+    await runTest('BusinessProcess logical path preserves spaces in process name', () => {
+        const opportunity = buildExpectedMemberSourcePaths(
+            'BusinessProcess',
+            'Opportunity.New Sales Process'
+        );
+        const renewal = buildExpectedMemberSourcePaths(
+            'BusinessProcess',
+            'Opportunity.Renewal Process'
+        );
+
+        assert.ok(
+            opportunity.logical.includes(
+                '/businessProcesses/New Sales Process.businessProcess-meta.xml'
+            )
+        );
+        assert.ok(
+            renewal.logical.includes(
+                '/businessProcesses/Renewal Process.businessProcess-meta.xml'
+            )
+        );
+    });
+
+    await runTest('selects only the BusinessProcess logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/Opportunity.object-meta.xml',
+                    bytes: Buffer.from('object')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/businessProcesses/New Sales Process.businessProcess-meta.xml',
+                    bytes: Buffer.from('process')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/businessProcesses/Renewal Process.businessProcess-meta.xml',
+                    bytes: Buffer.from('other')
+                }
+            ],
+            'BusinessProcess',
+            'Opportunity.New Sales Process'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/objects/Opportunity/businessProcesses/New Sales Process.businessProcess-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when BusinessProcess logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/objects/Opportunity/Opportunity.object-meta.xml',
+                            bytes: Buffer.from('object')
+                        }
+                    ],
+                    'BusinessProcess',
+                    'Opportunity.New Sales Process'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('selects only the ListView logical file', () => {
         const files = selectLogicalMemberFiles(
             [

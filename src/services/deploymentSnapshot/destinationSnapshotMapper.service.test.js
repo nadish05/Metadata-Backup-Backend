@@ -248,7 +248,8 @@ runTest(
         assert.ok(
             members.some((m) => m.metadataType === 'StandardValueSet')
         );
-        assert.ok(!isCaptureAllowlisted('BusinessProcess'));
+        assert.strictEqual(isCaptureAllowlisted('BusinessProcess'), true);
+        assert.ok(!isCaptureAllowlisted('StandardValueSet'));
     }
 );
 
@@ -472,7 +473,7 @@ runTest('resolveCustomObjectChildOwner parses object API name', () => {
     );
 });
 
-runTest('V1 allowlist includes ValidationRule alongside proven snapshot types', () => {
+runTest('V1 allowlist includes BusinessProcess alongside proven snapshot types', () => {
     assert.strictEqual(isCaptureAllowlisted('ApexClass'), true);
     assert.strictEqual(isCaptureAllowlisted('CustomObject'), true);
     assert.strictEqual(isCaptureAllowlisted('CustomField'), true);
@@ -481,8 +482,8 @@ runTest('V1 allowlist includes ValidationRule alongside proven snapshot types', 
     assert.strictEqual(isCaptureAllowlisted('ListView'), true);
     assert.strictEqual(isCaptureAllowlisted('ValidationRule'), true);
     assert.strictEqual(isCaptureAllowlisted('RecordType'), true);
+    assert.strictEqual(isCaptureAllowlisted('BusinessProcess'), true);
     assert.strictEqual(isCaptureAllowlisted('Flow'), false);
-    assert.strictEqual(isCaptureAllowlisted('BusinessProcess'), false);
     assert.strictEqual(isCaptureAllowlisted('StandardValueSet'), false);
     assert.strictEqual(isCaptureAllowlisted('CustomMetadataType'), false);
 });

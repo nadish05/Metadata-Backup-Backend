@@ -160,6 +160,22 @@ const VALIDATION_RULE_PATH =
 const RECORD_TYPE_PATH =
     'force-app/main/default/objects/Vehicle__c/recordTypes/Some_Record_Type.recordType-meta.xml';
 
+const OPPORTUNITY_RECORD_TYPE_PATH =
+    'force-app/main/default/objects/Opportunity/recordTypes/Enterprise_Deal.recordType-meta.xml';
+
+const BUSINESS_PROCESS_PATH =
+    'force-app/main/default/objects/Opportunity/businessProcesses/New Sales Process.businessProcess-meta.xml';
+
+const BUSINESS_PROCESS_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<BusinessProcess xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>New Sales Process</fullName>
+    <isActive>true</isActive>
+    <values>
+        <fullName>Prospecting</fullName>
+        <default>false</default>
+    </values>
+</BusinessProcess>`;
+
 const RECORD_TYPE_CAPTURE_ARGS = {
     destinationOrgId: '00D000000000001',
     sourceOrgId: '00D000000000002',
@@ -231,9 +247,6 @@ const BASE_ARGS = {
         ]
     }
 };
-
-const OPPORTUNITY_RECORD_TYPE_PATH =
-    'force-app/main/default/objects/Opportunity/recordTypes/Enterprise_Deal.recordType-meta.xml';
 
 (async () => {
     await runTest('flag OFF skips snapshot and deploys unchanged', async () => {
@@ -854,7 +867,7 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
     );
 
     await runTest(
-        'TEST 11: unsupported BusinessProcess in deployment package fails closed',
+        'TEST 11: unsupported StandardValueSet in deployment package fails closed',
         async () => {
             const afterPacked = packMemberFiles([
                 {
@@ -869,6 +882,11 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
                             metadataType: 'RecordType',
                             metadataName: 'Opportunity.Enterprise_Deal',
                             state: DESTINATION_STATE.MISSING
+                        },
+                        {
+                            metadataType: 'StandardValueSet',
+                            metadataName: 'OpportunityStage',
+                            state: DESTINATION_STATE.EXISTS
                         }
                     ]),
                 collectExpectedAfterArtifact: async () => ({
@@ -898,18 +916,148 @@ const OPPORTUNITY_RECORD_TYPE_PATH =
                             filePath: OPPORTUNITY_RECORD_TYPE_PATH
                         },
                         {
-                            metadataType: 'BusinessProcess',
-                            metadataName: 'Opportunity.New Sales Process',
+                            metadataType: 'StandardValueSet',
+                            metadataName: 'OpportunityStage',
                             filePath:
-                                'force-app/main/default/objects/Opportunity/businessProcesses/New Sales Process.businessProcess-meta.xml'
+                                'force-app/main/default/standardValueSets/OpportunityStage.standardValueSet-meta.xml'
                         }
                     ]
                 }
             });
 
             assert.strictEqual(capture.ok, false);
-            assert.match(capture.message, /BusinessProcess/);
+            assert.match(capture.message, /StandardValueSet/);
             assert.match(capture.message, /not in the V1 snapshot allowlist/);
+        }
+    );
+
+    await runTest(
+        'BusinessProcess EXISTS unchanged omits snapshot member',
+        async () => {
+            const packed = packMemberFiles([
+                {
+                    relativePath: BUSINESS_PROCESS_PATH,
+                    bytes: Buffer.from(BUSINESS_PROCESS_XML, 'utf8')
+                }
+            ]);
+            const harness = createHarness({
+                retrieveDestinationMember: async () => ({
+                    artifactBytes: packed
+                }),
+                collectExpectedAfterArtifact: async () => ({
+                    artifactBytes: packed,
+                    expectedAfterHash: hashBytes(packed),
+                    expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW
+                })
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                ...BASE_ARGS,
+                historyId: 'hist-bp-unchanged',
+                selectedMetadata: [],
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'BusinessProcess',
+                            metadataName: 'Opportunity.New Sales Process',
+                            filePath: BUSINESS_PROCESS_PATH
+                        }
+                    ]
+                }
+            });
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(capture.snapshot, null);
+            assert.strictEqual(harness.retrieveCalls.length, 1);
+            assert.strictEqual(
+                harness.retrieveCalls[0].metadataType,
+                'BusinessProcess'
+            );
+        }
+    );
+
+    await runTest(
+        'AUTO_INCLUDED BusinessProcess in generated package is captured when NEW',
+        async () => {
+            const processAfter = packMemberFiles([
+                {
+                    relativePath: BUSINESS_PROCESS_PATH,
+                    bytes: Buffer.from(BUSINESS_PROCESS_XML, 'utf8')
+                }
+            ]);
+            const recordTypeAfter = packMemberFiles([
+                {
+                    relativePath: OPPORTUNITY_RECORD_TYPE_PATH,
+                    bytes: Buffer.from('<RecordType/>', 'utf8')
+                }
+            ]);
+            const harness = createHarness({
+                buildDestinationInventory: async ({ items }) =>
+                    inventoryFor(
+                        items.map((item) => ({
+                            ...item,
+                            state: DESTINATION_STATE.MISSING
+                        }))
+                    ),
+                collectExpectedAfterArtifact: async (args) => {
+                    if (args.metadataType === 'BusinessProcess') {
+                        return {
+                            artifactBytes: processAfter,
+                            expectedAfterHash: hashBytes(processAfter),
+                            expectedAfterRepresentation:
+                                EXPECTED_AFTER_REPRESENTATION.RAW
+                        };
+                    }
+
+                    return {
+                        artifactBytes: recordTypeAfter,
+                        expectedAfterHash: hashBytes(recordTypeAfter),
+                        expectedAfterRepresentation:
+                            EXPECTED_AFTER_REPRESENTATION.RAW
+                    };
+                }
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy({
+                destinationOrgId: BASE_ARGS.destinationOrgId,
+                sourceOrgId: BASE_ARGS.sourceOrgId,
+                historyId: 'hist-auto-bp',
+                refreshToken: BASE_ARGS.refreshToken,
+                instanceUrl: BASE_ARGS.instanceUrl,
+                selectedMetadata: [
+                    {
+                        metadataType: 'RecordType',
+                        metadataName: 'Opportunity.Enterprise_Deal'
+                    }
+                ],
+                generatedDeploymentPackage: {
+                    metadata: [
+                        {
+                            metadataType: 'RecordType',
+                            metadataName: 'Opportunity.Enterprise_Deal',
+                            filePath: OPPORTUNITY_RECORD_TYPE_PATH
+                        },
+                        {
+                            metadataType: 'BusinessProcess',
+                            metadataName: 'Opportunity.New Sales Process',
+                            filePath: BUSINESS_PROCESS_PATH
+                        }
+                    ]
+                }
+            });
+
+            assert.strictEqual(capture.ok, true);
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+            assert.ok(
+                members.some(
+                    (m) =>
+                        m.metadataType === 'BusinessProcess' &&
+                        m.metadataName === 'Opportunity.New Sales Process' &&
+                        m.changeClass === CHANGE_CLASS.NEW
+                )
+            );
         }
     );
 

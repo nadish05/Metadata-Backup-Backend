@@ -262,6 +262,22 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'BusinessProcess' && metadataName) {
+        const separator = metadataName.indexOf('.');
+        const objectName =
+            separator > 0 ? metadataName.slice(0, separator) : null;
+        const processName =
+            separator > 0 ? metadataName.slice(separator + 1) : null;
+
+        if (!objectName || !processName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/objects/${objectName}/businessProcesses/${processName}.businessProcess-meta.xml`
+        };
+    }
+
     return null;
 }
 
@@ -282,7 +298,8 @@ function selectLogicalMemberFiles(
             'CustomField',
             'ListView',
             'ValidationRule',
-            'RecordType'
+            'RecordType',
+            'BusinessProcess'
         ].includes(metadataType)
     ) {
         return retrievedFiles;

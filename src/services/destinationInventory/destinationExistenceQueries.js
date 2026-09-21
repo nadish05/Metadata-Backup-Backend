@@ -19,6 +19,7 @@ function usesToolingApi(type) {
         type === 'ApexPage' ||
         type === 'CustomField' ||
         type === 'ValidationRule' ||
+        type === 'BusinessProcess' ||
         type === 'CustomApplication' ||
         type === 'FlexiPage' ||
         type === 'LightningComponentBundle' ||
@@ -255,6 +256,28 @@ function buildListViewSoql(name) {
     );
 }
 
+function buildBusinessProcessSoql(name) {
+    const separator = String(name || '').indexOf('.');
+
+    if (separator <= 0) {
+        return null;
+    }
+
+    const objectApiName = name.slice(0, separator).trim();
+    const processName = name.slice(separator + 1).trim();
+
+    if (!objectApiName || !processName) {
+        return null;
+    }
+
+    return (
+        'SELECT Id, Name, TableEnumOrId FROM BusinessProcess ' +
+        `WHERE Name = '${escapeSoql(processName)}' ` +
+        `AND TableEnumOrId = '${escapeSoql(objectApiName)}' ` +
+        'LIMIT 1'
+    );
+}
+
 function buildRecordTypeSoql(name) {
     if (!name.includes('.')) {
         return null;
@@ -335,6 +358,9 @@ function buildExistenceQuery(type, name) {
         case 'RecordType':
             return buildRecordTypeSoql(name);
 
+        case 'BusinessProcess':
+            return buildBusinessProcessSoql(name);
+
         case 'FlexiPage':
             return (
                 'SELECT Id, DeveloperName FROM FlexiPage ' +
@@ -405,5 +431,6 @@ module.exports = {
     buildValidationRuleSoql,
     buildListViewSoql,
     buildRecordTypeSoql,
+    buildBusinessProcessSoql,
     buildExistenceQuery
 };

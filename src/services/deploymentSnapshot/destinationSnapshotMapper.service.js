@@ -14,7 +14,8 @@ const SNAPSHOT_CAPTURE_ALLOWLIST = Object.freeze([
     'LightningComponentBundle',
     'ListView',
     'ValidationRule',
-    'RecordType'
+    'RecordType',
+    'BusinessProcess'
 ]);
 
 const ALLOWLIST_SET = new Set(SNAPSHOT_CAPTURE_ALLOWLIST);

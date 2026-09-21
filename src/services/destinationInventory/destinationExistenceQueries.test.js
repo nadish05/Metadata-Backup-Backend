@@ -6,6 +6,7 @@ const axios = require('axios');
 const {
     buildExistenceQuery,
     buildValidationRuleSoql,
+    buildBusinessProcessSoql,
     usesToolingApi
 } = require('./destinationExistenceQueries');
 const {
@@ -148,6 +149,108 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
 
             assert.strictEqual(
                 result.inventory.get('ValidationRule:Vehicle__c.Require_Model').state,
+                DESTINATION_STATE.UNKNOWN
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('buildBusinessProcessSoql targets object and process names', () => {
+        const soql = buildBusinessProcessSoql('Opportunity.New Sales Process');
+
+        assert.ok(soql.includes("Name = 'New Sales Process'"));
+        assert.ok(soql.includes("TableEnumOrId = 'Opportunity'"));
+        assert.ok(soql.includes('FROM BusinessProcess'));
+    });
+
+    await runTest('buildBusinessProcessSoql returns null for unqualified names', () => {
+        assert.strictEqual(buildBusinessProcessSoql('New Sales Process'), null);
+        assert.strictEqual(buildBusinessProcessSoql(''), null);
+    });
+
+    await runTest('buildExistenceQuery wires BusinessProcess to Tooling SOQL', () => {
+        assert.strictEqual(usesToolingApi('BusinessProcess'), true);
+        const soql = buildExistenceQuery(
+            'BusinessProcess',
+            'Opportunity.New Sales Process'
+        );
+
+        assert.ok(soql.includes("TableEnumOrId = 'Opportunity'"));
+        assert.ok(soql.includes("Name = 'New Sales Process'"));
+    });
+
+    await runTest('inventory reports EXISTS when BusinessProcess query returns rows', async () => {
+        const stub = stubToolingQuery({ totalSize: 1, records: [{ Id: '0' }] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'BusinessProcess',
+                        metadataName: 'Opportunity.New Sales Process'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get(
+                    'BusinessProcess:Opportunity.New Sales Process'
+                ).state,
+                DESTINATION_STATE.EXISTS
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports MISSING when BusinessProcess query is empty', async () => {
+        const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'BusinessProcess',
+                        metadataName: 'Opportunity.New Sales Process'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get(
+                    'BusinessProcess:Opportunity.New Sales Process'
+                ).state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when BusinessProcess query fails', async () => {
+        const stub = stubToolingQuery({ fail: true });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'BusinessProcess',
+                        metadataName: 'Opportunity.New Sales Process'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get(
+                    'BusinessProcess:Opportunity.New Sales Process'
+                ).state,
                 DESTINATION_STATE.UNKNOWN
             );
         } finally {
