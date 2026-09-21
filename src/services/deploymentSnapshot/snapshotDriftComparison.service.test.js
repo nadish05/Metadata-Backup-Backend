@@ -163,3 +163,22 @@ runTest('delete rollback C !== expectedAfterHash → DRIFTED', () => {
         DELETE_DRIFT_CLASSIFICATION.DRIFTED
     );
 });
+
+const {
+    compareMemberExpectedAfterDrift,
+    EXPECTED_AFTER_REPRESENTATION
+} = require('./snapshotDriftComparison.service');
+
+runTest('RAW RecordType DELETE rollback still uses RAW delete comparison', () => {
+    const result = compareMemberExpectedAfterDrift({
+        metadataType: 'RecordType',
+        metadataName: 'Opportunity.Enterprise_Deal',
+        expectedAfterHash: B,
+        expectedAfterRepresentation: EXPECTED_AFTER_REPRESENTATION.RAW,
+        currentDestinationHash: OTHER,
+        isDeleteRollback: true
+    });
+
+    assert.strictEqual(result.classification, DRIFT_CLASSIFICATION.DRIFTED);
+    assert.strictEqual(result.comparisonMode, EXPECTED_AFTER_REPRESENTATION.RAW);
+});

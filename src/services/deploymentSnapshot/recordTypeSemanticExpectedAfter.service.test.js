@@ -239,3 +239,165 @@ runTest('semantic match returns MATCHES_EXPECTED_AFTER', () => {
         DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
     );
 });
+
+const RAW_B =
+    '7ecc23ef2efce4421e04a5af4e2a5c767ce0ab1903945b40bebbf0f98cd9273a';
+const RAW_C =
+    'c2743a3b1f6a9d76b55038005f79fdc125a1d6cf201ecc4c73c4b3b1e9c98f11';
+
+runTest(
+    'NEW RecordType semantic DELETE matching hash ignores RAW drift',
+    () => {
+        const built = buildRecordTypeSemanticFromWorkspaceArtifact(
+            packMemberFiles([
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/recordTypes/Enterprise_Deal.recordType-meta.xml',
+                    bytes: Buffer.from(BASE_XML, 'utf8')
+                }
+            ]),
+            'Opportunity.Enterprise_Deal'
+        );
+        const result = compareMemberExpectedAfterDrift({
+            metadataType: 'RecordType',
+            metadataName: 'Opportunity.Enterprise_Deal',
+            expectedAfterHash: RAW_B,
+            canonicalExpectedAfterHash: built.canonicalHash,
+            expectedAfterRepresentation:
+                EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1,
+            currentDestinationHash: RAW_C,
+            recordTypeSemanticCaptureSpec: built.captureSpec,
+            currentRecordTypeSemanticHash: built.canonicalHash,
+            isDeleteRollback: true
+        });
+
+        assert.strictEqual(
+            result.classification,
+            DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+        );
+        assert.strictEqual(result.failClosed, false);
+        assert.notStrictEqual(
+            result.failClosedReason,
+            'RECORDTYPE_SEMANTIC_DELETE_UNSUPPORTED'
+        );
+    }
+);
+
+runTest('NEW RecordType semantic DELETE mismatch returns DRIFTED', () => {
+    const built = buildRecordTypeSemanticFromWorkspaceArtifact(
+        packMemberFiles([
+            {
+                relativePath:
+                    'force-app/main/default/objects/Opportunity/recordTypes/Enterprise_Deal.recordType-meta.xml',
+                bytes: Buffer.from(BASE_XML, 'utf8')
+            }
+        ]),
+        'Opportunity.Enterprise_Deal'
+    );
+    const result = compareMemberExpectedAfterDrift({
+        metadataType: 'RecordType',
+        metadataName: 'Opportunity.Enterprise_Deal',
+        expectedAfterHash: RAW_B,
+        canonicalExpectedAfterHash: built.canonicalHash,
+        expectedAfterRepresentation:
+            EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1,
+        currentDestinationHash: RAW_C,
+        recordTypeSemanticCaptureSpec: built.captureSpec,
+        currentRecordTypeSemanticHash:
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+        isDeleteRollback: true
+    });
+
+    assert.strictEqual(result.classification, DRIFT_CLASSIFICATION.DRIFTED);
+    assert.strictEqual(result.failClosed, false);
+});
+
+runTest(
+    'NEW RecordType semantic DELETE missing destination semantic hash is UNKNOWN',
+    () => {
+        const built = buildRecordTypeSemanticFromWorkspaceArtifact(
+            packMemberFiles([
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/recordTypes/Enterprise_Deal.recordType-meta.xml',
+                    bytes: Buffer.from(BASE_XML, 'utf8')
+                }
+            ]),
+            'Opportunity.Enterprise_Deal'
+        );
+        const result = compareMemberExpectedAfterDrift({
+            metadataType: 'RecordType',
+            metadataName: 'Opportunity.Enterprise_Deal',
+            expectedAfterHash: RAW_B,
+            canonicalExpectedAfterHash: built.canonicalHash,
+            expectedAfterRepresentation:
+                EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1,
+            currentDestinationHash: RAW_C,
+            recordTypeSemanticCaptureSpec: built.captureSpec,
+            isDeleteRollback: true
+        });
+
+        assert.strictEqual(result.classification, DRIFT_CLASSIFICATION.UNKNOWN);
+        assert.strictEqual(result.failClosed, true);
+    }
+);
+
+runTest(
+    'NEW RecordType semantic DELETE missing capture spec is UNKNOWN',
+    () => {
+        const built = buildRecordTypeSemanticFromWorkspaceArtifact(
+            packMemberFiles([
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Opportunity/recordTypes/Enterprise_Deal.recordType-meta.xml',
+                    bytes: Buffer.from(BASE_XML, 'utf8')
+                }
+            ]),
+            'Opportunity.Enterprise_Deal'
+        );
+        const result = compareMemberExpectedAfterDrift({
+            metadataType: 'RecordType',
+            metadataName: 'Opportunity.Enterprise_Deal',
+            expectedAfterHash: RAW_B,
+            canonicalExpectedAfterHash: built.canonicalHash,
+            expectedAfterRepresentation:
+                EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1,
+            currentDestinationHash: RAW_C,
+            currentRecordTypeSemanticHash: built.canonicalHash,
+            isDeleteRollback: true
+        });
+
+        assert.strictEqual(result.classification, DRIFT_CLASSIFICATION.UNKNOWN);
+        assert.strictEqual(result.failClosed, true);
+    }
+);
+
+runTest('MODIFIED RecordType semantic mismatch returns DRIFTED', () => {
+    const built = buildRecordTypeSemanticFromWorkspaceArtifact(
+        packMemberFiles([
+            {
+                relativePath:
+                    'force-app/main/default/objects/Opportunity/recordTypes/Enterprise_Deal.recordType-meta.xml',
+                bytes: Buffer.from(BASE_XML, 'utf8')
+            }
+        ]),
+        'Opportunity.Enterprise_Deal'
+    );
+    const result = compareMemberExpectedAfterDrift({
+        metadataType: 'RecordType',
+        metadataName: 'Opportunity.Enterprise_Deal',
+        destinationBeforeHash:
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        expectedAfterHash: RAW_B,
+        canonicalExpectedAfterHash: built.canonicalHash,
+        expectedAfterRepresentation:
+            EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1,
+        currentDestinationHash: RAW_C,
+        recordTypeSemanticCaptureSpec: built.captureSpec,
+        currentRecordTypeSemanticHash:
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+        isDeleteRollback: false
+    });
+
+    assert.strictEqual(result.classification, DRIFT_CLASSIFICATION.DRIFTED);
+});

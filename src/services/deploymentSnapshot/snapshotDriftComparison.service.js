@@ -309,14 +309,6 @@ function compareMemberExpectedAfterDrift({
         metadataType === 'RecordType' &&
         representation === EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1
     ) {
-        if (isDeleteRollback) {
-            return buildFailClosedResult({
-                expectedAfterAvailable: isUsableHash(expectedAfterHash),
-                comparisonMode: EXPECTED_AFTER_REPRESENTATION.RECORDTYPE_SEMANTIC_V1,
-                failClosedReason: 'RECORDTYPE_SEMANTIC_DELETE_UNSUPPORTED'
-            });
-        }
-
         return compareRecordTypeSemanticExpectedAfter({
             canonicalExpectedAfterHash,
             currentRecordTypeSemanticHash,
