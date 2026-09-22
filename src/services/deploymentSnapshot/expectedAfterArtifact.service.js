@@ -93,7 +93,8 @@ function resolveWorkspaceRelativeFilePath(member) {
     if (
         (metadataType === 'CompactLayout' ||
             metadataType === 'NamedCredential' ||
-            metadataType === 'ExternalCredential') &&
+            metadataType === 'ExternalCredential' ||
+            metadataType === 'CustomMetadata') &&
         metadataName
     ) {
         const expectedPaths = buildExpectedMemberSourcePaths(

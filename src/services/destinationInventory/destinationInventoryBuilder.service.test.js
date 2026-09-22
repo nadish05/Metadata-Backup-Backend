@@ -629,6 +629,7 @@ async function main() {
             assert.deepStrictEqual(consumers.sort(), [
                 'businessProcessRollback.p0r.test.js',
                 'compactLayoutRollback.p0r.test.js',
+                'customMetadataRollback.p0r.test.js',
                 'deleteRollback.p0r82.test.js',
                 'deploymentValidation.service.js',
                 'destinationSnapshotCapture.service.js',
@@ -675,6 +676,156 @@ async function main() {
                 validation.includes('getLatestApiVersion'),
                 false
             );
+        }
+    );
+
+    function stubCustomMetadataInventory({
+        entityTotalSize,
+        recordTotalSize,
+        failOnEntity = false,
+        failOnRecord = false
+    }) {
+        const originalGet = axios.get;
+        const requestedUrls = [];
+
+        axios.get = async (url) => {
+            if (url.endsWith('/services/data/')) {
+                return { status: 200, data: API_VERSIONS };
+            }
+
+            requestedUrls.push(url);
+
+            if (failOnEntity && decodeURIComponent(url).includes('EntityDefinition')) {
+                throw new Error('Simulated EntityDefinition query failure');
+            }
+
+            if (failOnRecord && decodeURIComponent(url).includes('Weather_Config__mdt')) {
+                throw new Error('Simulated CustomMetadata record query failure');
+            }
+
+            if (decodeURIComponent(url).includes('EntityDefinition')) {
+                return {
+                    status: 200,
+                    data: {
+                        totalSize: entityTotalSize,
+                        done: true,
+                        records:
+                            entityTotalSize > 0
+                                ? [{ QualifiedApiName: 'Weather_Config__mdt' }]
+                                : []
+                    }
+                };
+            }
+
+            if (decodeURIComponent(url).includes('Weather_Config__mdt')) {
+                return {
+                    status: 200,
+                    data: {
+                        totalSize: recordTotalSize,
+                        done: true,
+                        records: recordTotalSize > 0 ? [{ Id: '0' }] : []
+                    }
+                };
+            }
+
+            throw new Error(`Unexpected inventory query: ${url}`);
+        };
+
+        return {
+            requestedUrls,
+            restore() {
+                axios.get = originalGet;
+            }
+        };
+    }
+
+    await runTest(
+        'CustomMetadata:Weather_Config.Default EntityDefinition zero → MISSING',
+        async () => {
+            const stub = stubCustomMetadataInventory({
+                entityTotalSize: 0,
+                recordTotalSize: 0
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomMetadata',
+                            metadataName: 'Weather_Config.Default'
+                        }
+                    ],
+                    accessToken: 'token',
+                    instanceUrl: 'https://example.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(result.inventory, 'CustomMetadata', 'Weather_Config.Default'),
+                    DESTINATION_STATE.MISSING
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomMetadata:Weather_Config.Default type exists record missing → MISSING',
+        async () => {
+            const stub = stubCustomMetadataInventory({
+                entityTotalSize: 1,
+                recordTotalSize: 0
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomMetadata',
+                            metadataName: 'Weather_Config.Default'
+                        }
+                    ],
+                    accessToken: 'token',
+                    instanceUrl: 'https://example.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(result.inventory, 'CustomMetadata', 'Weather_Config.Default'),
+                    DESTINATION_STATE.MISSING
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest(
+        'CustomMetadata:Weather_Config.Default type and record present → EXISTS',
+        async () => {
+            const stub = stubCustomMetadataInventory({
+                entityTotalSize: 1,
+                recordTotalSize: 1
+            });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomMetadata',
+                            metadataName: 'Weather_Config.Default'
+                        }
+                    ],
+                    accessToken: 'token',
+                    instanceUrl: 'https://example.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    getState(result.inventory, 'CustomMetadata', 'Weather_Config.Default'),
+                    DESTINATION_STATE.EXISTS
+                );
+            } finally {
+                stub.restore();
+            }
         }
     );
 

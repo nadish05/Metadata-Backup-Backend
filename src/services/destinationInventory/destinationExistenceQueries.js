@@ -33,6 +33,14 @@ function isSafeSalesforceApiName(value) {
     return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(value);
 }
 
+/** Record DeveloperName on CMDT types may include quotes; still escaped in SOQL. */
+function isSafeCustomMetadataRecordDeveloperName(value) {
+    return (
+        typeof value === 'string' &&
+        /^[A-Za-z][A-Za-z0-9_']*$/.test(value)
+    );
+}
+
 /**
  * Parse CustomPermission MDAPI member names for destination existence SOQL.
  *
@@ -140,7 +148,7 @@ function parseCustomMetadataMember(name) {
 
     if (
         !isSafeSalesforceApiName(typePart) ||
-        !isSafeSalesforceApiName(recordPart)
+        !isSafeCustomMetadataRecordDeveloperName(recordPart)
     ) {
         return null;
     }
@@ -196,6 +204,26 @@ function buildCustomMetadataSoql(name) {
         `SELECT Id FROM ${parsed.entityApiName} ` +
         `WHERE DeveloperName = '${escapeSoql(parsed.recordDeveloperName)}' ` +
         'LIMIT 1'
+    );
+}
+
+/**
+ * REST EntityDefinition lookup for a Custom Metadata type (__mdt).
+ * Used before record SOQL so missing types return MISSING instead of query errors.
+ *
+ * @param {string} name CustomMetadata Type.Record member name
+ * @returns {string|null}
+ */
+function buildCustomMetadataEntityDefinitionSoql(name) {
+    const parsed = parseCustomMetadataMember(name);
+
+    if (!parsed) {
+        return null;
+    }
+
+    return (
+        'SELECT QualifiedApiName FROM EntityDefinition ' +
+        `WHERE QualifiedApiName = '${escapeSoql(parsed.entityApiName)}' LIMIT 1`
     );
 }
 
@@ -473,6 +501,7 @@ module.exports = {
     normalizeCustomMetadataMember,
     parseCustomPermissionMember,
     buildCustomMetadataSoql,
+    buildCustomMetadataEntityDefinitionSoql,
     buildCustomPermissionSoql,
     buildCustomFieldSoql,
     buildValidationRuleSoql,

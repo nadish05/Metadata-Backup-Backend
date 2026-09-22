@@ -9,6 +9,9 @@ const {
     buildBusinessProcessSoql,
     buildCompactLayoutSoql,
     buildStandardValueSetSoql,
+    buildCustomMetadataSoql,
+    buildCustomMetadataEntityDefinitionSoql,
+    parseCustomMetadataMember,
     usesToolingApi
 } = require('./destinationExistenceQueries');
 const {
@@ -782,4 +785,280 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         assert.strictEqual(usesToolingApi('NamedCredential'), false);
         assert.strictEqual(usesToolingApi('ExternalCredential'), true);
     });
+
+    await runTest('parseCustomMetadataMember resolves Weather_Config.Default identity', () => {
+        const parsed = parseCustomMetadataMember('Weather_Config.Default');
+
+        assert.deepStrictEqual(parsed, {
+            canonicalMember: 'Weather_Config.Default',
+            typeDeveloperName: 'Weather_Config',
+            recordDeveloperName: 'Default',
+            entityApiName: 'Weather_Config__mdt'
+        });
+    });
+
+    await runTest('buildCustomMetadataEntityDefinitionSoql targets Weather_Config__mdt', () => {
+        const soql = buildCustomMetadataEntityDefinitionSoql('Weather_Config.Default');
+
+        assert.ok(soql.includes('FROM EntityDefinition'));
+        assert.ok(soql.includes("QualifiedApiName = 'Weather_Config__mdt'"));
+        assert.ok(soql.includes('LIMIT 1'));
+    });
+
+    await runTest('buildCustomMetadataSoql escapes record DeveloperName', () => {
+        const soql = buildCustomMetadataSoql("Weather_Config.Def's");
+
+        assert.ok(soql.includes("DeveloperName = 'Def\\'s'"));
+        assert.ok(soql.includes('FROM Weather_Config__mdt'));
+    });
+
+    await runTest('invalid CustomMetadata member remains unsupported', async () => {
+        const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CustomMetadata',
+                        metadataName: 'Weather_Config'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            const entry = result.inventory.get('CustomMetadata:Weather_Config');
+            assert.strictEqual(entry.state, DESTINATION_STATE.UNKNOWN);
+            assert.strictEqual(entry.unsupported, true);
+            assert.strictEqual(stub.requestedUrls.length, 0);
+        } finally {
+            stub.restore();
+        }
+    });
+
+    function stubCustomMetadataQueries({
+        entityTotalSize,
+        recordTotalSize,
+        failOnEntity = false,
+        failOnRecord = false
+    }) {
+        const originalGet = axios.get;
+        const requestedUrls = [];
+
+        axios.get = async (url) => {
+            if (url.endsWith('/services/data/')) {
+                return { status: 200, data: API_VERSIONS };
+            }
+
+            requestedUrls.push(url);
+
+            if (failOnEntity && decodeURIComponent(url).includes('EntityDefinition')) {
+                throw new Error('Simulated EntityDefinition query failure');
+            }
+
+            if (failOnRecord && decodeURIComponent(url).includes('Weather_Config__mdt')) {
+                throw new Error('Simulated CustomMetadata record query failure');
+            }
+
+            if (decodeURIComponent(url).includes('EntityDefinition')) {
+                return {
+                    status: 200,
+                    data: {
+                        totalSize: entityTotalSize,
+                        done: true,
+                        records: entityTotalSize > 0 ? [{ QualifiedApiName: 'Weather_Config__mdt' }] : []
+                    }
+                };
+            }
+
+            if (decodeURIComponent(url).includes('Weather_Config__mdt')) {
+                return {
+                    status: 200,
+                    data: {
+                        totalSize: recordTotalSize,
+                        done: true,
+                        records: recordTotalSize > 0 ? [{ Id: '0' }] : []
+                    }
+                };
+            }
+
+            throw new Error(`Unexpected CustomMetadata inventory query: ${url}`);
+        };
+
+        return {
+            requestedUrls,
+            restore() {
+                axios.get = originalGet;
+            }
+        };
+    }
+
+    await runTest('CustomMetadata EntityDefinition zero rows is MISSING', async () => {
+        const stub = stubCustomMetadataQueries({ entityTotalSize: 0, recordTotalSize: 0 });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CustomMetadata',
+                        metadataName: 'Weather_Config.Default'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('CustomMetadata:Weather_Config.Default').state,
+                DESTINATION_STATE.MISSING
+            );
+            const queryUrls = stub.requestedUrls.filter((url) =>
+                url.includes('/query/')
+            );
+            assert.strictEqual(queryUrls.length, 1);
+            assert.ok(
+                decodeURIComponent(queryUrls[0]).includes('EntityDefinition')
+            );
+            assert.ok(
+                !decodeURIComponent(queryUrls[0]).includes('FROM Weather_Config__mdt')
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('CustomMetadata type exists record missing is MISSING', async () => {
+        const stub = stubCustomMetadataQueries({ entityTotalSize: 1, recordTotalSize: 0 });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CustomMetadata',
+                        metadataName: 'Weather_Config.Default'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('CustomMetadata:Weather_Config.Default').state,
+                DESTINATION_STATE.MISSING
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes('Weather_Config__mdt')
+                )
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('CustomMetadata type and record present is EXISTS', async () => {
+        const stub = stubCustomMetadataQueries({ entityTotalSize: 1, recordTotalSize: 1 });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CustomMetadata',
+                        metadataName: 'Weather_Config.Default'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('CustomMetadata:Weather_Config.Default').state,
+                DESTINATION_STATE.EXISTS
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('CustomMetadata EntityDefinition query failure is UNKNOWN', async () => {
+        const stub = stubCustomMetadataQueries({
+            entityTotalSize: 0,
+            recordTotalSize: 0,
+            failOnEntity: true
+        });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CustomMetadata',
+                        metadataName: 'Weather_Config.Default'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('CustomMetadata:Weather_Config.Default').state,
+                DESTINATION_STATE.UNKNOWN
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('CustomMetadata record query failure is UNKNOWN', async () => {
+        const stub = stubCustomMetadataQueries({
+            entityTotalSize: 1,
+            recordTotalSize: 0,
+            failOnRecord: true
+        });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'CustomMetadata',
+                        metadataName: 'Weather_Config.Default'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('CustomMetadata:Weather_Config.Default').state,
+                DESTINATION_STATE.UNKNOWN
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest(
+        'CustomMetadata:Weather_Config.Default absent type maps to NEW snapshot class',
+        async () => {
+            const stub = stubCustomMetadataQueries({ entityTotalSize: 0, recordTotalSize: 0 });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'CustomMetadata',
+                            metadataName: 'Weather_Config.Default'
+                        }
+                    ],
+                    accessToken: 'token',
+                    instanceUrl: 'https://example.my.salesforce.com'
+                });
+
+                const entry = result.inventory.get('CustomMetadata:Weather_Config.Default');
+                assert.strictEqual(entry.state, DESTINATION_STATE.MISSING);
+                assert.strictEqual(mapExistenceToChangeClass(entry.state), CHANGE_CLASS.NEW);
+            } finally {
+                stub.restore();
+            }
+        }
+    );
 })();

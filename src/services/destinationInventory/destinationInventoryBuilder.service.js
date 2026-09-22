@@ -11,6 +11,8 @@ const axios = require('axios');
 
 const {
     buildExistenceQuery,
+    buildCustomMetadataSoql,
+    buildCustomMetadataEntityDefinitionSoql,
     usesToolingApi
 } = require('./destinationExistenceQueries');
 const personAccountTrace = require('../personAccountTrace.temp');
@@ -207,6 +209,127 @@ async function runSoqlQuery(
     }
 }
 
+async function queryCustomMetadataExistence({
+    metadataType,
+    metadataName,
+    instanceUrl,
+    accessToken,
+    apiVersion
+}) {
+    const entitySoql = buildCustomMetadataEntityDefinitionSoql(metadataName);
+    const recordSoql = buildCustomMetadataSoql(metadataName);
+    const api = 'REST';
+
+    if (!entitySoql || !recordSoql) {
+        personAccountTrace.logDestinationStep({
+            metadataType,
+            metadataName,
+            soql: null,
+            records: [],
+            totalSize: 0,
+            decision: DESTINATION_STATE.UNKNOWN,
+            warning: `${metadataType} existence query is not supported.`
+        });
+
+        return createEntry({
+            metadataType,
+            metadataName,
+            state: DESTINATION_STATE.UNKNOWN,
+            api: null,
+            queried: false,
+            unsupported: true,
+            warning: `${metadataType} existence query is not supported.`
+        });
+    }
+
+    try {
+        const entityResult = await runSoqlQuery(
+            instanceUrl,
+            accessToken,
+            apiVersion,
+            entitySoql,
+            false,
+            { metadataType, metadataName, customMetadataPhase: 'entityDefinition' }
+        );
+
+        if ((entityResult.totalSize || 0) === 0) {
+            personAccountTrace.logDestinationStep({
+                metadataType,
+                metadataName,
+                soql: entitySoql,
+                records: entityResult.records || [],
+                totalSize: entityResult.totalSize || 0,
+                decision: DESTINATION_STATE.MISSING
+            });
+
+            return createEntry({
+                metadataType,
+                metadataName,
+                state: DESTINATION_STATE.MISSING,
+                api,
+                queried: true,
+                warning: null
+            });
+        }
+
+        const recordResult = await runSoqlQuery(
+            instanceUrl,
+            accessToken,
+            apiVersion,
+            recordSoql,
+            false,
+            { metadataType, metadataName, customMetadataPhase: 'record' }
+        );
+
+        const exists = (recordResult.totalSize || 0) > 0;
+
+        personAccountTrace.logDestinationStep({
+            metadataType,
+            metadataName,
+            soql: recordSoql,
+            records: recordResult.records || [],
+            totalSize: recordResult.totalSize || 0,
+            decision: exists
+                ? DESTINATION_STATE.EXISTS
+                : DESTINATION_STATE.MISSING
+        });
+
+        return createEntry({
+            metadataType,
+            metadataName,
+            state: exists
+                ? DESTINATION_STATE.EXISTS
+                : DESTINATION_STATE.MISSING,
+            api,
+            queried: true,
+            warning: null
+        });
+    } catch (error) {
+        personAccountTrace.logDestinationStep({
+            metadataType,
+            metadataName,
+            soql: recordSoql,
+            records: [],
+            totalSize: null,
+            decision: DESTINATION_STATE.UNKNOWN,
+            warning:
+                error?.message ||
+                `Unable to query destination state for ${metadataType}:${metadataName}.`
+        });
+
+        return createEntry({
+            metadataType,
+            metadataName,
+            state: DESTINATION_STATE.UNKNOWN,
+            api,
+            queried: true,
+            warning:
+                error?.message ||
+                `Unable to query destination state for ${metadataType}:${metadataName}.`
+        });
+    }
+}
+
 async function querySingleExistence({
     metadataType,
     metadataName,
@@ -214,6 +337,16 @@ async function querySingleExistence({
     accessToken,
     apiVersion
 }) {
+    if (metadataType === 'CustomMetadata') {
+        return queryCustomMetadataExistence({
+            metadataType,
+            metadataName,
+            instanceUrl,
+            accessToken,
+            apiVersion
+        });
+    }
+
     const soql = buildExistenceQuery(metadataType, metadataName);
     const useTooling = usesToolingApi(metadataType);
     const api = useTooling ? 'TOOLING' : 'REST';

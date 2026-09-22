@@ -330,6 +330,18 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'CustomMetadata' && metadataName) {
+        const memberName = String(metadataName).trim();
+
+        if (!memberName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/customMetadata/${memberName}.md-meta.xml`
+        };
+    }
+
     return null;
 }
 
@@ -355,6 +367,7 @@ function selectLogicalMemberFiles(
             'CompactLayout',
             'NamedCredential',
             'ExternalCredential',
+            'CustomMetadata',
             'StandardValueSet'
         ].includes(metadataType)
     ) {

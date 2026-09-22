@@ -802,6 +802,67 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves CustomMetadata logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'CustomMetadata',
+            'Weather_Config.Default'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/customMetadata/Weather_Config.Default.md-meta.xml'
+        });
+    });
+
+    await runTest('selects only the CustomMetadata logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/customMetadata/Weather_Config.Default.md-meta.xml',
+                    bytes: Buffer.from('cmdt-primary')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/customMetadata/Weather_Config.Production.md-meta.xml',
+                    bytes: Buffer.from('cmdt-other')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/classes/AccountService.cls',
+                    bytes: Buffer.from('class')
+                }
+            ],
+            'CustomMetadata',
+            'Weather_Config.Default'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/customMetadata/Weather_Config.Default.md-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when CustomMetadata logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/customMetadata/Weather_Config.Production.md-meta.xml',
+                            bytes: Buffer.from('cmdt-other')
+                        }
+                    ],
+                    'CustomMetadata',
+                    'Weather_Config.Default'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('fails closed when BusinessProcess logical file is missing', () => {
         assert.throws(
             () =>
