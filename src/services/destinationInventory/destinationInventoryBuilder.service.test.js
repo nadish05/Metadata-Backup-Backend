@@ -627,8 +627,20 @@ async function main() {
                 .map((file) => path.basename(file));
 
             assert.deepStrictEqual(consumers.sort(), [
+                'businessProcessRollback.p0r.test.js',
+                'compactLayoutRollback.p0r.test.js',
+                'deleteRollback.p0r82.test.js',
                 'deploymentValidation.service.js',
-                'flowDestinationValidation.service.js'
+                'destinationSnapshotCapture.service.js',
+                'destinationSnapshotCapture.service.test.js',
+                'destinationSnapshotMapper.service.js',
+                'destinationSnapshotMapper.service.test.js',
+                'destinationSnapshotRestore.service.js',
+                'flowDestinationValidation.service.js',
+                'mixedRollback.p0r9.test.js',
+                'orgLock.concurrency.p0r58.test.js',
+                'orgLock.integration.p0r57.test.js',
+                'standardValueSetRollback.p0r.test.js'
             ]);
 
             const resolution = fs.readFileSync(
