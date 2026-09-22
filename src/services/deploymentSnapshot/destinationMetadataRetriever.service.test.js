@@ -10,10 +10,15 @@ const {
     buildExpectedMemberSourcePaths,
     selectLogicalMemberFiles,
     buildRetrieveDiagnosticRecord,
-    summarizeRetrieveCliOutput
+    summarizeRetrieveCliOutput,
+    buildRollbackDestinationArtifactDiagnostic
 } = require('./destinationMetadataRetriever.service');
 const { ensureSfdxProject } = require('../sfdxProject.service');
-const { unpackMemberFiles } = require('./destinationMemberArtifact.service');
+const {
+    packMemberFiles,
+    unpackMemberFiles
+} = require('./destinationMemberArtifact.service');
+const { hashBytes } = require('./snapshotIntegrity.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -917,6 +922,156 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
             /did not return the logical file/
         );
     });
+
+    await runTest(
+        'logs ROLLBACK_DESTINATION_ARTIFACT_DIAGNOSTIC when rollback context is provided',
+        async () => {
+            const workRoot = fs.mkdtempSync(
+                path.join(os.tmpdir(), 'p0r4-retr-flow-diag-')
+            );
+            const flowPath =
+                'force-app/main/default/flows/My_Flow.flow-meta.xml';
+            const flowBytes = Buffer.from('<?xml version="1.0"?><Flow/>', 'utf8');
+            const retriever = buildRetrieverHarness(workRoot, async (command) => {
+                if (String(command).includes('logout')) {
+                    return { stdout: '', stderr: '' };
+                }
+
+                await writeMemberFile(workRoot, flowPath, flowBytes);
+                await writeMemberFile(
+                    workRoot,
+                    'force-app/main/default/flows/Other_Flow.flow-meta.xml',
+                    Buffer.from('other')
+                );
+
+                return {
+                    stdout: JSON.stringify({ status: 0, result: { files: [] } }),
+                    stderr: ''
+                };
+            });
+
+            const { logs, result, error } = await captureConsoleLogs(() =>
+                retriever.retrieveDestinationMember({
+                    refreshToken: 'refresh-secret',
+                    instanceUrl: 'https://example.my.salesforce.com',
+                    metadataType: 'Flow',
+                    metadataName: 'My_Flow',
+                    artifactDiagnosticContext: {
+                        memberKey: 'Flow:My_Flow',
+                        operationId: 'rollback-op-1',
+                        snapshotId: 'snapshot_test'
+                    }
+                })
+            );
+
+            assert.ifError(error);
+            const diagnosticLine = logs.find((line) =>
+                line.includes('ROLLBACK_DESTINATION_ARTIFACT_DIAGNOSTIC')
+            );
+            assert.ok(diagnosticLine, 'expected rollback artifact diagnostic log');
+
+            const payload = JSON.parse(
+                diagnosticLine.replace(
+                    /^ROLLBACK_DESTINATION_ARTIFACT_DIAGNOSTIC /,
+                    ''
+                )
+            );
+
+            assert.strictEqual(payload.metadataType, 'Flow');
+            assert.strictEqual(payload.metadataName, 'My_Flow');
+            assert.strictEqual(payload.memberKey, 'Flow:My_Flow');
+            assert.strictEqual(payload.operationId, 'rollback-op-1');
+            assert.strictEqual(payload.snapshotId, 'snapshot_test');
+            assert.strictEqual(payload.retrievedFileCount, 2);
+            assert.strictEqual(payload.logicalSelectedFileCount, 1);
+            assert.strictEqual(payload.selectedFiles.length, 1);
+            assert.strictEqual(payload.selectedFiles[0].relativePath, flowPath);
+            assert.strictEqual(
+                payload.selectedFiles[0].contentLength,
+                flowBytes.length
+            );
+            assert.strictEqual(
+                payload.selectedFiles[0].rawContentHash,
+                hashBytes(flowBytes)
+            );
+            assert.strictEqual(
+                payload.packedArtifactHash,
+                hashBytes(result.artifactBytes)
+            );
+            assert.strictEqual(
+                payload.packedArtifactSize,
+                result.artifactBytes.length
+            );
+            assert.strictEqual(payload.packedFileCount, 1);
+            assert.deepStrictEqual(payload.packedRelativePaths, [flowPath]);
+            assert.ok(payload.workspacePath);
+            assert.ok(
+                !logs.some((line) =>
+                    line.includes('ROLLBACK_DESTINATION_ARTIFACT_DIAGNOSTIC refresh')
+                )
+            );
+
+            const { logs: logsWithoutContext } = await captureConsoleLogs(() =>
+                retriever.retrieveDestinationMember({
+                    refreshToken: 'refresh-secret',
+                    instanceUrl: 'https://example.my.salesforce.com',
+                    metadataType: 'Flow',
+                    metadataName: 'My_Flow'
+                })
+            );
+
+            assert.ok(
+                !logsWithoutContext.some((line) =>
+                    line.includes('ROLLBACK_DESTINATION_ARTIFACT_DIAGNOSTIC')
+                )
+            );
+
+            await fs.promises.rm(workRoot, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
+        'buildRollbackDestinationArtifactDiagnostic matches packed artifact hashes',
+        () => {
+            const flowPath =
+                'force-app/main/default/flows/Active_Customer.flow-meta.xml';
+            const flowBytes = Buffer.from('<Flow/>', 'utf8');
+            const logicalMemberFiles = [
+                { relativePath: flowPath, bytes: flowBytes }
+            ];
+            const artifactBytes = packMemberFiles(logicalMemberFiles);
+            const payload = buildRollbackDestinationArtifactDiagnostic({
+                metadataType: 'Flow',
+                metadataName: 'Active_Customer',
+                workspacePath: '/tmp/dest-snapshot-example',
+                retrievedFiles: [
+                    ...logicalMemberFiles,
+                    {
+                        relativePath:
+                            'force-app/main/default/flows/Other.flow-meta.xml',
+                        bytes: Buffer.from('x')
+                    }
+                ],
+                logicalMemberFiles,
+                artifactBytes,
+                artifactDiagnosticContext: {
+                    memberKey: 'Flow:Active_Customer'
+                }
+            });
+
+            assert.strictEqual(payload.packedArtifactHash, hashBytes(artifactBytes));
+            assert.strictEqual(payload.retrievedFileCount, 2);
+            assert.strictEqual(payload.logicalSelectedFileCount, 1);
+            assert.strictEqual(
+                payload.selectedFiles[0].rawContentHash,
+                hashBytes(flowBytes)
+            );
+            assert.deepStrictEqual(
+                payload.packedRelativePaths,
+                unpackMemberFiles(artifactBytes).map((file) => file.relativePath)
+            );
+        }
+    );
 
     await runTest('fails closed when BusinessProcess logical file is missing', () => {
         assert.throws(

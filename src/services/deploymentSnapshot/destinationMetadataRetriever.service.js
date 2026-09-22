@@ -13,7 +13,11 @@ const {
     loginSfOrg,
     shellQuote
 } = require('../checkOnlyDeployment.service');
-const { packMemberFiles } = require('./destinationMemberArtifact.service');
+const {
+    packMemberFiles,
+    unpackMemberFiles
+} = require('./destinationMemberArtifact.service');
+const { hashBytes } = require('./snapshotIntegrity.service');
 
 const mkdir = util.promisify(fs.mkdir);
 const readdir = util.promisify(fs.readdir);
@@ -519,6 +523,55 @@ function logDestinationRetrieveDiagnostic(diagnostic) {
     console.log(JSON.stringify(diagnostic, null, 2));
 }
 
+function normalizeLoggedRelativePath(relativePath) {
+    return String(relativePath || '').replace(/\\/g, '/');
+}
+
+function buildRollbackDestinationArtifactDiagnostic({
+    metadataType,
+    metadataName,
+    workspacePath,
+    retrievedFiles,
+    logicalMemberFiles,
+    artifactBytes,
+    artifactDiagnosticContext
+} = {}) {
+    const context = artifactDiagnosticContext || {};
+    const selectedFiles = (logicalMemberFiles || []).map((file) => ({
+        relativePath: normalizeLoggedRelativePath(file.relativePath),
+        contentLength: file.bytes.length,
+        rawContentHash: hashBytes(file.bytes)
+    }));
+    const packedFiles = unpackMemberFiles(artifactBytes);
+
+    return {
+        memberKey: context.memberKey || null,
+        operationId: context.operationId || null,
+        snapshotId: context.snapshotId || null,
+        metadataType,
+        metadataName,
+        workspacePath: workspacePath || null,
+        retrievedFileCount: Array.isArray(retrievedFiles)
+            ? retrievedFiles.length
+            : 0,
+        logicalSelectedFileCount: selectedFiles.length,
+        selectedFiles,
+        packedArtifactSize: artifactBytes.length,
+        packedFileCount: packedFiles.length,
+        packedRelativePaths: packedFiles.map((file) =>
+            normalizeLoggedRelativePath(file.relativePath)
+        ),
+        packedArtifactHash: hashBytes(artifactBytes)
+    };
+}
+
+function logRollbackDestinationArtifactDiagnostic(payload) {
+    console.log(
+        'ROLLBACK_DESTINATION_ARTIFACT_DIAGNOSTIC',
+        JSON.stringify(payload)
+    );
+}
+
 function buildExecFailureError(metadataType, metadataName, diagnostic) {
     const prefix = `Destination snapshot capture failed for ${metadataType}:${metadataName}:`;
     const details = [];
@@ -679,7 +732,8 @@ function createDestinationMetadataRetriever(dependencies = {}) {
         instanceUrl,
         metadataType,
         metadataName,
-        sourceApiVersion
+        sourceApiVersion,
+        artifactDiagnosticContext
     }) {
         if (!refreshToken || !instanceUrl) {
             throw new Error(
@@ -822,9 +876,25 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                 metadataName
             );
 
+            const artifactBytes = packMemberFiles(logicalMemberFiles);
+
+            if (artifactDiagnosticContext) {
+                logRollbackDestinationArtifactDiagnostic(
+                    buildRollbackDestinationArtifactDiagnostic({
+                        metadataType,
+                        metadataName,
+                        workspacePath,
+                        retrievedFiles,
+                        logicalMemberFiles,
+                        artifactBytes,
+                        artifactDiagnosticContext
+                    })
+                );
+            }
+
             return {
                 files: retrievedFiles,
-                artifactBytes: packMemberFiles(logicalMemberFiles)
+                artifactBytes
             };
         } finally {
             await logoutAlias(alias, execAsync);
@@ -852,5 +922,7 @@ module.exports = {
     summarizeRetrieveCliOutput,
     redactDiagnosticText,
     buildRetrieveDiagnosticRecord,
-    logDestinationRetrieveDiagnostic
+    logDestinationRetrieveDiagnostic,
+    buildRollbackDestinationArtifactDiagnostic,
+    logRollbackDestinationArtifactDiagnostic
 };

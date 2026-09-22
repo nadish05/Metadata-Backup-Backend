@@ -693,7 +693,12 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     instanceUrl: args.instanceUrl,
                     metadataType: member.metadataType,
                     metadataName: member.metadataName,
-                    sourceApiVersion: args.deploymentApiVersion || null
+                    sourceApiVersion: args.deploymentApiVersion || null,
+                    artifactDiagnosticContext: {
+                        memberKey: memberKey(member),
+                        operationId: args.operationId || null,
+                        snapshotId: args.snapshotId || null
+                    }
                 });
             } catch (error) {
                 return {
@@ -1126,7 +1131,12 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         instanceUrl: args.instanceUrl,
                         metadataType: member.metadataType,
                         metadataName: member.metadataName,
-                        sourceApiVersion: args.deploymentApiVersion || null
+                        sourceApiVersion: args.deploymentApiVersion || null,
+                        artifactDiagnosticContext: {
+                            memberKey: memberKey(member),
+                            operationId: args.operationId || operation?.operationId || null,
+                            snapshotId: snapshot.snapshotId || null
+                        }
                     });
                 } catch (error) {
                     logRollbackRetrieveDiagnostic({
