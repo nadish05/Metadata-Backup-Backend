@@ -306,6 +306,18 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'NamedCredential' && metadataName) {
+        const developerName = String(metadataName).trim();
+
+        if (!developerName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/namedCredentials/${developerName}.namedCredential-meta.xml`
+        };
+    }
+
     return null;
 }
 
@@ -329,6 +341,7 @@ function selectLogicalMemberFiles(
             'RecordType',
             'BusinessProcess',
             'CompactLayout',
+            'NamedCredential',
             'StandardValueSet'
         ].includes(metadataType)
     ) {

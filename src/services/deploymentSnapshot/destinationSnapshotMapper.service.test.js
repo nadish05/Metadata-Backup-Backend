@@ -250,6 +250,7 @@ runTest(
         );
         assert.strictEqual(isCaptureAllowlisted('BusinessProcess'), true);
         assert.strictEqual(isCaptureAllowlisted('CompactLayout'), true);
+        assert.strictEqual(isCaptureAllowlisted('NamedCredential'), true);
         assert.strictEqual(isCaptureAllowlisted('StandardValueSet'), true);
         assert.ok(!isCaptureAllowlisted('Flow'));
     }
@@ -486,6 +487,7 @@ runTest('V1 allowlist includes StandardValueSet alongside proven snapshot types'
     assert.strictEqual(isCaptureAllowlisted('RecordType'), true);
     assert.strictEqual(isCaptureAllowlisted('BusinessProcess'), true);
     assert.strictEqual(isCaptureAllowlisted('CompactLayout'), true);
+    assert.strictEqual(isCaptureAllowlisted('NamedCredential'), true);
     assert.strictEqual(isCaptureAllowlisted('StandardValueSet'), true);
     assert.strictEqual(isCaptureAllowlisted('Flow'), false);
     assert.strictEqual(isCaptureAllowlisted('CustomMetadataType'), false);

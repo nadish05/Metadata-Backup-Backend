@@ -638,6 +638,7 @@ async function main() {
                 'destinationSnapshotRestore.service.js',
                 'flowDestinationValidation.service.js',
                 'mixedRollback.p0r9.test.js',
+                'namedCredentialRollback.p0r.test.js',
                 'orgLock.concurrency.p0r58.test.js',
                 'orgLock.integration.p0r57.test.js',
                 'standardValueSetRollback.p0r.test.js'

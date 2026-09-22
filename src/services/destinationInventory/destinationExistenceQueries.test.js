@@ -519,4 +519,105 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
             stub.restore();
         }
     });
+
+    await runTest('buildExistenceQuery wires NamedCredential to REST SOQL', () => {
+        assert.strictEqual(usesToolingApi('NamedCredential'), false);
+        const soql = buildExistenceQuery('NamedCredential', 'Backup_API');
+
+        assert.ok(soql.includes("DeveloperName = 'Backup_API'"));
+        assert.ok(soql.includes('FROM NamedCredential'));
+    });
+
+    await runTest('buildExistenceQuery escapes NamedCredential DeveloperName in SOQL', () => {
+        const soql = buildExistenceQuery('NamedCredential', "Backup's_API");
+
+        assert.ok(soql.includes("DeveloperName = 'Backup\\'s_API'"));
+        assert.ok(soql.includes('FROM NamedCredential'));
+    });
+
+    await runTest('inventory reports EXISTS when NamedCredential query returns rows', async () => {
+        const stub = stubToolingQuery({ totalSize: 1, records: [{ Id: '0' }] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'NamedCredential',
+                        metadataName: 'Backup_API'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('NamedCredential:Backup_API').state,
+                DESTINATION_STATE.EXISTS
+            );
+            assert.ok(
+                stub.requestedUrls.some(
+                    (url) =>
+                        url.includes('/query') && !url.includes('/tooling/query')
+                )
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes("DeveloperName = 'Backup_API'")
+                )
+            );
+            assert.ok(
+                !stub.requestedUrls.some((url) => url.includes('/tooling/query'))
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports MISSING when NamedCredential query is empty', async () => {
+        const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'NamedCredential',
+                        metadataName: 'Backup_API'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('NamedCredential:Backup_API').state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when NamedCredential query fails', async () => {
+        const stub = stubToolingQuery({ fail: true });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'NamedCredential',
+                        metadataName: 'Backup_API'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('NamedCredential:Backup_API').state,
+                DESTINATION_STATE.UNKNOWN
+            );
+        } finally {
+            stub.restore();
+        }
+    });
 })();

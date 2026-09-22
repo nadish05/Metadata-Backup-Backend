@@ -680,6 +680,67 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves NamedCredential logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'NamedCredential',
+            'Backup_API'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/namedCredentials/Backup_API.namedCredential-meta.xml'
+        });
+    });
+
+    await runTest('selects only the NamedCredential logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/namedCredentials/Backup_API.namedCredential-meta.xml',
+                    bytes: Buffer.from('nc-primary')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/namedCredentials/Other_API.namedCredential-meta.xml',
+                    bytes: Buffer.from('nc-other')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/classes/AccountService.cls',
+                    bytes: Buffer.from('class')
+                }
+            ],
+            'NamedCredential',
+            'Backup_API'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/namedCredentials/Backup_API.namedCredential-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when NamedCredential logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/namedCredentials/Other_API.namedCredential-meta.xml',
+                            bytes: Buffer.from('nc-other')
+                        }
+                    ],
+                    'NamedCredential',
+                    'Backup_API'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('fails closed when BusinessProcess logical file is missing', () => {
         assert.throws(
             () =>

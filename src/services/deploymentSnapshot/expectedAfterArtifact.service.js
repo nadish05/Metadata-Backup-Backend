@@ -90,7 +90,10 @@ function resolveWorkspaceRelativeFilePath(member) {
         return explicitPath;
     }
 
-    if (metadataType === 'CompactLayout' && metadataName) {
+    if (
+        (metadataType === 'CompactLayout' || metadataType === 'NamedCredential') &&
+        metadataName
+    ) {
         const expectedPaths = buildExpectedMemberSourcePaths(
             metadataType,
             metadataName
