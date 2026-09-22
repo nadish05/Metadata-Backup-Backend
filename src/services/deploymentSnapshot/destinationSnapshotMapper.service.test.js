@@ -253,7 +253,7 @@ runTest(
         assert.strictEqual(isCaptureAllowlisted('NamedCredential'), true);
         assert.strictEqual(isCaptureAllowlisted('ExternalCredential'), true);
         assert.strictEqual(isCaptureAllowlisted('StandardValueSet'), true);
-        assert.ok(!isCaptureAllowlisted('Flow'));
+        assert.strictEqual(isCaptureAllowlisted('Flow'), true);
     }
 );
 
@@ -491,7 +491,7 @@ runTest('V1 allowlist includes StandardValueSet alongside proven snapshot types'
     assert.strictEqual(isCaptureAllowlisted('NamedCredential'), true);
     assert.strictEqual(isCaptureAllowlisted('ExternalCredential'), true);
     assert.strictEqual(isCaptureAllowlisted('StandardValueSet'), true);
-    assert.strictEqual(isCaptureAllowlisted('Flow'), false);
+    assert.strictEqual(isCaptureAllowlisted('Flow'), true);
     assert.strictEqual(isCaptureAllowlisted('CustomMetadataType'), false);
 });
 

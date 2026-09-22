@@ -423,11 +423,17 @@ const BASE_ARGS = {
             captureArgs: {
                 ...BASE_ARGS,
                 selectedMetadata: [
-                    { metadataType: 'Flow', metadataName: 'Onboarding' }
+                    {
+                        metadataType: 'CustomMetadataType',
+                        metadataName: 'Weather_Config'
+                    }
                 ],
                 generatedDeploymentPackage: {
                     metadata: [
-                        { metadataType: 'Flow', metadataName: 'Onboarding' }
+                        {
+                            metadataType: 'CustomMetadataType',
+                            metadataName: 'Weather_Config'
+                        }
                     ]
                 }
             },
@@ -440,7 +446,7 @@ const BASE_ARGS = {
         assert.strictEqual(result.snapshotBlocked, true);
         assert.match(
             JSON.stringify(result.deploymentExecution),
-            /Flow:Onboarding/
+            /CustomMetadataType:Weather_Config/
         );
         assert.match(
             JSON.stringify(result.deploymentExecution),
@@ -867,7 +873,7 @@ const BASE_ARGS = {
     );
 
     await runTest(
-        'TEST 11: unsupported Flow in deployment package fails closed',
+        'TEST 11: unsupported CustomMetadataType in deployment package fails closed',
         async () => {
             const afterPacked = packMemberFiles([
                 {
@@ -884,8 +890,8 @@ const BASE_ARGS = {
                             state: DESTINATION_STATE.MISSING
                         },
                         {
-                            metadataType: 'Flow',
-                            metadataName: 'My_Flow',
+                            metadataType: 'CustomMetadataType',
+                            metadataName: 'Weather_Config',
                             state: DESTINATION_STATE.EXISTS
                         }
                     ]),
@@ -916,17 +922,17 @@ const BASE_ARGS = {
                             filePath: OPPORTUNITY_RECORD_TYPE_PATH
                         },
                         {
-                            metadataType: 'Flow',
-                            metadataName: 'My_Flow',
+                            metadataType: 'CustomMetadataType',
+                            metadataName: 'Weather_Config',
                             filePath:
-                                'force-app/main/default/flows/My_Flow.flow-meta.xml'
+                                'force-app/main/default/objects/Weather_Config__mdt/Weather_Config__mdt.object-meta.xml'
                         }
                     ]
                 }
             });
 
             assert.strictEqual(capture.ok, false);
-            assert.match(capture.message, /Flow/);
+            assert.match(capture.message, /CustomMetadataType/);
             assert.match(capture.message, /not in the V1 snapshot allowlist/);
         }
     );

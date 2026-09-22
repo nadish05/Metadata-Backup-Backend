@@ -263,4 +263,58 @@ function runTest(name, fn) {
         assert.strictEqual(result.files[0].relativePath, explicit);
         await fs.promises.rm(root, { recursive: true, force: true });
     });
+
+    await runTest(
+        'Flow expected-after derives logical path when filePath is null',
+        async () => {
+            const root = fs.mkdtempSync(
+                path.join(os.tmpdir(), 'p0r51-after-flow-')
+            );
+            const rel = 'force-app/main/default/flows/My_Flow.flow-meta.xml';
+            const xml = Buffer.from('<Flow/>');
+
+            await fs.promises.mkdir(path.dirname(path.join(root, rel)), {
+                recursive: true
+            });
+            await fs.promises.writeFile(path.join(root, rel), xml);
+
+            const result = await collectExpectedAfterArtifact({
+                workspacePath: root,
+                member: {
+                    metadataType: 'Flow',
+                    metadataName: 'My_Flow',
+                    filePath: null
+                }
+            });
+
+            assert.strictEqual(result.files[0].relativePath, rel);
+            assert.ok(result.expectedAfterHash);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
+
+    await runTest('Flow expected-after preserves explicit filePath', async () => {
+        const root = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'p0r51-after-flow-explicit-')
+        );
+        const explicit = 'flows/My_Flow.flow-meta.xml';
+        const xml = Buffer.from('<Flow/>');
+
+        await fs.promises.mkdir(path.dirname(path.join(root, explicit)), {
+            recursive: true
+        });
+        await fs.promises.writeFile(path.join(root, explicit), xml);
+
+        const result = await collectExpectedAfterArtifact({
+            workspacePath: root,
+            member: {
+                metadataType: 'Flow',
+                metadataName: 'My_Flow',
+                filePath: explicit
+            }
+        });
+
+        assert.strictEqual(result.files[0].relativePath, explicit);
+        await fs.promises.rm(root, { recursive: true, force: true });
+    });
 })();

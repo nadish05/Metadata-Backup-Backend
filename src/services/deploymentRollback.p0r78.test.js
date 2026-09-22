@@ -424,9 +424,10 @@ const CREDENTIALS = {
             deploymentContext: { destinationOrgId: DEST },
             members: [
                 {
-                    metadataType: 'Flow',
-                    metadataName: 'Onboarding',
-                    filePath: 'force-app/main/default/flows/Onboarding.flow-meta.xml',
+                    metadataType: 'CustomMetadataType',
+                    metadataName: 'Weather_Config',
+                    filePath:
+                        'force-app/main/default/objects/Weather_Config__mdt/Weather_Config__mdt.object-meta.xml',
                     changeClass: CHANGE_CLASS.MODIFIED,
                     destinationBeforeBytes: packed,
                     expectedAfterHash: hashBytes(afterBytes())

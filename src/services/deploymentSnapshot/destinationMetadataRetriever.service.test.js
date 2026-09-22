@@ -863,6 +863,61 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves Flow logical path', () => {
+        const paths = buildExpectedMemberSourcePaths('Flow', 'My_Flow');
+
+        assert.deepStrictEqual(paths, {
+            logical: 'force-app/main/default/flows/My_Flow.flow-meta.xml'
+        });
+    });
+
+    await runTest('selects only the Flow logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/flows/My_Flow.flow-meta.xml',
+                    bytes: Buffer.from('flow-primary')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/flows/Other_Flow.flow-meta.xml',
+                    bytes: Buffer.from('flow-other')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/classes/AccountService.cls',
+                    bytes: Buffer.from('class')
+                }
+            ],
+            'Flow',
+            'My_Flow'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            ['force-app/main/default/flows/My_Flow.flow-meta.xml']
+        );
+    });
+
+    await runTest('fails closed when Flow logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/flows/Other_Flow.flow-meta.xml',
+                            bytes: Buffer.from('flow-other')
+                        }
+                    ],
+                    'Flow',
+                    'My_Flow'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('fails closed when BusinessProcess logical file is missing', () => {
         assert.throws(
             () =>

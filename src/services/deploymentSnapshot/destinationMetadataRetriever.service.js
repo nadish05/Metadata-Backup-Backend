@@ -342,6 +342,18 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'Flow' && metadataName) {
+        const memberName = String(metadataName).trim();
+
+        if (!memberName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/flows/${memberName}.flow-meta.xml`
+        };
+    }
+
     return null;
 }
 
@@ -368,7 +380,8 @@ function selectLogicalMemberFiles(
             'NamedCredential',
             'ExternalCredential',
             'CustomMetadata',
-            'StandardValueSet'
+            'StandardValueSet',
+            'Flow'
         ].includes(metadataType)
     ) {
         return retrievedFiles;

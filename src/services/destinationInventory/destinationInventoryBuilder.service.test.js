@@ -639,6 +639,7 @@ async function main() {
                 'destinationSnapshotRestore.service.js',
                 'externalCredentialRollback.p0r.test.js',
                 'flowDestinationValidation.service.js',
+                'flowRollback.p0r.test.js',
                 'mixedRollback.p0r9.test.js',
                 'namedCredentialRollback.p0r.test.js',
                 'orgLock.concurrency.p0r58.test.js',
@@ -828,6 +829,119 @@ async function main() {
             }
         }
     );
+
+    function stubFlowDefinitionInventory({ totalSize, fail = false }) {
+        const originalGet = axios.get;
+        const requestedUrls = [];
+
+        axios.get = async (url) => {
+            if (url.endsWith('/services/data/')) {
+                return { status: 200, data: API_VERSIONS };
+            }
+
+            requestedUrls.push(url);
+
+            if (fail) {
+                throw new Error('Simulated FlowDefinition query failure');
+            }
+
+            return {
+                status: 200,
+                data: {
+                    totalSize,
+                    done: true,
+                    records: totalSize > 0 ? [{ Id: '300000000000001' }] : []
+                }
+            };
+        };
+
+        return {
+            requestedUrls,
+            restore() {
+                axios.get = originalGet;
+            }
+        };
+    }
+
+    await runTest('Flow:My_Flow FlowDefinition zero rows → MISSING', async () => {
+        const stub = stubFlowDefinitionInventory({ totalSize: 0 });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'Flow',
+                        metadataName: 'My_Flow'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                getState(result.inventory, 'Flow', 'My_Flow'),
+                DESTINATION_STATE.MISSING
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) => url.includes('/tooling/query'))
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes('FROM FlowDefinition')
+                )
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('Flow:My_Flow FlowDefinition one row → EXISTS', async () => {
+        const stub = stubFlowDefinitionInventory({ totalSize: 1 });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'Flow',
+                        metadataName: 'My_Flow'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                getState(result.inventory, 'Flow', 'My_Flow'),
+                DESTINATION_STATE.EXISTS
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('Flow:My_Flow FlowDefinition query error → UNKNOWN', async () => {
+        const stub = stubFlowDefinitionInventory({ totalSize: 0, fail: true });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'Flow',
+                        metadataName: 'My_Flow'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                getState(result.inventory, 'Flow', 'My_Flow'),
+                DESTINATION_STATE.UNKNOWN
+            );
+        } finally {
+            stub.restore();
+        }
+    });
 
     if (!process.exitCode) {
         console.log('destinationInventoryBuilder.service tests passed');
