@@ -131,15 +131,16 @@ function stubRestQuery({ totalSize, records = [], fail = false }) {
 }
 
 (async () => {
-    await runTest('TEST 1 — ExternalCredential existence query uses REST DeveloperName', () => {
-        assert.strictEqual(usesToolingApi(METADATA_TYPE), false);
+    await runTest('TEST 1 — ExternalCredential existence query uses Tooling DeveloperName', () => {
+        assert.strictEqual(usesToolingApi(METADATA_TYPE), true);
         const soql = buildExistenceQuery(METADATA_TYPE, METADATA_NAME);
 
         assert.ok(soql.includes("DeveloperName = 'Backup_External_Credential'"));
         assert.ok(soql.includes('FROM ExternalCredential'));
+        assert.ok(soql.includes('LIMIT 1'));
     });
 
-    await runTest('TEST 2 — ExternalCredential inventory uses REST not Tooling', async () => {
+    await runTest('TEST 2 — ExternalCredential inventory uses Tooling API route', async () => {
         const stub = stubRestQuery({ totalSize: 1, records: [{ Id: '0' }] });
 
         try {
@@ -150,13 +151,7 @@ function stubRestQuery({ totalSize, records = [], fail = false }) {
             });
 
             assert.ok(
-                stub.requestedUrls.some(
-                    (url) =>
-                        url.includes('/query') && !url.includes('/tooling/query')
-                )
-            );
-            assert.ok(
-                !stub.requestedUrls.some((url) => url.includes('/tooling/query'))
+                stub.requestedUrls.some((url) => url.includes('/tooling/query'))
             );
         } finally {
             stub.restore();

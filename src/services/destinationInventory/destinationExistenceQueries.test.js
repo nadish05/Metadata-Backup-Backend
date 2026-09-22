@@ -15,6 +15,8 @@ const {
     DESTINATION_STATE,
     buildDestinationInventory
 } = require('./destinationInventoryBuilder.service');
+const { mapExistenceToChangeClass } = require('../deploymentSnapshot/destinationSnapshotMapper.service');
+const { CHANGE_CLASS } = require('../deploymentSnapshot/snapshot.types');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -621,8 +623,8 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         }
     });
 
-    await runTest('buildExistenceQuery wires ExternalCredential to REST SOQL', () => {
-        assert.strictEqual(usesToolingApi('ExternalCredential'), false);
+    await runTest('buildExistenceQuery wires ExternalCredential to Tooling SOQL', () => {
+        assert.strictEqual(usesToolingApi('ExternalCredential'), true);
         const soql = buildExistenceQuery(
             'ExternalCredential',
             'Backup_External_Credential'
@@ -630,6 +632,15 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
 
         assert.ok(soql.includes("DeveloperName = 'Backup_External_Credential'"));
         assert.ok(soql.includes('FROM ExternalCredential'));
+        assert.ok(soql.includes('LIMIT 1'));
+    });
+
+    await runTest('buildExistenceQuery wires ExternalCredential Weather DeveloperName SOQL', () => {
+        const soql = buildExistenceQuery('ExternalCredential', 'Weather');
+
+        assert.ok(soql.includes("DeveloperName = 'Weather'"));
+        assert.ok(soql.includes('FROM ExternalCredential'));
+        assert.ok(soql.includes('LIMIT 1'));
     });
 
     await runTest('buildExistenceQuery escapes ExternalCredential DeveloperName in SOQL', () => {
@@ -660,10 +671,7 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
                 DESTINATION_STATE.EXISTS
             );
             assert.ok(
-                stub.requestedUrls.some(
-                    (url) =>
-                        url.includes('/query') && !url.includes('/tooling/query')
-                )
+                stub.requestedUrls.some((url) => url.includes('/tooling/query'))
             );
             assert.ok(
                 stub.requestedUrls.some((url) =>
@@ -671,9 +679,6 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
                         "DeveloperName = 'Backup_External_Credential'"
                     )
                 )
-            );
-            assert.ok(
-                !stub.requestedUrls.some((url) => url.includes('/tooling/query'))
             );
         } finally {
             stub.restore();
@@ -733,5 +738,48 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         } finally {
             stub.restore();
         }
+    });
+
+    await runTest(
+        'ExternalCredential:Weather Tooling zero records is MISSING for snapshot NEW',
+        async () => {
+            const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'ExternalCredential',
+                            metadataName: 'Weather'
+                        }
+                    ],
+                    accessToken: 'token',
+                    instanceUrl: 'https://example.my.salesforce.com'
+                });
+
+                const entry = result.inventory.get('ExternalCredential:Weather');
+                assert.strictEqual(entry.state, DESTINATION_STATE.MISSING);
+                assert.notStrictEqual(entry.state, DESTINATION_STATE.UNKNOWN);
+                assert.ok(
+                    stub.requestedUrls.some((url) => url.includes('/tooling/query'))
+                );
+                assert.ok(
+                    stub.requestedUrls.some((url) =>
+                        decodeURIComponent(url).includes("DeveloperName = 'Weather'")
+                    )
+                );
+                assert.strictEqual(
+                    mapExistenceToChangeClass(entry.state),
+                    CHANGE_CLASS.NEW
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
+
+    await runTest('NamedCredential remains REST after ExternalCredential Tooling routing', () => {
+        assert.strictEqual(usesToolingApi('NamedCredential'), false);
+        assert.strictEqual(usesToolingApi('ExternalCredential'), true);
     });
 })();

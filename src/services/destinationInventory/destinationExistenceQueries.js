@@ -24,7 +24,8 @@ function usesToolingApi(type) {
         type === 'LightningComponentBundle' ||
         type === 'Flow' ||
         type === 'StandardValueSet' ||
-        type === 'CompactLayout'
+        type === 'CompactLayout' ||
+        type === 'ExternalCredential'
     );
 }
 
