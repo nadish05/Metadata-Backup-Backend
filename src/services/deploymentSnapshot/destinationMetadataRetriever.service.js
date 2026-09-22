@@ -318,6 +318,18 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'ExternalCredential' && metadataName) {
+        const developerName = String(metadataName).trim();
+
+        if (!developerName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/externalCredentials/${developerName}.externalCredential-meta.xml`
+        };
+    }
+
     return null;
 }
 
@@ -342,6 +354,7 @@ function selectLogicalMemberFiles(
             'BusinessProcess',
             'CompactLayout',
             'NamedCredential',
+            'ExternalCredential',
             'StandardValueSet'
         ].includes(metadataType)
     ) {

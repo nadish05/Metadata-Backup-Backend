@@ -421,6 +421,12 @@ function buildExistenceQuery(type, name) {
                 `WHERE DeveloperName = '${escapedName}' LIMIT 1`
             );
 
+        case 'ExternalCredential':
+            return (
+                'SELECT Id FROM ExternalCredential ' +
+                `WHERE DeveloperName = '${escapedName}' LIMIT 1`
+            );
+
         case 'CustomMetadata':
             // Record existence (Type.Record), not EntityDefinition type lookup.
             return buildCustomMetadataSoql(name);

@@ -177,4 +177,34 @@ function runTest(name, fn) {
             await fs.promises.rm(root, { recursive: true, force: true });
         }
     );
+
+    await runTest(
+        'ExternalCredential expected-after derives logical path when filePath is null',
+        async () => {
+            const root = fs.mkdtempSync(
+                path.join(os.tmpdir(), 'p0r51-after-external-credential-')
+            );
+            const rel =
+                'force-app/main/default/externalCredentials/Backup_External_Credential.externalCredential-meta.xml';
+            const xml = Buffer.from('<ExternalCredential/>');
+
+            await fs.promises.mkdir(path.dirname(path.join(root, rel)), {
+                recursive: true
+            });
+            await fs.promises.writeFile(path.join(root, rel), xml);
+
+            const result = await collectExpectedAfterArtifact({
+                workspacePath: root,
+                member: {
+                    metadataType: 'ExternalCredential',
+                    metadataName: 'Backup_External_Credential',
+                    filePath: null
+                }
+            });
+
+            assert.strictEqual(result.files[0].relativePath, rel);
+            assert.ok(result.expectedAfterHash);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
 })();

@@ -636,6 +636,7 @@ async function main() {
                 'destinationSnapshotMapper.service.js',
                 'destinationSnapshotMapper.service.test.js',
                 'destinationSnapshotRestore.service.js',
+                'externalCredentialRollback.p0r.test.js',
                 'flowDestinationValidation.service.js',
                 'mixedRollback.p0r9.test.js',
                 'namedCredentialRollback.p0r.test.js',

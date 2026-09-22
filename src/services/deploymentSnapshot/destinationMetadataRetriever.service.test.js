@@ -741,6 +741,67 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves ExternalCredential logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'ExternalCredential',
+            'Backup_External_Credential'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/externalCredentials/Backup_External_Credential.externalCredential-meta.xml'
+        });
+    });
+
+    await runTest('selects only the ExternalCredential logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/externalCredentials/Backup_External_Credential.externalCredential-meta.xml',
+                    bytes: Buffer.from('ec-primary')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/externalCredentials/Other_External_Credential.externalCredential-meta.xml',
+                    bytes: Buffer.from('ec-other')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/namedCredentials/Backup_API.namedCredential-meta.xml',
+                    bytes: Buffer.from('nc')
+                }
+            ],
+            'ExternalCredential',
+            'Backup_External_Credential'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/externalCredentials/Backup_External_Credential.externalCredential-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when ExternalCredential logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/externalCredentials/Other_External_Credential.externalCredential-meta.xml',
+                            bytes: Buffer.from('ec-other')
+                        }
+                    ],
+                    'ExternalCredential',
+                    'Backup_External_Credential'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('fails closed when BusinessProcess logical file is missing', () => {
         assert.throws(
             () =>

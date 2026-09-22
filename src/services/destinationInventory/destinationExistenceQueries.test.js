@@ -620,4 +620,118 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
             stub.restore();
         }
     });
+
+    await runTest('buildExistenceQuery wires ExternalCredential to REST SOQL', () => {
+        assert.strictEqual(usesToolingApi('ExternalCredential'), false);
+        const soql = buildExistenceQuery(
+            'ExternalCredential',
+            'Backup_External_Credential'
+        );
+
+        assert.ok(soql.includes("DeveloperName = 'Backup_External_Credential'"));
+        assert.ok(soql.includes('FROM ExternalCredential'));
+    });
+
+    await runTest('buildExistenceQuery escapes ExternalCredential DeveloperName in SOQL', () => {
+        const soql = buildExistenceQuery('ExternalCredential', "Backup's_EC");
+
+        assert.ok(soql.includes("DeveloperName = 'Backup\\'s_EC'"));
+        assert.ok(soql.includes('FROM ExternalCredential'));
+    });
+
+    await runTest('inventory reports EXISTS when ExternalCredential query returns rows', async () => {
+        const stub = stubToolingQuery({ totalSize: 1, records: [{ Id: '0' }] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'ExternalCredential',
+                        metadataName: 'Backup_External_Credential'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('ExternalCredential:Backup_External_Credential')
+                    .state,
+                DESTINATION_STATE.EXISTS
+            );
+            assert.ok(
+                stub.requestedUrls.some(
+                    (url) =>
+                        url.includes('/query') && !url.includes('/tooling/query')
+                )
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes(
+                        "DeveloperName = 'Backup_External_Credential'"
+                    )
+                )
+            );
+            assert.ok(
+                !stub.requestedUrls.some((url) => url.includes('/tooling/query'))
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports MISSING when ExternalCredential query is empty', async () => {
+        const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'ExternalCredential',
+                        metadataName: 'Backup_External_Credential'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('ExternalCredential:Backup_External_Credential')
+                    .state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when ExternalCredential query fails', async () => {
+        const stub = stubToolingQuery({ fail: true });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'ExternalCredential',
+                        metadataName: 'Backup_External_Credential'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('ExternalCredential:Backup_External_Credential')
+                    .state,
+                DESTINATION_STATE.UNKNOWN
+            );
+            assert.notStrictEqual(
+                result.inventory.get('ExternalCredential:Backup_External_Credential')
+                    .state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
 })();
