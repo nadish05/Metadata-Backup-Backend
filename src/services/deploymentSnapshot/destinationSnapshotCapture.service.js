@@ -127,7 +127,8 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
         generatedWorkspace,
         refreshToken,
         instanceUrl,
-        deploymentApiVersion = null
+        deploymentApiVersion = null,
+        sourceMetadataApiVersion = null
     } = {}) {
         if (!destinationOrgId) {
             return fail(
@@ -389,7 +390,8 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                     sourceOrgId,
                     deploymentId: historyId,
                     sourceBranch,
-                    destinationBranch
+                    destinationBranch,
+                    sourceMetadataApiVersion
                 },
                 members: captureMembers
             });

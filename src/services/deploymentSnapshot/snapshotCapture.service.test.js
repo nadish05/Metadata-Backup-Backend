@@ -111,6 +111,19 @@ async function main() {
         assert.strictEqual(snapshot.overallIntegrityHash, null);
     });
 
+    await runTest(
+        'create snapshot stores sourceMetadataApiVersion from deployment context',
+        async () => {
+            const { service } = createService();
+            const snapshot = await service.createSnapshot({
+                ...CONTEXT,
+                sourceMetadataApiVersion: '66.0'
+            });
+
+            assert.strictEqual(snapshot.sourceMetadataApiVersion, '66.0');
+        }
+    );
+
     await runTest('missing destinationOrgId is rejected', async () => {
         const { service } = createService();
 

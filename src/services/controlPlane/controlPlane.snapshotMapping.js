@@ -23,7 +23,8 @@ const SNAPSHOT_WRITE_FIELDS = Object.freeze([
     'overallIntegrityHash',
     'rollbackEligible',
     'captureFailureReason',
-    'memberCount'
+    'memberCount',
+    'sourceMetadataApiVersion'
 ]);
 
 const SEAL_PATCH_FIELDS = Object.freeze([
@@ -101,7 +102,14 @@ function fromSalesforceSnapshot(record) {
         captureFailureReason: toText(
             sfField(record, 'Capture_Failure_Reason__c', 'captureFailureReason')
         ),
-        memberCount: toNumber(sfField(record, 'Member_Count__c', 'memberCount'), 0)
+        memberCount: toNumber(sfField(record, 'Member_Count__c', 'memberCount'), 0),
+        sourceMetadataApiVersion: toText(
+            sfField(
+                record,
+                'Source_Metadata_API_Version__c',
+                'sourceMetadataApiVersion'
+            )
+        )
     };
 }
 

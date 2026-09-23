@@ -67,6 +67,13 @@ const {
     retrieveDestinationMember,
     redactDiagnosticText
 } = require('./destinationMetadataRetriever.service');
+const {
+    resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap,
+    logRollbackRetrieveApiVersionDiagnostic
+} = require('./rollbackDestinationRetrieveApiVersion.service');
+const {
+    getLatestApiVersion
+} = require('../destinationInventory/destinationInventoryBuilder.service');
 const { generateManifest } = require('../packageXml.service');
 const { runCheckOnlyDeployment, refreshAccessToken } = require('../checkOnlyDeployment.service');
 const {
@@ -424,6 +431,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const inventoryState = dependencies.getState || getState;
     const refreshAccessTokenFn =
         dependencies.refreshAccessToken || refreshAccessToken;
+    const getLatestApiVersionFn =
+        dependencies.getLatestApiVersion || getLatestApiVersion;
     const buildRecordTypeSemanticDestinationFn =
         dependencies.buildRecordTypeSemanticFromDestination ||
         buildRecordTypeSemanticFromDestination;
@@ -680,9 +689,17 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
         };
     }
 
-    async function verifyMixedRollbackPostDeployment(args, members) {
+    async function verifyMixedRollbackPostDeployment(
+        args,
+        members,
+        rollbackDestinationRetrieveSourceApiVersion = null
+    ) {
         const { restoreMembers, deleteMembers } =
             partitionMixedRollbackMembers(members);
+        const retrieveSourceApiVersion =
+            rollbackDestinationRetrieveSourceApiVersion !== undefined
+                ? rollbackDestinationRetrieveSourceApiVersion
+                : args.deploymentApiVersion || null;
 
         for (const member of restoreMembers) {
             let retrieved;
@@ -693,7 +710,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     instanceUrl: args.instanceUrl,
                     metadataType: member.metadataType,
                     metadataName: member.metadataName,
-                    sourceApiVersion: args.deploymentApiVersion || null,
+                    sourceApiVersion: retrieveSourceApiVersion,
                     artifactDiagnosticContext: {
                         memberKey: memberKey(member),
                         operationId: args.operationId || null,
@@ -1121,6 +1138,42 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             const drift = [];
             const recordTypeBusinessProcessByMemberKey = new Map();
             const driftCredentials = await resolvePostDeleteInventoryCredentials(args);
+            const retrieveApiVersionResolution =
+                await resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap(
+                    {
+                        snapshot,
+                        deploymentApiVersion: args.deploymentApiVersion,
+                        refreshToken: args.refreshToken,
+                        instanceUrl: args.instanceUrl,
+                        accessToken: args.accessToken,
+                        getLatestApiVersionFn,
+                        refreshAccessTokenFn
+                    }
+                );
+            const rollbackDestinationRetrieveSourceApiVersion =
+                retrieveApiVersionResolution.effectiveRetrieveApiVersion;
+
+            logRollbackRetrieveApiVersionDiagnostic({
+                operationId: args.operationId || operation?.operationId || null,
+                snapshotId: snapshot.snapshotId,
+                snapshotSourceMetadataApiVersion:
+                    retrieveApiVersionResolution.snapshotSourceMetadataApiVersion,
+                deploymentApiVersion:
+                    retrieveApiVersionResolution.deploymentApiVersion,
+                destinationMaxApiVersion:
+                    retrieveApiVersionResolution.destinationMaxApiVersion,
+                selectedRetrieveApiVersion:
+                    rollbackDestinationRetrieveSourceApiVersion,
+                retrieveApiVersionSelection:
+                    retrieveApiVersionResolution.retrieveApiVersionSelection,
+                defaultApiVersion: retrieveApiVersionResolution.defaultApiVersion,
+                sourceMetadataApiVersionSource:
+                    retrieveApiVersionResolution.snapshotSourceMetadataApiVersion
+                        ? 'snapshot.sourceMetadataApiVersion'
+                        : retrieveApiVersionResolution.deploymentApiVersion
+                          ? 'deploymentApiVersion.fallback'
+                          : 'DEFAULT_FALLBACK'
+            });
 
             for (const member of members) {
                 let retrieved;
@@ -1131,7 +1184,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         instanceUrl: args.instanceUrl,
                         metadataType: member.metadataType,
                         metadataName: member.metadataName,
-                        sourceApiVersion: args.deploymentApiVersion || null,
+                        sourceApiVersion:
+                            rollbackDestinationRetrieveSourceApiVersion,
                         artifactDiagnosticContext: {
                             memberKey: memberKey(member),
                             operationId: args.operationId || operation?.operationId || null,
@@ -1728,7 +1782,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 if (executionRollbackMode === ROLLBACK_MODE.MIXED) {
                     const verification = await verifyMixedRollbackPostDeployment(
                         args,
-                        automaticMembers
+                        automaticMembers,
+                        rollbackDestinationRetrieveSourceApiVersion
                     );
 
                     if (verification.failed) {

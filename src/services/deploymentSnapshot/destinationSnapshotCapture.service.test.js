@@ -289,6 +289,27 @@ const BASE_ARGS = {
         assert.ok(result.snapshot.rollbackEligible);
     });
 
+    await runTest(
+        'capture persists sourceMetadataApiVersion on sealed snapshot',
+        async () => {
+            const harness = createHarness();
+
+            const result = await harness.service.runDeployAfterOptionalSnapshot({
+                shouldDeploy: true,
+                captureArgs: {
+                    ...BASE_ARGS,
+                    sourceMetadataApiVersion: '66.0'
+                },
+                runDeploymentExecution: async () => ({ status: 'Succeeded' })
+            });
+
+            assert.strictEqual(
+                result.snapshot.sourceMetadataApiVersion,
+                '66.0'
+            );
+        }
+    );
+
     await runTest('capture failure blocks deployment', async () => {
         const harness = createHarness({
             retrieveDestinationMember: async () => {

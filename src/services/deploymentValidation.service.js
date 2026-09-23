@@ -2072,7 +2072,9 @@ async function validateDeployment({
                             generatedWorkspace,
                             refreshToken,
                             instanceUrl,
-                            deploymentApiVersion
+                            deploymentApiVersion,
+                            sourceMetadataApiVersion:
+                                deploymentPackage?.sourceApiVersion ?? null
                         },
                         runDeploymentExecution: () =>
                             deploymentExecutionService.runDeploymentExecution({

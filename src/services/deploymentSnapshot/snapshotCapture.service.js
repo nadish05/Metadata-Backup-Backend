@@ -193,7 +193,9 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             overallIntegrityHash: null,
             rollbackEligible: false,
             captureFailureReason: null,
-            memberCount: 0
+            memberCount: 0,
+            sourceMetadataApiVersion:
+                deploymentContext.sourceMetadataApiVersion ?? null
         };
 
         return metadataStore.createSnapshot(snapshot);
