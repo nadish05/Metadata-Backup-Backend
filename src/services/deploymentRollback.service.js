@@ -240,6 +240,8 @@ function createDeploymentRollbackService(dependencies = {}) {
             destinationOrgId: orgId,
             historyId,
             rollbackOfHistoryId: historyId,
+            deploymentApiVersion:
+                originalHistory?.manifestSummary?.apiVersion ?? null,
             ...(request.operationId
                 ? { operationId: request.operationId }
                 : {})
