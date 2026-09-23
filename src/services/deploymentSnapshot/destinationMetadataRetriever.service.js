@@ -534,7 +534,9 @@ function buildRollbackDestinationArtifactDiagnostic({
     retrievedFiles,
     logicalMemberFiles,
     artifactBytes,
-    artifactDiagnosticContext
+    artifactDiagnosticContext,
+    requestedSourceApiVersion,
+    effectiveSourceApiVersion
 } = {}) {
     const context = artifactDiagnosticContext || {};
     const selectedFiles = (logicalMemberFiles || []).map((file) => ({
@@ -561,7 +563,9 @@ function buildRollbackDestinationArtifactDiagnostic({
         packedRelativePaths: packedFiles.map((file) =>
             normalizeLoggedRelativePath(file.relativePath)
         ),
-        packedArtifactHash: hashBytes(artifactBytes)
+        packedArtifactHash: hashBytes(artifactBytes),
+        requestedSourceApiVersion: requestedSourceApiVersion ?? null,
+        effectiveSourceApiVersion: effectiveSourceApiVersion ?? null
     };
 }
 
@@ -887,7 +891,10 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                         retrievedFiles,
                         logicalMemberFiles,
                         artifactBytes,
-                        artifactDiagnosticContext
+                        artifactDiagnosticContext,
+                        requestedSourceApiVersion: sourceApiVersion ?? null,
+                        effectiveSourceApiVersion:
+                            bootstrap?.sourceApiVersion ?? null
                     })
                 );
             }

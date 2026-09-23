@@ -956,6 +956,7 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
                     instanceUrl: 'https://example.my.salesforce.com',
                     metadataType: 'Flow',
                     metadataName: 'My_Flow',
+                    sourceApiVersion: '67.0',
                     artifactDiagnosticContext: {
                         memberKey: 'Flow:My_Flow',
                         operationId: 'rollback-op-1',
@@ -1005,6 +1006,8 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
             assert.strictEqual(payload.packedFileCount, 1);
             assert.deepStrictEqual(payload.packedRelativePaths, [flowPath]);
             assert.ok(payload.workspacePath);
+            assert.strictEqual(payload.requestedSourceApiVersion, '67.0');
+            assert.strictEqual(payload.effectiveSourceApiVersion, '61.0');
             assert.ok(
                 !logs.some((line) =>
                     line.includes('ROLLBACK_DESTINATION_ARTIFACT_DIAGNOSTIC refresh')

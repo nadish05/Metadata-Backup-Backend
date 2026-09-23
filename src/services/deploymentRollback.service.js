@@ -20,6 +20,7 @@ const { orgIdsMatch } = require('./deploymentOrgLock/destinationOrgIdentity.serv
 const {
     getSalesforceInlineRollbackOperationStore
 } = require('./deploymentSnapshot/rollbackOperation.resolver');
+const { DEFAULT_API_VERSION } = require('../config/salesforce');
 
 const INPUT_CODE = Object.freeze({
     HISTORY_ID_REQUIRED: 'ROLLBACK_HISTORY_ID_REQUIRED',
@@ -70,6 +71,79 @@ function inputRejected(code, message) {
             deploymentHistory: null
         }
     };
+}
+
+function resolveSourceMetadataApiVersionFromHistory(originalHistory) {
+    if (!originalHistory || typeof originalHistory !== 'object') {
+        return {
+            sourceMetadataApiVersion: null,
+            sourceMetadataApiVersionSource: 'NOT_AVAILABLE_AT_ROLLBACK'
+        };
+    }
+
+    const topLevel = originalHistory.sourceMetadataApiVersion;
+
+    if (topLevel !== undefined && topLevel !== null && topLevel !== '') {
+        return {
+            sourceMetadataApiVersion: String(topLevel),
+            sourceMetadataApiVersionSource: 'history.sourceMetadataApiVersion'
+        };
+    }
+
+    const fromMetadataSummary =
+        originalHistory.metadataSummary?.sourceMetadataApiVersion;
+
+    if (
+        fromMetadataSummary !== undefined &&
+        fromMetadataSummary !== null &&
+        fromMetadataSummary !== ''
+    ) {
+        return {
+            sourceMetadataApiVersion: String(fromMetadataSummary),
+            sourceMetadataApiVersionSource:
+                'history.metadataSummary.sourceMetadataApiVersion'
+        };
+    }
+
+    return {
+        sourceMetadataApiVersion: null,
+        sourceMetadataApiVersionSource: 'NOT_AVAILABLE_AT_ROLLBACK'
+    };
+}
+
+function buildRollbackApiVersionDiagnostic({
+    operationId,
+    snapshotId,
+    historyId,
+    rollbackOfHistoryId,
+    originalHistory,
+    deploymentApiVersion
+} = {}) {
+    const manifestApiVersion =
+        originalHistory?.manifestSummary?.apiVersion ?? null;
+    const sourceMetadata = resolveSourceMetadataApiVersionFromHistory(
+        originalHistory
+    );
+
+    return {
+        operationId: operationId ?? null,
+        snapshotId: snapshotId ?? null,
+        historyId: historyId ?? null,
+        rollbackOfHistoryId: rollbackOfHistoryId ?? null,
+        originalHistoryManifestApiVersion: manifestApiVersion,
+        deploymentApiVersion: deploymentApiVersion ?? null,
+        defaultApiVersion: DEFAULT_API_VERSION,
+        sourceApiVersionSelection: deploymentApiVersion
+            ? 'EXPLICIT_FROM_HISTORY'
+            : 'DEFAULT_FALLBACK',
+        sourceMetadataApiVersion: sourceMetadata.sourceMetadataApiVersion,
+        sourceMetadataApiVersionSource:
+            sourceMetadata.sourceMetadataApiVersionSource
+    };
+}
+
+function logRollbackApiVersionDiagnostic(payload) {
+    console.log('ROLLBACK_API_VERSION_DIAGNOSTIC', JSON.stringify(payload));
 }
 
 function classifyRestoreResult(result) {
@@ -233,6 +307,20 @@ function createDeploymentRollbackService(dependencies = {}) {
             }
         }
 
+        const deploymentApiVersion =
+            originalHistory?.manifestSummary?.apiVersion ?? null;
+
+        logRollbackApiVersionDiagnostic(
+            buildRollbackApiVersionDiagnostic({
+                operationId: request.operationId ?? null,
+                snapshotId,
+                historyId,
+                rollbackOfHistoryId: historyId,
+                originalHistory,
+                deploymentApiVersion
+            })
+        );
+
         const restoreResult = await activeRestoreService.runRollback({
             snapshotId,
             refreshToken,
@@ -240,8 +328,7 @@ function createDeploymentRollbackService(dependencies = {}) {
             destinationOrgId: orgId,
             historyId,
             rollbackOfHistoryId: historyId,
-            deploymentApiVersion:
-                originalHistory?.manifestSummary?.apiVersion ?? null,
+            deploymentApiVersion,
             ...(request.operationId
                 ? { operationId: request.operationId }
                 : {})
@@ -297,5 +384,8 @@ const defaultService = createDeploymentRollbackService();
 module.exports = {
     INPUT_CODE,
     createDeploymentRollbackService,
-    executeRollback: defaultService.executeRollback
+    executeRollback: defaultService.executeRollback,
+    buildRollbackApiVersionDiagnostic,
+    resolveSourceMetadataApiVersionFromHistory,
+    logRollbackApiVersionDiagnostic
 };
