@@ -46,10 +46,30 @@ function createSalesforceControlPlaneSnapshotMetadataStore(options = {}) {
         const client = resolveClient(options);
 
         try {
-            const envelope = await client.controlPlane('POST', '/snapshots', {
-                body: toSalesforceSnapshotPayload(snapshot, {
-                    includeSnapshotId: true
+            const payload = toSalesforceSnapshotPayload(snapshot, {
+                includeSnapshotId: true
+            });
+
+            console.log(
+                'SNAPSHOT_CREATE_API_VERSION_DIAGNOSTIC',
+                JSON.stringify({
+                    snapshotId: snapshot?.snapshotId ?? null,
+                    deploymentId: snapshot?.deploymentId ?? null,
+                    snapshotSourceMetadataApiVersion:
+                        snapshot?.sourceMetadataApiVersion ?? null,
+                    payloadSourceMetadataApiVersion:
+                        payload?.sourceMetadataApiVersion ?? null,
+                    hasSourceMetadataApiVersion:
+                        Object.prototype.hasOwnProperty.call(
+                            payload,
+                            'sourceMetadataApiVersion'
+                        ),
+                    endpoint: '/services/apexrest/control-plane/snapshots'
                 })
+            );
+
+            const envelope = await client.controlPlane('POST', '/snapshots', {
+                body: payload
             });
 
             return fromSalesforceSnapshot(envelope.record);
