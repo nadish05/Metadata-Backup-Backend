@@ -45,6 +45,18 @@ function createSalesforceControlPlaneSnapshotMetadataStore(options = {}) {
     async function createSnapshot(snapshot) {
         const client = resolveClient(options);
 
+        console.log(
+            'SNAPSHOT_CREATE_RUNTIME_V282_DIAGNOSTIC',
+            JSON.stringify({
+                snapshotId: snapshot?.snapshotId ?? null,
+                deploymentId: snapshot?.deploymentId ?? null,
+                sourceMetadataApiVersion:
+                    snapshot?.sourceMetadataApiVersion ?? null,
+                context:
+                    'salesforceControlPlaneSnapshotMetadataStore.createSnapshot'
+            })
+        );
+
         try {
             const payload = toSalesforceSnapshotPayload(snapshot, {
                 includeSnapshotId: true
@@ -56,6 +68,24 @@ function createSalesforceControlPlaneSnapshotMetadataStore(options = {}) {
                     snapshotId: snapshot?.snapshotId ?? null,
                     deploymentId: snapshot?.deploymentId ?? null,
                     snapshotSourceMetadataApiVersion:
+                        snapshot?.sourceMetadataApiVersion ?? null,
+                    payloadSourceMetadataApiVersion:
+                        payload?.sourceMetadataApiVersion ?? null,
+                    hasSourceMetadataApiVersion:
+                        Object.prototype.hasOwnProperty.call(
+                            payload,
+                            'sourceMetadataApiVersion'
+                        ),
+                    endpoint: '/services/apexrest/control-plane/snapshots'
+                })
+            );
+
+            console.log(
+                'SNAPSHOT_CREATE_POST_RUNTIME_V282_DIAGNOSTIC',
+                JSON.stringify({
+                    snapshotId: snapshot?.snapshotId ?? null,
+                    deploymentId: snapshot?.deploymentId ?? null,
+                    sourceMetadataApiVersion:
                         snapshot?.sourceMetadataApiVersion ?? null,
                     payloadSourceMetadataApiVersion:
                         payload?.sourceMetadataApiVersion ?? null,
