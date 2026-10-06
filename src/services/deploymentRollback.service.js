@@ -329,8 +329,12 @@ function createDeploymentRollbackService(dependencies = {}) {
             historyId,
             rollbackOfHistoryId: historyId,
             deploymentApiVersion,
-            repoUrl: originalHistory?.repoUrl ?? null,
-            sourceBranch: originalHistory?.sourceBranch ?? null,
+            repoUrl:
+                originalHistory?.repoUrl ??
+                (text(request.snapshotExport?.repoUrl) || null),
+            sourceBranch:
+                originalHistory?.sourceBranch ??
+                (text(request.snapshotExport?.sourceBranch) || null),
             ...(request.operationId
                 ? { operationId: request.operationId }
                 : {})

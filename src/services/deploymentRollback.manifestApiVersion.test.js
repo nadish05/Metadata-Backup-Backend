@@ -531,4 +531,242 @@ function createRollbackHarness({
             assert.strictEqual(checkOnlyCalls[0].deploymentApiVersion, '66.0');
         }
     );
+
+    const TEST_REPO_URL = 'https://github.com/example/gym-repo.git';
+
+    await runTest(
+        'CASE 1: snapshotExport provenance used when history repo fields are null',
+        async () => {
+            let runRollbackArgs = null;
+            const historyService = createDeploymentHistoryService({
+                store: createMemoryDeploymentHistoryStore()
+            });
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const sealed = await sealNewFlow(capture);
+            const historyId = seedHistory(historyService, {
+                snapshotId: sealed.snapshotId,
+                manifestSummary: { apiVersion: '66.0' }
+            });
+
+            const service = createDeploymentRollbackService({
+                historyService,
+                restoreService: {
+                    async runRollback(args) {
+                        runRollbackArgs = args;
+                        return { blocked: true, code: 'ROLLBACK_BLOCKED_TEST' };
+                    }
+                }
+            });
+
+            await service.executeRollback({
+                historyId,
+                snapshotId: sealed.snapshotId,
+                snapshotExport: {
+                    snapshotId: sealed.snapshotId,
+                    repoUrl: TEST_REPO_URL,
+                    sourceBranch: 'Gym'
+                },
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(runRollbackArgs.repoUrl, TEST_REPO_URL);
+            assert.strictEqual(runRollbackArgs.sourceBranch, 'Gym');
+        }
+    );
+
+    await runTest(
+        'CASE 2: history repoUrl and sourceBranch win over snapshotExport',
+        async () => {
+            let runRollbackArgs = null;
+            const historyService = createDeploymentHistoryService({
+                store: createMemoryDeploymentHistoryStore()
+            });
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const sealed = await sealNewFlow(capture);
+            const historyId = seedHistory(historyService, {
+                snapshotId: sealed.snapshotId,
+                manifestSummary: { apiVersion: '66.0' },
+                repoUrl: 'https://github.com/example/from-history.git',
+                sourceBranch: 'history-branch'
+            });
+
+            const service = createDeploymentRollbackService({
+                historyService,
+                restoreService: {
+                    async runRollback(args) {
+                        runRollbackArgs = args;
+                        return { blocked: true, code: 'ROLLBACK_BLOCKED_TEST' };
+                    }
+                }
+            });
+
+            await service.executeRollback({
+                historyId,
+                snapshotId: sealed.snapshotId,
+                snapshotExport: {
+                    snapshotId: sealed.snapshotId,
+                    repoUrl: TEST_REPO_URL,
+                    sourceBranch: 'Gym'
+                },
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(
+                runRollbackArgs.repoUrl,
+                'https://github.com/example/from-history.git'
+            );
+            assert.strictEqual(runRollbackArgs.sourceBranch, 'history-branch');
+        }
+    );
+
+    await runTest(
+        'CASE 3: no provenance leaves repoUrl and sourceBranch null on runRollback',
+        async () => {
+            let runRollbackArgs = null;
+            const historyService = createDeploymentHistoryService({
+                store: createMemoryDeploymentHistoryStore()
+            });
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const sealed = await sealNewFlow(capture);
+            const historyId = seedHistory(historyService, {
+                snapshotId: sealed.snapshotId
+            });
+
+            const service = createDeploymentRollbackService({
+                historyService,
+                restoreService: {
+                    async runRollback(args) {
+                        runRollbackArgs = args;
+                        return { blocked: true, code: 'ROLLBACK_BLOCKED_TEST' };
+                    }
+                }
+            });
+
+            await service.executeRollback({
+                historyId,
+                snapshotId: sealed.snapshotId,
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(runRollbackArgs.repoUrl, null);
+            assert.strictEqual(runRollbackArgs.sourceBranch, null);
+        }
+    );
+
+    await runTest(
+        'CASE 4: snapshotExport provenance enables repository retrieve API 67.0',
+        async () => {
+            const retrieveCalls = [];
+            const historyService = createDeploymentHistoryService({
+                store: createMemoryDeploymentHistoryStore()
+            });
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const sealed = await sealNewFlow(capture);
+            const historyId = seedHistory(historyService, {
+                snapshotId: sealed.snapshotId,
+                manifestSummary: { apiVersion: '66.0', members: 1 }
+            });
+
+            const service = createRollbackHarness({
+                historyService,
+                capture,
+                getLatestApiVersion: async () => '67.0',
+                createRepositoryFileReader: async () => async () =>
+                    JSON.stringify({
+                        sourceMetadataApiVersion: '67.0'
+                    }),
+                retrieveDestinationMember: async (args) => {
+                    retrieveCalls.push(args);
+                    return {
+                        artifactBytes: packFlowXml('<Flow drift/>'),
+                        files: []
+                    };
+                }
+            });
+
+            await service.executeRollback({
+                historyId,
+                snapshotId: sealed.snapshotId,
+                snapshotExport: {
+                    snapshotId: sealed.snapshotId,
+                    repoUrl: TEST_REPO_URL,
+                    sourceBranch: 'Gym'
+                },
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(retrieveCalls.length, 1);
+            assert.strictEqual(retrieveCalls[0].sourceApiVersion, '67.0');
+        }
+    );
+
+    await runTest(
+        'CASE 5: check-only deploymentApiVersion unchanged when provenance from snapshotExport',
+        async () => {
+            const checkOnlyCalls = [];
+            const historyService = createDeploymentHistoryService({
+                store: createMemoryDeploymentHistoryStore()
+            });
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const sealed = await sealNewFlow(capture);
+            const historyId = seedHistory(historyService, {
+                snapshotId: sealed.snapshotId,
+                manifestSummary: { apiVersion: '66.0', members: 1 }
+            });
+
+            const service = createRollbackHarness({
+                historyService,
+                capture,
+                getLatestApiVersion: async () => '67.0',
+                createRepositoryFileReader: async () => async () =>
+                    JSON.stringify({
+                        sourceMetadataApiVersion: '67.0'
+                    }),
+                retrieveDestinationMember: async () => ({
+                    artifactBytes: packFlowXml(
+                        '<Flow xmlns="http://soap.sforce.com/2006/04/metadata"/>'
+                    ),
+                    files: []
+                }),
+                runCheckOnlyDeployment: async (args) => {
+                    checkOnlyCalls.push(args);
+                    return {
+                        executed: true,
+                        success: true,
+                        status: 'Succeeded',
+                        message: 'ok'
+                    };
+                }
+            });
+
+            await service.executeRollback({
+                historyId,
+                snapshotId: sealed.snapshotId,
+                snapshotExport: {
+                    snapshotId: sealed.snapshotId,
+                    repoUrl: TEST_REPO_URL,
+                    sourceBranch: 'Gym'
+                },
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(checkOnlyCalls.length, 1);
+            assert.strictEqual(checkOnlyCalls[0].deploymentApiVersion, '66.0');
+        }
+    );
 })();
