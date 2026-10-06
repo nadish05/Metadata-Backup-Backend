@@ -95,12 +95,17 @@ async function sealNewFlow(capture) {
     return capture.sealSnapshot(ready.snapshotId);
 }
 
-function seedHistory(historyService, { snapshotId, manifestSummary }) {
+function seedHistory(
+    historyService,
+    { snapshotId, manifestSummary, repoUrl, sourceBranch }
+) {
     const historyId = historyService.createHistory({
         deploymentPackage: {
             deploymentMode: 'DEPLOY',
             destinationOrgId: DEST,
-            sourceOrgId: '00D000000000002'
+            sourceOrgId: '00D000000000002',
+            ...(repoUrl ? { repoUrl } : {}),
+            ...(sourceBranch ? { sourceBranch } : {})
         },
         deploymentReadiness: {
             overallStatus: 'READY',
@@ -132,7 +137,10 @@ function seedHistory(historyService, { snapshotId, manifestSummary }) {
 function createRollbackHarness({
     historyService,
     capture,
-    retrieveDestinationMember
+    retrieveDestinationMember,
+    createRepositoryFileReader,
+    getLatestApiVersion,
+    runCheckOnlyDeployment
 }) {
     const operationStore = createMemoryRollbackOperationStore();
     const lockService = createOrgLockService({
@@ -161,12 +169,18 @@ function createRollbackHarness({
             instanceUrl: CREDENTIALS.instanceUrl
         }),
         retrieveDestinationMember,
-        runCheckOnlyDeployment: async () => ({
-            executed: true,
-            success: true,
-            status: 'Succeeded',
-            message: 'ok'
-        }),
+        ...(createRepositoryFileReader
+            ? { createRepositoryFileReader }
+            : {}),
+        ...(getLatestApiVersion ? { getLatestApiVersion } : {}),
+        runCheckOnlyDeployment:
+            runCheckOnlyDeployment ||
+            (async () => ({
+                executed: true,
+                success: true,
+                status: 'Succeeded',
+                message: 'ok'
+            })),
         runDeploymentExecution: async () => ({
             success: true,
             status: 'Succeeded',
@@ -369,6 +383,152 @@ function createRollbackHarness({
             assert.strictEqual(retrieveCalls[0].metadataType, 'Flow');
             assert.strictEqual(retrieveCalls[0].metadataName, 'Active_Customer');
             assert.ok(result.httpStatus === 200);
+        }
+    );
+
+    await runTest(
+        'executeRollback passes repoUrl and sourceBranch from history to runRollback',
+        async () => {
+            let runRollbackArgs = null;
+            const historyService = createDeploymentHistoryService({
+                store: createMemoryDeploymentHistoryStore()
+            });
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const sealed = await sealNewFlow(capture);
+            const historyId = seedHistory(historyService, {
+                snapshotId: sealed.snapshotId,
+                manifestSummary: { apiVersion: '66.0' },
+                repoUrl: 'https://github.com/example/repo.git',
+                sourceBranch: 'feature/flow'
+            });
+
+            const service = createDeploymentRollbackService({
+                historyService,
+                restoreService: {
+                    async runRollback(args) {
+                        runRollbackArgs = args;
+                        return { blocked: true, code: 'ROLLBACK_BLOCKED_TEST' };
+                    }
+                }
+            });
+
+            await service.executeRollback({
+                historyId,
+                snapshotId: sealed.snapshotId,
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(
+                runRollbackArgs.repoUrl,
+                'https://github.com/example/repo.git'
+            );
+            assert.strictEqual(runRollbackArgs.sourceBranch, 'feature/flow');
+            assert.strictEqual(runRollbackArgs.deploymentApiVersion, '66.0');
+        }
+    );
+
+    await runTest(
+        'Flow drift retrieve uses repository source API 67.0 when snapshot field is null',
+        async () => {
+            const retrieveCalls = [];
+            const historyService = createDeploymentHistoryService({
+                store: createMemoryDeploymentHistoryStore()
+            });
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const sealed = await sealNewFlow(capture);
+            const historyId = seedHistory(historyService, {
+                snapshotId: sealed.snapshotId,
+                manifestSummary: { apiVersion: '66.0', members: 1 },
+                repoUrl: 'https://github.com/example/repo.git',
+                sourceBranch: 'main'
+            });
+
+            const service = createRollbackHarness({
+                historyService,
+                capture,
+                getLatestApiVersion: async () => '67.0',
+                createRepositoryFileReader: async () => async () =>
+                    JSON.stringify({
+                        sourceMetadataApiVersion: '67.0'
+                    }),
+                retrieveDestinationMember: async (args) => {
+                    retrieveCalls.push(args);
+                    return {
+                        artifactBytes: packFlowXml('<Flow drift/>'),
+                        files: []
+                    };
+                }
+            });
+
+            await service.executeRollback({
+                historyId,
+                snapshotId: sealed.snapshotId,
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(retrieveCalls.length, 1);
+            assert.strictEqual(retrieveCalls[0].sourceApiVersion, '67.0');
+        }
+    );
+
+    await runTest(
+        'rollback deployment check-only still uses manifest deploymentApiVersion 66.0',
+        async () => {
+            const checkOnlyCalls = [];
+            const historyService = createDeploymentHistoryService({
+                store: createMemoryDeploymentHistoryStore()
+            });
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const sealed = await sealNewFlow(capture);
+            const historyId = seedHistory(historyService, {
+                snapshotId: sealed.snapshotId,
+                manifestSummary: { apiVersion: '66.0', members: 1 },
+                repoUrl: 'https://github.com/example/repo.git',
+                sourceBranch: 'main'
+            });
+
+            const service = createRollbackHarness({
+                historyService,
+                capture,
+                getLatestApiVersion: async () => '67.0',
+                createRepositoryFileReader: async () => async () =>
+                    JSON.stringify({
+                        sourceMetadataApiVersion: '67.0'
+                    }),
+                retrieveDestinationMember: async () => ({
+                    artifactBytes: packFlowXml(
+                        '<Flow xmlns="http://soap.sforce.com/2006/04/metadata"/>'
+                    ),
+                    files: []
+                }),
+                runCheckOnlyDeployment: async (args) => {
+                    checkOnlyCalls.push(args);
+                    return {
+                        executed: true,
+                        success: true,
+                        status: 'Succeeded',
+                        message: 'ok'
+                    };
+                }
+            });
+
+            await service.executeRollback({
+                historyId,
+                snapshotId: sealed.snapshotId,
+                ...CREDENTIALS
+            });
+
+            assert.strictEqual(checkOnlyCalls.length, 1);
+            assert.strictEqual(checkOnlyCalls[0].deploymentApiVersion, '66.0');
         }
     );
 })();

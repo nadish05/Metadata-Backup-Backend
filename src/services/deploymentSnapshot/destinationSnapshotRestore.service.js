@@ -433,6 +433,10 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
         dependencies.refreshAccessToken || refreshAccessToken;
     const getLatestApiVersionFn =
         dependencies.getLatestApiVersion || getLatestApiVersion;
+    const createRepositoryFileReaderFn =
+        dependencies.createRepositoryFileReader || null;
+    const readRepositorySnapshotMetadataFn =
+        dependencies.readRepositorySnapshotMetadata || null;
     const buildRecordTypeSemanticDestinationFn =
         dependencies.buildRecordTypeSemanticFromDestination ||
         buildRecordTypeSemanticFromDestination;
@@ -1143,11 +1147,24 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     {
                         snapshot,
                         deploymentApiVersion: args.deploymentApiVersion,
+                        repoUrl: args.repoUrl ?? null,
+                        sourceBranch:
+                            args.sourceBranch || snapshot.sourceBranch || null,
                         refreshToken: args.refreshToken,
                         instanceUrl: args.instanceUrl,
                         accessToken: args.accessToken,
                         getLatestApiVersionFn,
-                        refreshAccessTokenFn
+                        refreshAccessTokenFn,
+                        ...(createRepositoryFileReaderFn
+                            ? {
+                                  createRepositoryFileReaderFn
+                              }
+                            : {}),
+                        ...(readRepositorySnapshotMetadataFn
+                            ? {
+                                  readRepositorySnapshotMetadataFn
+                              }
+                            : {})
                     }
                 );
             const rollbackDestinationRetrieveSourceApiVersion =
@@ -1158,21 +1175,21 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 snapshotId: snapshot.snapshotId,
                 snapshotSourceMetadataApiVersion:
                     retrieveApiVersionResolution.snapshotSourceMetadataApiVersion,
+                repositorySourceMetadataApiVersion:
+                    retrieveApiVersionResolution.repositorySourceMetadataApiVersion,
                 deploymentApiVersion:
                     retrieveApiVersionResolution.deploymentApiVersion,
                 destinationMaxApiVersion:
                     retrieveApiVersionResolution.destinationMaxApiVersion,
+                effectiveRetrieveApiVersion:
+                    rollbackDestinationRetrieveSourceApiVersion,
                 selectedRetrieveApiVersion:
                     rollbackDestinationRetrieveSourceApiVersion,
                 retrieveApiVersionSelection:
                     retrieveApiVersionResolution.retrieveApiVersionSelection,
                 defaultApiVersion: retrieveApiVersionResolution.defaultApiVersion,
                 sourceMetadataApiVersionSource:
-                    retrieveApiVersionResolution.snapshotSourceMetadataApiVersion
-                        ? 'snapshot.sourceMetadataApiVersion'
-                        : retrieveApiVersionResolution.deploymentApiVersion
-                          ? 'deploymentApiVersion.fallback'
-                          : 'DEFAULT_FALLBACK'
+                    retrieveApiVersionResolution.sourceMetadataApiVersionSource
             });
 
             for (const member of members) {

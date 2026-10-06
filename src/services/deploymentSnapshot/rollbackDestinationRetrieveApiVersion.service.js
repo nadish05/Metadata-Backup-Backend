@@ -6,60 +6,161 @@ const {
     normalizeApiVersion
 } = require('../deploymentApiNegotiation.service');
 const { getLatestApiVersion } = require('../destinationInventory/destinationInventoryBuilder.service');
+const {
+    createRepositoryFileReader
+} = require('../deploymentWorkspace.service');
+const {
+    readRepositorySnapshotMetadata
+} = require('../repositorySnapshotMetadata.service');
+
+const RETRIEVE_API_VERSION_SOURCE = Object.freeze({
+    SNAPSHOT: 'SNAPSHOT',
+    REPOSITORY_RETRIEVAL_METADATA: 'REPOSITORY_RETRIEVAL_METADATA',
+    DEPLOYMENT_HISTORY: 'DEPLOYMENT_HISTORY',
+    DEFAULT_FALLBACK: 'DEFAULT_FALLBACK'
+});
+
+function effectiveRetrieveApiVersionWithCap(version, destinationMax) {
+    if (!version) {
+        return null;
+    }
+
+    return destinationMax ? minApiVersion(version, destinationMax) : version;
+}
+
+function buildResolution({
+    snapshotSourceMetadataApiVersion = null,
+    repositorySourceMetadataApiVersion = null,
+    deploymentApiVersion = null,
+    destinationMaxApiVersion = null,
+    effectiveRetrieveApiVersion = null,
+    retrieveApiVersionSelection = null,
+    sourceMetadataApiVersionSource = null
+} = {}) {
+    return {
+        snapshotSourceMetadataApiVersion,
+        repositorySourceMetadataApiVersion,
+        deploymentApiVersion,
+        destinationMaxApiVersion,
+        effectiveRetrieveApiVersion,
+        retrieveApiVersionSelection,
+        sourceMetadataApiVersionSource,
+        defaultApiVersion: DEFAULT_API_VERSION
+    };
+}
 
 function resolveRollbackDestinationRetrieveSourceApiVersion({
     snapshotSourceMetadataApiVersion = null,
+    repositorySourceMetadataApiVersion = null,
     deploymentApiVersion = null,
     destinationMaxApiVersion = null
 } = {}) {
     const stored = normalizeApiVersion(snapshotSourceMetadataApiVersion);
+    const repository = normalizeApiVersion(repositorySourceMetadataApiVersion);
     const deployment = normalizeApiVersion(deploymentApiVersion);
     const destinationMax = normalizeApiVersion(destinationMaxApiVersion);
 
     if (stored) {
-        const effectiveRetrieveApiVersion = destinationMax
-            ? minApiVersion(stored, destinationMax)
-            : stored;
-
-        return {
+        return buildResolution({
             snapshotSourceMetadataApiVersion: stored,
+            repositorySourceMetadataApiVersion: repository || null,
             deploymentApiVersion: deployment,
             destinationMaxApiVersion: destinationMax,
-            effectiveRetrieveApiVersion,
+            effectiveRetrieveApiVersion: effectiveRetrieveApiVersionWithCap(
+                stored,
+                destinationMax
+            ),
             retrieveApiVersionSelection: 'SNAPSHOT_SOURCE_METADATA',
-            defaultApiVersion: DEFAULT_API_VERSION
-        };
+            sourceMetadataApiVersionSource: RETRIEVE_API_VERSION_SOURCE.SNAPSHOT
+        });
+    }
+
+    if (repository) {
+        return buildResolution({
+            snapshotSourceMetadataApiVersion: null,
+            repositorySourceMetadataApiVersion: repository,
+            deploymentApiVersion: deployment,
+            destinationMaxApiVersion: destinationMax,
+            effectiveRetrieveApiVersion: effectiveRetrieveApiVersionWithCap(
+                repository,
+                destinationMax
+            ),
+            retrieveApiVersionSelection:
+                RETRIEVE_API_VERSION_SOURCE.REPOSITORY_RETRIEVAL_METADATA,
+            sourceMetadataApiVersionSource:
+                RETRIEVE_API_VERSION_SOURCE.REPOSITORY_RETRIEVAL_METADATA
+        });
     }
 
     if (deployment) {
-        return {
+        return buildResolution({
             snapshotSourceMetadataApiVersion: null,
+            repositorySourceMetadataApiVersion: null,
             deploymentApiVersion: deployment,
             destinationMaxApiVersion: destinationMax,
             effectiveRetrieveApiVersion: deployment,
             retrieveApiVersionSelection: 'DEPLOYMENT_API_VERSION_FALLBACK',
-            defaultApiVersion: DEFAULT_API_VERSION
-        };
+            sourceMetadataApiVersionSource:
+                RETRIEVE_API_VERSION_SOURCE.DEPLOYMENT_HISTORY
+        });
     }
 
-    return {
+    return buildResolution({
         snapshotSourceMetadataApiVersion: null,
+        repositorySourceMetadataApiVersion: null,
         deploymentApiVersion: null,
         destinationMaxApiVersion: destinationMax,
         effectiveRetrieveApiVersion: null,
         retrieveApiVersionSelection: 'DEFAULT_FALLBACK',
-        defaultApiVersion: DEFAULT_API_VERSION
-    };
+        sourceMetadataApiVersionSource: RETRIEVE_API_VERSION_SOURCE.DEFAULT_FALLBACK
+    });
+}
+
+async function readRepositorySourceMetadataApiVersion({
+    repoUrl = null,
+    sourceBranch = null,
+    createRepositoryFileReaderFn = createRepositoryFileReader,
+    readRepositorySnapshotMetadataFn = readRepositorySnapshotMetadata
+} = {}) {
+    if (!repoUrl || !sourceBranch) {
+        return null;
+    }
+
+    if (
+        typeof createRepositoryFileReaderFn !== 'function' ||
+        typeof readRepositorySnapshotMetadataFn !== 'function'
+    ) {
+        return null;
+    }
+
+    try {
+        const readFile = await createRepositoryFileReaderFn(
+            repoUrl,
+            sourceBranch
+        );
+        const metadata = await readRepositorySnapshotMetadataFn({
+            readFile
+        });
+
+        return metadata?.sourceMetadataApiVersion || null;
+    } catch (error) {
+        void error;
+        return null;
+    }
 }
 
 async function resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap({
     snapshot = null,
     deploymentApiVersion = null,
+    repoUrl = null,
+    sourceBranch = null,
     refreshToken = null,
     instanceUrl = null,
     accessToken = null,
     getLatestApiVersionFn = getLatestApiVersion,
-    refreshAccessTokenFn = null
+    refreshAccessTokenFn = null,
+    createRepositoryFileReaderFn = createRepositoryFileReader,
+    readRepositorySnapshotMetadataFn = readRepositorySnapshotMetadata
 } = {}) {
     let destinationMaxApiVersion = null;
 
@@ -90,9 +191,25 @@ async function resolveRollbackDestinationRetrieveSourceApiVersionWithDestination
         }
     }
 
+    const snapshotStored = normalizeApiVersion(
+        snapshot?.sourceMetadataApiVersion ?? null
+    );
+    let repositorySourceMetadataApiVersion = null;
+
+    if (!snapshotStored) {
+        repositorySourceMetadataApiVersion =
+            await readRepositorySourceMetadataApiVersion({
+                repoUrl,
+                sourceBranch,
+                createRepositoryFileReaderFn,
+                readRepositorySnapshotMetadataFn
+            });
+    }
+
     return resolveRollbackDestinationRetrieveSourceApiVersion({
         snapshotSourceMetadataApiVersion:
             snapshot?.sourceMetadataApiVersion ?? null,
+        repositorySourceMetadataApiVersion,
         deploymentApiVersion,
         destinationMaxApiVersion
     });
@@ -103,6 +220,8 @@ function logRollbackRetrieveApiVersionDiagnostic(payload) {
 }
 
 module.exports = {
+    RETRIEVE_API_VERSION_SOURCE,
+    readRepositorySourceMetadataApiVersion,
     resolveRollbackDestinationRetrieveSourceApiVersion,
     resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap,
     logRollbackRetrieveApiVersionDiagnostic

@@ -7,6 +7,8 @@ const {
     toSalesforceSnapshotPayload
 } = require('../controlPlane/controlPlane.snapshotMapping');
 const {
+    RETRIEVE_API_VERSION_SOURCE,
+    readRepositorySourceMetadataApiVersion,
     resolveRollbackDestinationRetrieveSourceApiVersion,
     resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap
 } = require('./rollbackDestinationRetrieveApiVersion.service');
@@ -130,6 +132,177 @@ function runTest(name, fn) {
                 );
 
             assert.strictEqual(result.effectiveRetrieveApiVersion, '66.0');
+        }
+    );
+
+    await runTest('snapshot 67.0 wins over repository and deployment', () => {
+        const result = resolveRollbackDestinationRetrieveSourceApiVersion({
+            snapshotSourceMetadataApiVersion: '67.0',
+            repositorySourceMetadataApiVersion: '67.0',
+            deploymentApiVersion: '66.0',
+            destinationMaxApiVersion: '67.0'
+        });
+
+        assert.strictEqual(result.effectiveRetrieveApiVersion, '67.0');
+        assert.strictEqual(
+            result.sourceMetadataApiVersionSource,
+            RETRIEVE_API_VERSION_SOURCE.SNAPSHOT
+        );
+    });
+
+    await runTest(
+        'repository 67.0 wins when snapshot API is null',
+        () => {
+            const result = resolveRollbackDestinationRetrieveSourceApiVersion({
+                snapshotSourceMetadataApiVersion: null,
+                repositorySourceMetadataApiVersion: '67.0',
+                deploymentApiVersion: '66.0',
+                destinationMaxApiVersion: '67.0'
+            });
+
+            assert.strictEqual(result.effectiveRetrieveApiVersion, '67.0');
+            assert.strictEqual(
+                result.sourceMetadataApiVersionSource,
+                RETRIEVE_API_VERSION_SOURCE.REPOSITORY_RETRIEVAL_METADATA
+            );
+        }
+    );
+
+    await runTest(
+        'deployment 66.0 when snapshot null and repository unavailable',
+        () => {
+            const result = resolveRollbackDestinationRetrieveSourceApiVersion({
+                snapshotSourceMetadataApiVersion: null,
+                repositorySourceMetadataApiVersion: null,
+                deploymentApiVersion: '66.0'
+            });
+
+            assert.strictEqual(result.effectiveRetrieveApiVersion, '66.0');
+            assert.strictEqual(
+                result.sourceMetadataApiVersionSource,
+                RETRIEVE_API_VERSION_SOURCE.DEPLOYMENT_HISTORY
+            );
+        }
+    );
+
+    await runTest(
+        'invalid repository API falls back to deployment 66.0',
+        () => {
+            const result = resolveRollbackDestinationRetrieveSourceApiVersion({
+                snapshotSourceMetadataApiVersion: null,
+                repositorySourceMetadataApiVersion: 'not-a-version',
+                deploymentApiVersion: '66.0'
+            });
+
+            assert.strictEqual(result.effectiveRetrieveApiVersion, '66.0');
+            assert.strictEqual(
+                result.sourceMetadataApiVersionSource,
+                RETRIEVE_API_VERSION_SOURCE.DEPLOYMENT_HISTORY
+            );
+        }
+    );
+
+    await runTest('repository 67.0 with destination max 67.0', () => {
+        const result = resolveRollbackDestinationRetrieveSourceApiVersion({
+            repositorySourceMetadataApiVersion: '67.0',
+            destinationMaxApiVersion: '67.0'
+        });
+
+        assert.strictEqual(result.effectiveRetrieveApiVersion, '67.0');
+    });
+
+    await runTest('repository 67.0 capped to destination max 66.0', () => {
+        const result = resolveRollbackDestinationRetrieveSourceApiVersion({
+            repositorySourceMetadataApiVersion: '67.0',
+            destinationMaxApiVersion: '66.0'
+        });
+
+        assert.strictEqual(result.effectiveRetrieveApiVersion, '66.0');
+    });
+
+    await runTest(
+        'Flow scenario: null snapshot, repo 67.0, deploy 66.0, dest max 67.0',
+        () => {
+            const result = resolveRollbackDestinationRetrieveSourceApiVersion({
+                snapshotSourceMetadataApiVersion: null,
+                repositorySourceMetadataApiVersion: '67.0',
+                deploymentApiVersion: '66.0',
+                destinationMaxApiVersion: '67.0'
+            });
+
+            assert.strictEqual(result.effectiveRetrieveApiVersion, '67.0');
+            assert.strictEqual(
+                result.sourceMetadataApiVersionSource,
+                RETRIEVE_API_VERSION_SOURCE.REPOSITORY_RETRIEVAL_METADATA
+            );
+        }
+    );
+
+    await runTest(
+        'repository checkout failure does not throw and falls back to deployment',
+        async () => {
+            const result =
+                await resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap(
+                    {
+                        snapshot: { sourceMetadataApiVersion: null },
+                        deploymentApiVersion: '66.0',
+                        repoUrl: 'https://example.com/repo.git',
+                        sourceBranch: 'main',
+                        createRepositoryFileReaderFn: async () => {
+                            throw new Error('git unavailable');
+                        }
+                    }
+                );
+
+            assert.strictEqual(result.effectiveRetrieveApiVersion, '66.0');
+            assert.strictEqual(
+                result.sourceMetadataApiVersionSource,
+                RETRIEVE_API_VERSION_SOURCE.DEPLOYMENT_HISTORY
+            );
+        }
+    );
+
+    await runTest(
+        'readRepositorySourceMetadataApiVersion returns null on reader failure',
+        async () => {
+            const value = await readRepositorySourceMetadataApiVersion({
+                repoUrl: 'https://example.com/repo.git',
+                sourceBranch: 'main',
+                createRepositoryFileReaderFn: async () => {
+                    throw new Error('checkout failed');
+                }
+            });
+
+            assert.strictEqual(value, null);
+        }
+    );
+
+    await runTest(
+        'async resolver reads repository metadata when snapshot field is null',
+        async () => {
+            const result =
+                await resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap(
+                    {
+                        snapshot: { sourceMetadataApiVersion: null },
+                        deploymentApiVersion: '66.0',
+                        repoUrl: 'https://example.com/repo.git',
+                        sourceBranch: 'feature/flow',
+                        getLatestApiVersionFn: async () => '67.0',
+                        createRepositoryFileReaderFn: async () => async () =>
+                            JSON.stringify({
+                                sourceMetadataApiVersion: '67.0'
+                            }),
+                        readRepositorySnapshotMetadataFn:
+                            require('../repositorySnapshotMetadata.service')
+                                .readRepositorySnapshotMetadata
+                    }
+                );
+
+            assert.strictEqual(result.effectiveRetrieveApiVersion, '67.0');
+            assert.strictEqual(
+                result.sourceMetadataApiVersionSource,
+                RETRIEVE_API_VERSION_SOURCE.REPOSITORY_RETRIEVAL_METADATA
+            );
         }
     );
 })();
