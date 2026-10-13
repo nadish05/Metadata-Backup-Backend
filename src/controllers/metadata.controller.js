@@ -23,6 +23,9 @@ const {
 const {
     discoverStandardValueSetNamesFromRetrievedProject
 } = require('../services/retrieval/standardValueSetPostRetrieve.service');
+const {
+    runFlowVersionRetrievalExtension
+} = require('../services/retrieval/flowVersionRetrieval.service');
 
 const RETRIEVAL_CLI_ALIAS = 'temporg';
 
@@ -1523,6 +1526,17 @@ setStatus('Full Metadata Retrieval Complete');
             projectPath: `${workspace}/backup-project`,
             alias: RETRIEVAL_CLI_ALIAS
         });
+
+        console.log('STEP 5b - Flow version retrieval extension');
+        setStatus('Retrieving Flow versions');
+        await runFlowVersionRetrievalExtension({
+            projectPath: `${workspace}/backup-project`,
+            instanceUrl,
+            accessToken,
+            alias: RETRIEVAL_CLI_ALIAS,
+            execAsync
+        });
+        setStatus('Flow version retrieval complete');
 
         // TEMP DIAGNOSTIC — log-only filesystem probe after CLI retrieve
         // and before Git (git add runs later in runMigration).

@@ -1,6 +1,11 @@
 const util = require('util');
 const { exec } = require('child_process');
 
+const {
+    enrichCompareFlowFileEntry,
+    loadFlowVersionManifest
+} = require('../services/compare/compareFlowEnrichment.service');
+
 const execAsync = util.promisify(exec);
 
 exports.getDifferentFiles = async (req, res) => {
@@ -48,6 +53,8 @@ console.log(branches.stdout);
 
 console.log('Comparing branches...');
 
+const manifestArtifacts = loadFlowVersionManifest(repoPath);
+
 const diffResult =
     await execAsync(
         `cd ${repoPath} && git diff --name-status origin/${sourceBranch} origin/${destinationBranch}`
@@ -84,6 +91,7 @@ const files = await Promise.all(
             }
 
             let flowStatus = null;
+            let flowFileContent = null;
 
             const isFlow =
                 filePath &&
@@ -103,6 +111,8 @@ const files = await Promise.all(
             await execAsync(
                 `cd ${repoPath} && git show origin/${branchToRead}:"${filePath}"`
             );
+
+        flowFileContent = fileContent.stdout;
 
         const statusMatch =
             fileContent.stdout.match(
@@ -129,7 +139,15 @@ const files = await Promise.all(
         );
 
     }
-}
+
+            return enrichCompareFlowFileEntry({
+                filePath,
+                changeType,
+                flowStatus,
+                fileContent: flowFileContent,
+                manifestArtifacts
+            });
+            }
 
             return {
                 filePath,

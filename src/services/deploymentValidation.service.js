@@ -45,6 +45,9 @@ const {
     discoverStructuralActionOverrideRelatedListClosure
 } = require('./dependencyResolution/graphExpansion/structuralActionOverrideRelatedList.closure.service');
 const artifactResolutionService = require('./repositoryArtifacts/artifactResolution.service');
+const {
+    validateFlowDeploymentSelections
+} = require('./flowMetadata/deploymentFlowPackage.service');
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
 const {
@@ -1115,6 +1118,13 @@ async function validateDeployment({
         requiredDependencies: resolvedRequiredDependencies
     };
 
+    const flowDeploymentSelectionValidation = validateFlowDeploymentSelections(
+        deploymentPackageWithResolvedDependencies.selectedMetadata
+    );
+    const flowDeploymentSelectionBlocked = flowDeploymentSelectionValidation.ok
+        ? null
+        : flowDeploymentSelectionValidation;
+
     let generatedDeploymentPackage =
         deploymentPackageService.generateDeploymentPackage(
             deploymentPackageWithResolvedDependencies
@@ -1417,6 +1427,19 @@ async function validateDeployment({
             dependencyValidation,
             deploymentApiVersionPolicy
         });
+
+    if (flowDeploymentSelectionBlocked) {
+        deploymentReadiness.canDeploy = false;
+        deploymentReadiness.overallStatus = 'BLOCKED';
+        deploymentReadiness.blockingIssues = [
+            ...(Array.isArray(deploymentReadiness.blockingIssues)
+                ? deploymentReadiness.blockingIssues
+                : []),
+            flowDeploymentSelectionBlocked.message
+        ];
+        deploymentReadiness.flowDeploymentSelection =
+            flowDeploymentSelectionBlocked;
+    }
 
     // Phase 10.9 — static pre-deploy risk report only.
     // Never mutates package, never changes canDeploy / execution gates.

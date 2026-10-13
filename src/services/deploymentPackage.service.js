@@ -1,3 +1,8 @@
+const {
+    enrichFlowMetadataItem,
+    getFlowMetadataUniquenessKey
+} = require('./flowMetadata/flowMemberIdentity.service');
+
 function normalizeMetadataItem(item) {
     if (!item || typeof item !== 'object') {
         return null;
@@ -14,7 +19,7 @@ function normalizeMetadataItem(item) {
     const apiVersion =
         item.apiVersion || item.apiValidation?.apiVersion || null;
 
-    const normalized = {
+    let normalized = {
         metadataType,
         metadataName,
         filePath,
@@ -28,10 +33,23 @@ function normalizeMetadataItem(item) {
         normalized.apiVersion = String(apiVersion);
     }
 
+    if (metadataType === 'Flow') {
+        normalized = enrichFlowMetadataItem({
+            ...item,
+            ...normalized
+        });
+    }
+
     return normalized;
 }
 
 function getMetadataUniquenessKey(item) {
+    const flowKey = getFlowMetadataUniquenessKey(item);
+
+    if (flowKey) {
+        return flowKey;
+    }
+
     if (item.metadataType && item.metadataName) {
         return `${item.metadataType}:${item.metadataName}`;
     }
@@ -322,5 +340,9 @@ function generateDeploymentPackage(deploymentPackage) {
 }
 
 module.exports = {
-    generateDeploymentPackage
+    generateDeploymentPackage,
+    normalizeMetadataItem,
+    normalizeMetadata,
+    getMetadataUniquenessKey,
+    composeMetadataWithRequiredDependencies
 };
