@@ -21,6 +21,7 @@ const {
     FLOW_MULTIPLE_VERSIONS_CODE
 } = require('./deploymentFlowPackage.service');
 const { generateManifest } = require('../packageXml.service');
+const genericFileArtifactResolver = require('../repositoryArtifacts/resolvers/genericFile.resolver');
 
 function runTest(name, fn) {
     try {
@@ -134,6 +135,33 @@ runTest('package XML preserves version-qualified Flow member', () => {
         )
     );
 });
+
+runTest(
+    'version-qualified Flow resolver does not fall back to unversioned file',
+    () => {
+        const repoFiles = [
+            'force-app/main/default/flows/Get_Customer_Details.flow-meta.xml',
+            'force-app/main/default/flows/Get_Customer_Details-1.flow-meta.xml'
+        ];
+
+        assert.strictEqual(
+            genericFileArtifactResolver.resolve({
+                name: 'Get_Customer_Details-2',
+                metadataType: 'Flow',
+                repoFiles
+            }),
+            null
+        );
+        assert.strictEqual(
+            genericFileArtifactResolver.resolve({
+                name: 'Get_Customer_Details-1',
+                metadataType: 'Flow',
+                repoFiles
+            }),
+            'force-app/main/default/flows/Get_Customer_Details-1.flow-meta.xml'
+        );
+    }
+);
 
 runTest('Flow uniqueness keys include version suffix', () => {
     const key1 = getMetadataUniquenessKey({

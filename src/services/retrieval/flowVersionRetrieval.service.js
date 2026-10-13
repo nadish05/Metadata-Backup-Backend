@@ -110,7 +110,8 @@ function correlateRetrieveResult({
     developerName,
     versionNumber,
     changedFiles,
-    beforeSnapshot
+    beforeSnapshot,
+    flowIsLatestVersion = false
 }) {
     const materialChanges = changedFiles.filter((file) => !file.removed);
 
@@ -121,11 +122,11 @@ function correlateRetrieveResult({
     const versionedBase = expectedVersionedBasename(developerName, versionNumber);
     const unversionedBase = expectedUnversionedBasename(developerName);
 
-    const versionedChange = changedFiles.find(
-        (file) => file.fileName === versionedBase && !file.removed
+    const versionedChange = materialChanges.find(
+        (file) => file.fileName === versionedBase
     );
-    const unversionedChange = changedFiles.find(
-        (file) => file.fileName === unversionedBase && !file.removed
+    const unversionedChange = materialChanges.find(
+        (file) => file.fileName === unversionedBase
     );
 
     if (versionedChange) {
@@ -136,27 +137,16 @@ function correlateRetrieveResult({
         };
     }
 
-    if (unversionedChange) {
-        const hadUnversionedBefore = beforeSnapshot.has(unversionedBase);
-
-        if (
-            changedFiles.length === 1 &&
-            unversionedChange &&
-            (!hadUnversionedBefore || unversionedChange)
-        ) {
-            return {
-                sourceBytes: unversionedChange.bytes,
-                retrievedRelativePath: unversionedChange.relativePath,
-                correlation: 'unversioned_filename'
-            };
-        }
-    }
-
-    if (changedFiles.length === 1 && !changedFiles[0].removed) {
+    // Salesforce may return the unversioned filename for the latest version only.
+    if (
+        unversionedChange &&
+        materialChanges.length === 1 &&
+        flowIsLatestVersion === true
+    ) {
         return {
-            sourceBytes: changedFiles[0].bytes,
-            retrievedRelativePath: changedFiles[0].relativePath,
-            correlation: 'single_flow_file_delta'
+            sourceBytes: unversionedChange.bytes,
+            retrievedRelativePath: unversionedChange.relativePath,
+            correlation: 'unversioned_filename'
         };
     }
 
@@ -227,7 +217,8 @@ async function retrieveSingleFlowVersion({
         developerName: flowDefinitionDeveloperName,
         versionNumber: sourceFlowVersionNumber,
         changedFiles,
-        beforeSnapshot
+        beforeSnapshot,
+        flowIsLatestVersion: versionDescriptor.flowIsLatestVersion === true
     });
 
     if (!correlation?.sourceBytes) {

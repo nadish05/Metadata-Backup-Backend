@@ -29,11 +29,12 @@ function runTest(name, fn) {
         });
 }
 
-function versionDescriptor(developerName, versionNumber, id) {
+function versionDescriptor(developerName, versionNumber, id, options = {}) {
     return {
         flowDefinitionDeveloperName: developerName,
         sourceFlowVersionNumber: versionNumber,
         sourceFlowVersionId: id,
+        flowIsLatestVersion: options.flowIsLatestVersion === true,
         requestedMetadataMemberName: `${developerName}-${versionNumber}`,
         requestedMetadataMember: `Flow:${developerName}-${versionNumber}`
     };
@@ -45,6 +46,7 @@ function versionDescriptor(developerName, versionNumber, id) {
         const correlation = correlateRetrieveResult({
             developerName: 'Get_Customer_Details',
             versionNumber: 2,
+            flowIsLatestVersion: true,
             changedFiles: [
                 {
                     fileName: 'Get_Customer_Details.flow-meta.xml',
@@ -79,6 +81,50 @@ function versionDescriptor(developerName, versionNumber, id) {
 
         assert.strictEqual(correlation, null);
     });
+
+    await runTest(
+        'correlateRetrieveResult rejects sole unrelated flow file delta',
+        () => {
+            const correlation = correlateRetrieveResult({
+                developerName: 'Get_Customer_Details',
+                versionNumber: 1,
+                flowIsLatestVersion: false,
+                changedFiles: [
+                    {
+                        fileName: 'Other_Flow.flow-meta.xml',
+                        bytes: Buffer.from('x'),
+                        relativePath:
+                            'force-app/main/default/flows/Other_Flow.flow-meta.xml'
+                    }
+                ],
+                beforeSnapshot: new Map()
+            });
+
+            assert.strictEqual(correlation, null);
+        }
+    );
+
+    await runTest(
+        'correlateRetrieveResult rejects unversioned delta for non-latest version',
+        () => {
+            const correlation = correlateRetrieveResult({
+                developerName: 'Get_Customer_Details',
+                versionNumber: 1,
+                flowIsLatestVersion: false,
+                changedFiles: [
+                    {
+                        fileName: 'Get_Customer_Details.flow-meta.xml',
+                        bytes: Buffer.from('latest-only'),
+                        relativePath:
+                            'force-app/main/default/flows/Get_Customer_Details.flow-meta.xml'
+                    }
+                ],
+                beforeSnapshot: new Map()
+            });
+
+            assert.strictEqual(correlation, null);
+        }
+    );
 
     await runTest('persistVersionArtifact writes canonical versioned path', async () => {
         const root = await fs.promises.mkdtemp(
@@ -127,7 +173,12 @@ function versionDescriptor(developerName, versionNumber, id) {
         const result = await retrieveSingleFlowVersion({
             projectPath: root,
             alias: 'temporg',
-            versionDescriptor: versionDescriptor('Get_Customer_Details', 2, '2xx'),
+            versionDescriptor: versionDescriptor(
+                'Get_Customer_Details',
+                2,
+                '2xx',
+                { flowIsLatestVersion: true }
+            ),
             execAsync: async (command) => {
                 await writeFile(
                     path.join(flowsDir, 'Get_Customer_Details.flow-meta.xml'),
@@ -169,7 +220,9 @@ function versionDescriptor(developerName, versionNumber, id) {
             apiVersion: '61.0',
             versions: [
                 versionDescriptor('Get_Customer_Details', 1, 'id-1'),
-                versionDescriptor('Get_Customer_Details', 2, 'id-2')
+                versionDescriptor('Get_Customer_Details', 2, 'id-2', {
+                    flowIsLatestVersion: true
+                })
             ]
         };
 
