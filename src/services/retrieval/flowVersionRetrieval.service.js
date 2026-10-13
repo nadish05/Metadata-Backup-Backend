@@ -10,11 +10,9 @@ const {
 } = require('./flowVersionDiscovery.service');
 const {
     FLOW_META_SUFFIX,
-    FLOWS_DIR_PREFIX,
     buildCanonicalFlowArtifactRelativePath
 } = require('../flowMetadata/flowMemberIdentity.service');
 
-const readdir = util.promisify(fs.readdir);
 const readFile = util.promisify(fs.readFile);
 const writeFile = util.promisify(fs.writeFile);
 const mkdir = util.promisify(fs.mkdir);
@@ -25,73 +23,6 @@ const FLOW_VERSION_MANIFEST_FILE = 'flow-version-artifacts.json';
 
 function hashBytes(buffer) {
     return crypto.createHash('sha256').update(buffer).digest('hex');
-}
-
-function flowsDirectory(projectPath) {
-    return path.join(projectPath, 'force-app', 'main', 'default', 'flows');
-}
-
-async function listFlowFiles(projectPath) {
-    const directory = flowsDirectory(projectPath);
-
-    try {
-        const entries = await readdir(directory);
-        const files = new Map();
-
-        for (const entry of entries) {
-            if (!entry.endsWith(FLOW_META_SUFFIX)) {
-                continue;
-            }
-
-            const absolute = path.join(directory, entry);
-            const fileStat = await stat(absolute);
-
-            if (!fileStat.isFile()) {
-                continue;
-            }
-
-            const bytes = await readFile(absolute);
-            files.set(entry, {
-                relativePath: `${FLOWS_DIR_PREFIX}${entry}`,
-                bytes,
-                sha256: hashBytes(bytes)
-            });
-        }
-
-        return files;
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            return new Map();
-        }
-
-        throw error;
-    }
-}
-
-function diffFlowSnapshots(before, after) {
-    const changed = [];
-
-    for (const [name, afterEntry] of after.entries()) {
-        const beforeEntry = before.get(name);
-
-        if (!beforeEntry || beforeEntry.sha256 !== afterEntry.sha256) {
-            changed.push({
-                fileName: name,
-                ...afterEntry
-            });
-        }
-    }
-
-    for (const name of before.keys()) {
-        if (!after.has(name)) {
-            changed.push({
-                fileName: name,
-                removed: true
-            });
-        }
-    }
-
-    return changed;
 }
 
 function buildRetrieveMember(developerName, versionNumber) {
@@ -106,51 +37,158 @@ function expectedUnversionedBasename(developerName) {
     return `${developerName}${FLOW_META_SUFFIX}`;
 }
 
-function correlateRetrieveResult({
-    developerName,
-    versionNumber,
-    changedFiles,
-    beforeSnapshot,
-    flowIsLatestVersion = false
-}) {
-    const materialChanges = changedFiles.filter((file) => !file.removed);
+function extractJsonPayload(stdout) {
+    const text = String(stdout || '').trim();
 
-    if (materialChanges.length > 1) {
+    if (!text) {
         return null;
     }
 
-    const versionedBase = expectedVersionedBasename(developerName, versionNumber);
-    const unversionedBase = expectedUnversionedBasename(developerName);
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
 
-    const versionedChange = materialChanges.find(
-        (file) => file.fileName === versionedBase
-    );
-    const unversionedChange = materialChanges.find(
-        (file) => file.fileName === unversionedBase
-    );
+    if (start < 0 || end < start) {
+        return null;
+    }
 
-    if (versionedChange) {
+    try {
+        return JSON.parse(text.slice(start, end + 1));
+    } catch (error) {
+        return null;
+    }
+}
+
+function normalizeRetrieveRelativePath(fileEntry) {
+    if (typeof fileEntry === 'string') {
+        return String(fileEntry).replace(/\\/g, '/');
+    }
+
+    if (!fileEntry || typeof fileEntry !== 'object') {
+        return null;
+    }
+
+    const candidate =
+        fileEntry.filePath || fileEntry.path || fileEntry.fullPath || null;
+
+    if (!candidate) {
+        return null;
+    }
+
+    return String(candidate).replace(/\\/g, '/');
+}
+
+function basenameFromRelativePath(relativePath) {
+    const normalized = String(relativePath || '').replace(/\\/g, '/');
+
+    return normalized.split('/').pop() || null;
+}
+
+function parseRetrieveCliStdout(stdout) {
+    const payload = extractJsonPayload(stdout);
+
+    if (!payload) {
         return {
-            sourceBytes: versionedChange.bytes,
-            retrievedRelativePath: versionedChange.relativePath,
+            ok: false,
+            reason: 'invalid_json'
+        };
+    }
+
+    if (typeof payload.status === 'number' && payload.status !== 0) {
+        return {
+            ok: false,
+            reason: 'cli_status',
+            status: payload.status,
+            message: payload.message || null
+        };
+    }
+
+    const result =
+        payload.result && typeof payload.result === 'object'
+            ? payload.result
+            : payload;
+    const files = result.files || result.fileProperties || [];
+
+    return {
+        ok: true,
+        files: Array.isArray(files) ? files : []
+    };
+}
+
+/**
+ * Pick the CLI-reported path for this retrieve. Only accepts filenames that
+ * match the requested version (or unversioned for latest only).
+ */
+function resolveRetrievedFlowPath({
+    retrievedFiles,
+    developerName,
+    versionNumber,
+    flowIsLatestVersion
+}) {
+    const versionedBasename = expectedVersionedBasename(
+        developerName,
+        versionNumber
+    );
+    const unversionedBasename = expectedUnversionedBasename(developerName);
+    const paths = [];
+
+    for (const entry of retrievedFiles) {
+        const relativePath = normalizeRetrieveRelativePath(entry);
+
+        if (!relativePath) {
+            continue;
+        }
+
+        paths.push(relativePath);
+    }
+
+    const versionedPath = paths.find(
+        (relativePath) =>
+            basenameFromRelativePath(relativePath) === versionedBasename
+    );
+
+    if (versionedPath) {
+        return {
+            relativePath: versionedPath,
             correlation: 'versioned_filename'
         };
     }
 
-    // Salesforce may return the unversioned filename for the latest version only.
-    if (
-        unversionedChange &&
-        materialChanges.length === 1 &&
-        flowIsLatestVersion === true
-    ) {
-        return {
-            sourceBytes: unversionedChange.bytes,
-            retrievedRelativePath: unversionedChange.relativePath,
-            correlation: 'unversioned_filename'
-        };
+    if (flowIsLatestVersion === true) {
+        const unversionedPath = paths.find(
+            (relativePath) =>
+                basenameFromRelativePath(relativePath) === unversionedBasename
+        );
+
+        if (unversionedPath) {
+            return {
+                relativePath: unversionedPath,
+                correlation: 'unversioned_filename'
+            };
+        }
     }
 
     return null;
+}
+
+async function readProjectFile(projectPath, relativePath) {
+    const normalized = String(relativePath).replace(/\\/g, '/');
+    const absolute = path.join(projectPath, ...normalized.split('/'));
+
+    try {
+        const fileStat = await stat(absolute);
+
+        if (!fileStat.isFile()) {
+            return null;
+        }
+
+        return await readFile(absolute);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            return null;
+        }
+
+        throw error;
+    }
 }
 
 async function persistVersionArtifact({
@@ -173,6 +211,15 @@ async function persistVersionArtifact({
     };
 }
 
+function buildRetrieveSuccessJson(relativePath) {
+    return JSON.stringify({
+        status: 0,
+        result: {
+            files: [{ filePath: relativePath, state: 'Changed' }]
+        }
+    });
+}
+
 async function retrieveSingleFlowVersion({
     projectPath,
     alias,
@@ -181,11 +228,9 @@ async function retrieveSingleFlowVersion({
 }) {
     const {
         flowDefinitionDeveloperName,
-        sourceFlowVersionNumber,
-        requestedMetadataMember
+        sourceFlowVersionNumber
     } = versionDescriptor;
 
-    const beforeSnapshot = await listFlowFiles(projectPath);
     const member = buildRetrieveMember(
         flowDefinitionDeveloperName,
         sourceFlowVersionNumber
@@ -211,20 +256,46 @@ async function retrieveSingleFlowVersion({
         throw failure;
     }
 
-    const afterSnapshot = await listFlowFiles(projectPath);
-    const changedFiles = diffFlowSnapshots(beforeSnapshot, afterSnapshot);
-    const correlation = correlateRetrieveResult({
+    const parsed = parseRetrieveCliStdout(stdout);
+
+    if (!parsed.ok) {
+        const failure = new Error(
+            `Flow version retrieve CLI result invalid for ${member}: ` +
+                (parsed.message || parsed.reason || 'unknown')
+        );
+        failure.member = member;
+        failure.versionDescriptor = versionDescriptor;
+        throw failure;
+    }
+
+    const resolved = resolveRetrievedFlowPath({
+        retrievedFiles: parsed.files,
         developerName: flowDefinitionDeveloperName,
         versionNumber: sourceFlowVersionNumber,
-        changedFiles,
-        beforeSnapshot,
         flowIsLatestVersion: versionDescriptor.flowIsLatestVersion === true
     });
 
-    if (!correlation?.sourceBytes) {
+    if (!resolved) {
         const failure = new Error(
-            `Unable to correlate retrieved artifact for ${member}. ` +
-                `Changed flow files: ${changedFiles.map((f) => f.fileName).join(', ') || '(none)'}`
+            `Retrieve for ${member} did not report an acceptable flow file. ` +
+                'Expected a version-qualified filename' +
+                (versionDescriptor.flowIsLatestVersion
+                    ? ' or unversioned filename for the latest version.'
+                    : '.')
+        );
+        failure.member = member;
+        failure.versionDescriptor = versionDescriptor;
+        throw failure;
+    }
+
+    const sourceBytes = await readProjectFile(
+        projectPath,
+        resolved.relativePath
+    );
+
+    if (!sourceBytes) {
+        const failure = new Error(
+            `Retrieve for ${member} reported ${resolved.relativePath} but the file is missing on disk.`
         );
         failure.member = member;
         failure.versionDescriptor = versionDescriptor;
@@ -235,14 +306,14 @@ async function retrieveSingleFlowVersion({
         projectPath,
         developerName: flowDefinitionDeveloperName,
         versionNumber: sourceFlowVersionNumber,
-        sourceBytes: correlation.sourceBytes
+        sourceBytes
     });
 
     return {
         ...versionDescriptor,
         requestedMetadataMember: member,
-        retrievedArtifactPath: correlation.retrievedRelativePath,
-        retrievedArtifactCorrelation: correlation.correlation,
+        retrievedArtifactPath: resolved.relativePath,
+        retrievedArtifactCorrelation: resolved.correlation,
         workspaceArtifactPath: persisted.workspaceArtifactPath,
         artifactSha256: persisted.artifactSha256
     };
@@ -338,11 +409,14 @@ module.exports = {
     FLOW_VERSION_MANIFEST_DIR,
     FLOW_VERSION_MANIFEST_FILE,
     hashBytes,
-    listFlowFiles,
-    diffFlowSnapshots,
-    correlateRetrieveResult,
+    buildRetrieveMember,
+    expectedVersionedBasename,
+    expectedUnversionedBasename,
+    parseRetrieveCliStdout,
+    resolveRetrievedFlowPath,
     persistVersionArtifact,
     retrieveSingleFlowVersion,
     runFlowVersionRetrievalExtension,
-    writeFlowVersionManifest
+    writeFlowVersionManifest,
+    buildRetrieveSuccessJson
 };

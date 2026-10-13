@@ -7,12 +7,12 @@ const path = require('path');
 const util = require('util');
 
 const {
-    correlateRetrieveResult,
-    diffFlowSnapshots,
     hashBytes,
     persistVersionArtifact,
     retrieveSingleFlowVersion,
-    runFlowVersionRetrievalExtension
+    runFlowVersionRetrievalExtension,
+    resolveRetrievedFlowPath,
+    buildRetrieveSuccessJson
 } = require('./flowVersionRetrieval.service');
 
 const writeFile = util.promisify(fs.writeFile);
@@ -40,89 +40,84 @@ function versionDescriptor(developerName, versionNumber, id, options = {}) {
     };
 }
 
+function flowsDir(root) {
+    return path.join(root, 'force-app', 'main', 'default', 'flows');
+}
+
 (async () => {
-    await runTest('correlateRetrieveResult accepts unversioned filename delta', () => {
-        const bytes = Buffer.from('<Flow>v2</Flow>', 'utf8');
-        const correlation = correlateRetrieveResult({
-            developerName: 'Get_Customer_Details',
-            versionNumber: 2,
-            flowIsLatestVersion: true,
-            changedFiles: [
+    await runTest('resolveRetrievedFlowPath accepts versioned CLI path', () => {
+        const resolved = resolveRetrievedFlowPath({
+            retrievedFiles: [
                 {
-                    fileName: 'Get_Customer_Details.flow-meta.xml',
-                    bytes,
-                    relativePath:
-                        'force-app/main/default/flows/Get_Customer_Details.flow-meta.xml'
+                    filePath:
+                        'force-app/main/default/flows/Active_Customer-1.flow-meta.xml'
                 }
             ],
-            beforeSnapshot: new Map()
+            developerName: 'Active_Customer',
+            versionNumber: 1,
+            flowIsLatestVersion: false
         });
 
-        assert.strictEqual(correlation.correlation, 'unversioned_filename');
-        assert.strictEqual(hashBytes(correlation.sourceBytes), hashBytes(bytes));
-    });
-
-    await runTest('correlateRetrieveResult fails closed on ambiguous deltas', () => {
-        const correlation = correlateRetrieveResult({
-            developerName: 'Get_Customer_Details',
-            versionNumber: 2,
-            changedFiles: [
-                {
-                    fileName: 'Get_Customer_Details-1.flow-meta.xml',
-                    bytes: Buffer.from('a')
-                },
-                {
-                    fileName: 'Get_Customer_Details-2.flow-meta.xml',
-                    bytes: Buffer.from('b')
-                }
-            ],
-            beforeSnapshot: new Map()
-        });
-
-        assert.strictEqual(correlation, null);
+        assert.strictEqual(resolved.correlation, 'versioned_filename');
+        assert.ok(
+            resolved.relativePath.endsWith('Active_Customer-1.flow-meta.xml')
+        );
     });
 
     await runTest(
-        'correlateRetrieveResult rejects sole unrelated flow file delta',
+        'resolveRetrievedFlowPath accepts unversioned path only for latest',
         () => {
-            const correlation = correlateRetrieveResult({
-                developerName: 'Get_Customer_Details',
-                versionNumber: 1,
-                flowIsLatestVersion: false,
-                changedFiles: [
+            const resolved = resolveRetrievedFlowPath({
+                retrievedFiles: [
                     {
-                        fileName: 'Other_Flow.flow-meta.xml',
-                        bytes: Buffer.from('x'),
-                        relativePath:
-                            'force-app/main/default/flows/Other_Flow.flow-meta.xml'
+                        filePath:
+                            'force-app/main/default/flows/Active_Customer.flow-meta.xml'
                     }
                 ],
-                beforeSnapshot: new Map()
+                developerName: 'Active_Customer',
+                versionNumber: 3,
+                flowIsLatestVersion: true
             });
 
-            assert.strictEqual(correlation, null);
+            assert.strictEqual(resolved.correlation, 'unversioned_filename');
         }
     );
 
     await runTest(
-        'correlateRetrieveResult rejects unversioned delta for non-latest version',
+        'resolveRetrievedFlowPath rejects unversioned path for non-latest',
         () => {
-            const correlation = correlateRetrieveResult({
-                developerName: 'Get_Customer_Details',
-                versionNumber: 1,
-                flowIsLatestVersion: false,
-                changedFiles: [
+            const resolved = resolveRetrievedFlowPath({
+                retrievedFiles: [
                     {
-                        fileName: 'Get_Customer_Details.flow-meta.xml',
-                        bytes: Buffer.from('latest-only'),
-                        relativePath:
-                            'force-app/main/default/flows/Get_Customer_Details.flow-meta.xml'
+                        filePath:
+                            'force-app/main/default/flows/Active_Customer.flow-meta.xml'
                     }
                 ],
-                beforeSnapshot: new Map()
+                developerName: 'Active_Customer',
+                versionNumber: 1,
+                flowIsLatestVersion: false
             });
 
-            assert.strictEqual(correlation, null);
+            assert.strictEqual(resolved, null);
+        }
+    );
+
+    await runTest(
+        'resolveRetrievedFlowPath rejects unrelated CLI file for requested version',
+        () => {
+            const resolved = resolveRetrievedFlowPath({
+                retrievedFiles: [
+                    {
+                        filePath:
+                            'force-app/main/default/flows/Other_Flow.flow-meta.xml'
+                    }
+                ],
+                developerName: 'Active_Customer',
+                versionNumber: 1,
+                flowIsLatestVersion: false
+            });
+
+            assert.strictEqual(resolved, null);
         }
     );
 
@@ -134,14 +129,14 @@ function versionDescriptor(developerName, versionNumber, id, options = {}) {
 
         const persisted = await persistVersionArtifact({
             projectPath: root,
-            developerName: 'Get_Customer_Details',
+            developerName: 'Active_Customer',
             versionNumber: 1,
             sourceBytes: bytes
         });
 
         assert.strictEqual(
             persisted.workspaceArtifactPath,
-            'force-app/main/default/flows/Get_Customer_Details-1.flow-meta.xml'
+            'force-app/main/default/flows/Active_Customer-1.flow-meta.xml'
         );
 
         const onDisk = await fs.promises.readFile(
@@ -152,65 +147,149 @@ function versionDescriptor(developerName, versionNumber, id, options = {}) {
         await fs.promises.rm(root, { recursive: true, force: true });
     });
 
-    await runTest('retrieveSingleFlowVersion maps unversioned retrieve to versioned artifact', async () => {
+    await runTest('retrieveSingleFlowVersion maps one version to canonical file', async () => {
         const root = await fs.promises.mkdtemp(
             path.join(os.tmpdir(), 'flow-version-retrieve-')
         );
-        const flowsDir = path.join(
-            root,
-            'force-app',
-            'main',
-            'default',
-            'flows'
+        const flows = flowsDir(root);
+        const relative =
+            'force-app/main/default/flows/Active_Customer-1.flow-meta.xml';
+
+        await mkdir(flows, { recursive: true });
+        await writeFile(
+            path.join(flows, 'Active_Customer-1.flow-meta.xml'),
+            '<Flow>version-1</Flow>',
+            'utf8'
         );
-
-        await mkdir(flowsDir, { recursive: true });
-
-        const execAsync = async () => ({
-            stdout: JSON.stringify({ status: 0 })
-        });
 
         const result = await retrieveSingleFlowVersion({
             projectPath: root,
             alias: 'temporg',
-            versionDescriptor: versionDescriptor(
-                'Get_Customer_Details',
-                2,
-                '2xx',
-                { flowIsLatestVersion: true }
-            ),
-            execAsync: async (command) => {
-                await writeFile(
-                    path.join(flowsDir, 'Get_Customer_Details.flow-meta.xml'),
-                    '<Flow>version-2</Flow>',
-                    'utf8'
-                );
-
-                return { stdout: '{}' };
-            }
+            versionDescriptor: versionDescriptor('Active_Customer', 1, 'id-1'),
+            execAsync: async () => ({
+                stdout: buildRetrieveSuccessJson(relative)
+            })
         });
 
-        assert.strictEqual(
-            result.workspaceArtifactPath,
-            'force-app/main/default/flows/Get_Customer_Details-2.flow-meta.xml'
-        );
-        assert.strictEqual(result.retrievedArtifactCorrelation, 'unversioned_filename');
-
-        const v1Exists = await fs.promises
-            .stat(
-                path.join(
-                    flowsDir,
-                    'Get_Customer_Details-2.flow-meta.xml'
-                )
-            )
-            .then(() => true)
-            .catch(() => false);
-
-        assert.strictEqual(v1Exists, true);
+        assert.strictEqual(result.workspaceArtifactPath, relative);
+        assert.strictEqual(result.retrievedArtifactCorrelation, 'versioned_filename');
         await fs.promises.rm(root, { recursive: true, force: true });
     });
 
-    await runTest('runFlowVersionRetrievalExtension retrieves every discovered version', async () => {
+    await runTest(
+        'retrieveSingleFlowVersion maps latest unversioned CLI path to versioned artifact',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-version-retrieve-')
+            );
+            const flows = flowsDir(root);
+            const cliRelative =
+                'force-app/main/default/flows/Active_Customer.flow-meta.xml';
+
+            await mkdir(flows, { recursive: true });
+            await writeFile(
+                path.join(flows, 'Active_Customer.flow-meta.xml'),
+                '<Flow>version-3</Flow>',
+                'utf8'
+            );
+
+            const result = await retrieveSingleFlowVersion({
+                projectPath: root,
+                alias: 'temporg',
+                versionDescriptor: versionDescriptor(
+                    'Active_Customer',
+                    3,
+                    'id-3',
+                    { flowIsLatestVersion: true }
+                ),
+                execAsync: async () => ({
+                    stdout: buildRetrieveSuccessJson(cliRelative)
+                })
+            });
+
+            assert.strictEqual(
+                result.workspaceArtifactPath,
+                'force-app/main/default/flows/Active_Customer-3.flow-meta.xml'
+            );
+            assert.strictEqual(
+                result.retrievedArtifactCorrelation,
+                'unversioned_filename'
+            );
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
+        'retrieveSingleFlowVersion fails when CLI does not report an acceptable file',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-version-fail-')
+            );
+
+            await mkdir(flowsDir(root), { recursive: true });
+
+            let failed = false;
+
+            try {
+                await retrieveSingleFlowVersion({
+                    projectPath: root,
+                    alias: 'temporg',
+                    versionDescriptor: versionDescriptor(
+                        'Active_Customer',
+                        1,
+                        'id-1'
+                    ),
+                    execAsync: async () => ({
+                        stdout: buildRetrieveSuccessJson(
+                            'force-app/main/default/flows/Wrong.flow-meta.xml'
+                        )
+                    })
+                });
+            } catch (error) {
+                failed = true;
+                assert.ok(error.message.includes('did not report'));
+            }
+
+            assert.strictEqual(failed, true);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
+        'retrieveSingleFlowVersion fails when CLI reports file but disk is missing',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-version-missing-')
+            );
+
+            let failed = false;
+
+            try {
+                await retrieveSingleFlowVersion({
+                    projectPath: root,
+                    alias: 'temporg',
+                    versionDescriptor: versionDescriptor(
+                        'Active_Customer',
+                        1,
+                        'id-1'
+                    ),
+                    execAsync: async () => ({
+                        stdout: buildRetrieveSuccessJson(
+                            'force-app/main/default/flows/Active_Customer-1.flow-meta.xml'
+                        )
+                    })
+                });
+            } catch (error) {
+                failed = true;
+                assert.ok(error.message.includes('missing on disk'));
+            }
+
+            assert.strictEqual(failed, true);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
+
+    await runTest('runFlowVersionRetrievalExtension retrieves multiple versions', async () => {
         const root = await fs.promises.mkdtemp(
             path.join(os.tmpdir(), 'flow-version-run-')
         );
@@ -219,8 +298,9 @@ function versionDescriptor(developerName, versionNumber, id, options = {}) {
         const discovery = {
             apiVersion: '61.0',
             versions: [
-                versionDescriptor('Get_Customer_Details', 1, 'id-1'),
-                versionDescriptor('Get_Customer_Details', 2, 'id-2', {
+                versionDescriptor('Active_Customer', 1, 'id-1'),
+                versionDescriptor('Active_Customer', 2, 'id-2'),
+                versionDescriptor('Active_Customer', 3, 'id-3', {
                     flowIsLatestVersion: true
                 })
             ]
@@ -233,96 +313,184 @@ function versionDescriptor(developerName, versionNumber, id, options = {}) {
             alias: 'temporg',
             execAsync: async (command) => {
                 retrieveCalls.push(command);
-                const flowsDir = path.join(
-                    root,
-                    'force-app',
-                    'main',
-                    'default',
-                    'flows'
-                );
-                await mkdir(flowsDir, { recursive: true });
+                const flows = flowsDir(root);
+                await mkdir(flows, { recursive: true });
 
-                if (command.includes('Flow:Get_Customer_Details-1')) {
+                if (command.includes('Flow:Active_Customer-1')) {
+                    const relative =
+                        'force-app/main/default/flows/Active_Customer-1.flow-meta.xml';
                     await writeFile(
-                        path.join(
-                            flowsDir,
-                            'Get_Customer_Details-1.flow-meta.xml'
-                        ),
+                        path.join(flows, 'Active_Customer-1.flow-meta.xml'),
                         '<Flow>v1</Flow>',
                         'utf8'
                     );
+
+                    return { stdout: buildRetrieveSuccessJson(relative) };
                 }
 
-                if (command.includes('Flow:Get_Customer_Details-2')) {
+                if (command.includes('Flow:Active_Customer-2')) {
+                    const relative =
+                        'force-app/main/default/flows/Active_Customer-2.flow-meta.xml';
                     await writeFile(
-                        path.join(
-                            flowsDir,
-                            'Get_Customer_Details.flow-meta.xml'
-                        ),
+                        path.join(flows, 'Active_Customer-2.flow-meta.xml'),
                         '<Flow>v2</Flow>',
                         'utf8'
                     );
+
+                    return { stdout: buildRetrieveSuccessJson(relative) };
                 }
 
-                return { stdout: '{}' };
+                if (command.includes('Flow:Active_Customer-3')) {
+                    const relative =
+                        'force-app/main/default/flows/Active_Customer.flow-meta.xml';
+                    await writeFile(
+                        path.join(flows, 'Active_Customer.flow-meta.xml'),
+                        '<Flow>v3</Flow>',
+                        'utf8'
+                    );
+
+                    return { stdout: buildRetrieveSuccessJson(relative) };
+                }
+
+                return { stdout: '{"status":0,"result":{"files":[]}}' };
             },
             discoverFlowVersionsFn: async () => discovery
         });
 
-        assert.strictEqual(retrieveCalls.length, 2);
-        assert.strictEqual(manifest.artifactCount, 2);
+        assert.strictEqual(retrieveCalls.length, 3);
+        assert.strictEqual(manifest.artifactCount, 3);
 
         const v1 = await fs.promises.readFile(
-            path.join(
-                root,
-                'force-app',
-                'main',
-                'default',
-                'flows',
-                'Get_Customer_Details-1.flow-meta.xml'
-            ),
+            path.join(flowsDir(root), 'Active_Customer-1.flow-meta.xml'),
             'utf8'
         );
         const v2 = await fs.promises.readFile(
-            path.join(
-                root,
-                'force-app',
-                'main',
-                'default',
-                'flows',
-                'Get_Customer_Details-2.flow-meta.xml'
-            ),
+            path.join(flowsDir(root), 'Active_Customer-2.flow-meta.xml'),
+            'utf8'
+        );
+        const v3 = await fs.promises.readFile(
+            path.join(flowsDir(root), 'Active_Customer-3.flow-meta.xml'),
             'utf8'
         );
 
         assert.ok(v1.includes('v1'));
         assert.ok(v2.includes('v2'));
-        assert.notStrictEqual(v1, v2);
+        assert.ok(v3.includes('v3'));
         await fs.promises.rm(root, { recursive: true, force: true });
     });
 
-    await runTest('diffFlowSnapshots detects hash changes', () => {
-        const before = new Map([
-            [
-                'Get_Customer_Details.flow-meta.xml',
-                {
-                    sha256: hashBytes(Buffer.from('a'))
-                }
-            ]
-        ]);
-        const after = new Map([
-            [
-                'Get_Customer_Details.flow-meta.xml',
-                {
-                    fileName: 'Get_Customer_Details.flow-meta.xml',
-                    bytes: Buffer.from('b'),
-                    sha256: hashBytes(Buffer.from('b'))
-                }
-            ]
-        ]);
+    await runTest(
+        'runFlowVersionRetrievalExtension records failure for one bad version',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-version-partial-')
+            );
 
-        const diff = diffFlowSnapshots(before, after);
+            const discovery = {
+                apiVersion: '61.0',
+                versions: [
+                    versionDescriptor('Active_Customer', 1, 'id-1'),
+                    versionDescriptor('Active_Customer', 2, 'id-2')
+                ]
+            };
 
-        assert.strictEqual(diff.length, 1);
-    });
+            let thrown = null;
+
+            try {
+                await runFlowVersionRetrievalExtension({
+                    projectPath: root,
+                    instanceUrl: 'https://example.my.salesforce.com',
+                    accessToken: 'token',
+                    alias: 'temporg',
+                    execAsync: async (command) => {
+                        const flows = flowsDir(root);
+                        await mkdir(flows, { recursive: true });
+
+                        if (command.includes('Flow:Active_Customer-1')) {
+                            const relative =
+                                'force-app/main/default/flows/Active_Customer-1.flow-meta.xml';
+                            await writeFile(
+                                path.join(
+                                    flows,
+                                    'Active_Customer-1.flow-meta.xml'
+                                ),
+                                '<Flow>v1</Flow>',
+                                'utf8'
+                            );
+
+                            return {
+                                stdout: buildRetrieveSuccessJson(relative)
+                            };
+                        }
+
+                        throw new Error('CLI retrieve failed');
+                    },
+                    discoverFlowVersionsFn: async () => discovery
+                });
+            } catch (error) {
+                thrown = error;
+            }
+
+            assert.ok(thrown);
+            assert.strictEqual(
+                thrown.code,
+                'FLOW_VERSION_RETRIEVAL_PARTIAL_FAILURE'
+            );
+            assert.strictEqual(thrown.failures.length, 1);
+
+            const manifestRaw = await fs.promises.readFile(
+                path.join(
+                    root,
+                    '.metadata-backup',
+                    'flow-version-artifacts.json'
+                ),
+                'utf8'
+            );
+            const manifest = JSON.parse(manifestRaw);
+
+            assert.strictEqual(manifest.artifactCount, 1);
+            assert.strictEqual(manifest.failureCount, 1);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
+        'unchanged on-disk file without CLI report does not satisfy retrieve',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-version-unchanged-')
+            );
+            const flows = flowsDir(root);
+
+            await mkdir(flows, { recursive: true });
+            await writeFile(
+                path.join(flows, 'Active_Customer-1.flow-meta.xml'),
+                '<Flow>stale</Flow>',
+                'utf8'
+            );
+
+            let failed = false;
+
+            try {
+                await retrieveSingleFlowVersion({
+                    projectPath: root,
+                    alias: 'temporg',
+                    versionDescriptor: versionDescriptor(
+                        'Active_Customer',
+                        1,
+                        'id-1'
+                    ),
+                    execAsync: async () => ({
+                        stdout: '{"status":0,"result":{"files":[]}}'
+                    })
+                });
+            } catch (error) {
+                failed = true;
+                assert.ok(error.message.includes('did not report'));
+            }
+
+            assert.strictEqual(failed, true);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
 })();
