@@ -170,9 +170,38 @@ function resolveRetrievedFlowPath({
     return null;
 }
 
-async function readProjectFile(projectPath, relativePath) {
-    const normalized = String(relativePath).replace(/\\/g, '/');
-    const absolute = path.join(projectPath, ...normalized.split('/'));
+function resolveReportedPathWithinProject(projectPath, reportedPath) {
+    if (!projectPath || !reportedPath) {
+        return null;
+    }
+
+    const projectRoot = path.resolve(projectPath);
+    const absolute = path.isAbsolute(reportedPath)
+        ? path.resolve(reportedPath)
+        : path.resolve(projectRoot, reportedPath);
+
+    const relativeToProject = path.relative(projectRoot, absolute);
+
+    if (
+        !relativeToProject ||
+        relativeToProject.startsWith('..') ||
+        path.isAbsolute(relativeToProject)
+    ) {
+        return null;
+    }
+
+    return absolute;
+}
+
+async function readProjectFile(projectPath, reportedPath) {
+    const absolute = resolveReportedPathWithinProject(
+        projectPath,
+        reportedPath
+    );
+
+    if (!absolute) {
+        return null;
+    }
 
     try {
         const fileStat = await stat(absolute);
@@ -414,6 +443,8 @@ module.exports = {
     expectedUnversionedBasename,
     parseRetrieveCliStdout,
     resolveRetrievedFlowPath,
+    resolveReportedPathWithinProject,
+    readProjectFile,
     persistVersionArtifact,
     retrieveSingleFlowVersion,
     runFlowVersionRetrievalExtension,

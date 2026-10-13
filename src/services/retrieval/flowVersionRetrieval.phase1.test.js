@@ -12,6 +12,8 @@ const {
     retrieveSingleFlowVersion,
     runFlowVersionRetrievalExtension,
     resolveRetrievedFlowPath,
+    resolveReportedPathWithinProject,
+    readProjectFile,
     buildRetrieveSuccessJson
 } = require('./flowVersionRetrieval.service');
 
@@ -118,6 +120,180 @@ function flowsDir(root) {
             });
 
             assert.strictEqual(resolved, null);
+        }
+    );
+
+    await runTest(
+        'resolveRetrievedFlowPath rejects mismatched versioned filename',
+        () => {
+            const resolved = resolveRetrievedFlowPath({
+                retrievedFiles: [
+                    {
+                        filePath:
+                            'force-app/main/default/flows/Active_Customer-2.flow-meta.xml'
+                    }
+                ],
+                developerName: 'Active_Customer',
+                versionNumber: 1,
+                flowIsLatestVersion: false
+            });
+
+            assert.strictEqual(resolved, null);
+        }
+    );
+
+    await runTest('readProjectFile resolves relative path under project', async () => {
+        const root = await fs.promises.mkdtemp(
+            path.join(os.tmpdir(), 'flow-read-relative-')
+        );
+        const flows = flowsDir(root);
+        const content = '<Flow>relative</Flow>';
+
+        await mkdir(flows, { recursive: true });
+        await writeFile(
+            path.join(flows, 'Active_Customer-1.flow-meta.xml'),
+            content,
+            'utf8'
+        );
+
+        const bytes = await readProjectFile(
+            root,
+            'force-app/main/default/flows/Active_Customer-1.flow-meta.xml'
+        );
+
+        assert.strictEqual(bytes.toString('utf8'), content);
+        await fs.promises.rm(root, { recursive: true, force: true });
+    });
+
+    await runTest('readProjectFile resolves absolute path under project', async () => {
+        const root = await fs.promises.mkdtemp(
+            path.join(os.tmpdir(), 'flow-read-absolute-')
+        );
+        const flows = flowsDir(root);
+        const content = '<Flow>absolute</Flow>';
+        const absoluteReported = path.join(
+            flows,
+            'Active_Customer-1.flow-meta.xml'
+        );
+
+        await mkdir(flows, { recursive: true });
+        await writeFile(absoluteReported, content, 'utf8');
+
+        const bytes = await readProjectFile(root, absoluteReported);
+
+        assert.strictEqual(bytes.toString('utf8'), content);
+        await fs.promises.rm(root, { recursive: true, force: true });
+    });
+
+    await runTest(
+        'readProjectFile returns null for absolute path outside project',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-read-outside-')
+            );
+            const outside = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-outside-')
+            );
+
+            await writeFile(
+                path.join(outside, 'Active_Customer-1.flow-meta.xml'),
+                '<Flow>outside</Flow>',
+                'utf8'
+            );
+
+            const resolved = resolveReportedPathWithinProject(
+                root,
+                path.join(outside, 'Active_Customer-1.flow-meta.xml')
+            );
+
+            assert.strictEqual(resolved, null);
+            assert.strictEqual(
+                await readProjectFile(
+                    root,
+                    path.join(outside, 'Active_Customer-1.flow-meta.xml')
+                ),
+                null
+            );
+
+            await fs.promises.rm(root, { recursive: true, force: true });
+            await fs.promises.rm(outside, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
+        'retrieveSingleFlowVersion reads absolute versioned CLI filePath',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-retrieve-abs-versioned-')
+            );
+            const flows = flowsDir(root);
+            const absoluteReported = path.join(
+                flows,
+                'Active_Customer-1.flow-meta.xml'
+            );
+
+            await mkdir(flows, { recursive: true });
+            await writeFile(absoluteReported, '<Flow>v1</Flow>', 'utf8');
+
+            const result = await retrieveSingleFlowVersion({
+                projectPath: root,
+                alias: 'temporg',
+                versionDescriptor: versionDescriptor(
+                    'Active_Customer',
+                    1,
+                    'id-1'
+                ),
+                execAsync: async () => ({
+                    stdout: buildRetrieveSuccessJson(absoluteReported)
+                })
+            });
+
+            assert.strictEqual(
+                result.workspaceArtifactPath,
+                'force-app/main/default/flows/Active_Customer-1.flow-meta.xml'
+            );
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
+        'retrieveSingleFlowVersion reads absolute unversioned path for latest',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-retrieve-abs-unversioned-')
+            );
+            const flows = flowsDir(root);
+            const absoluteReported = path.join(
+                flows,
+                'Active_Customer.flow-meta.xml'
+            );
+
+            await mkdir(flows, { recursive: true });
+            await writeFile(absoluteReported, '<Flow>latest</Flow>', 'utf8');
+
+            const result = await retrieveSingleFlowVersion({
+                projectPath: root,
+                alias: 'temporg',
+                versionDescriptor: versionDescriptor(
+                    'Active_Customer',
+                    2,
+                    'id-2',
+                    { flowIsLatestVersion: true }
+                ),
+                execAsync: async () => ({
+                    stdout: buildRetrieveSuccessJson(absoluteReported)
+                })
+            });
+
+            assert.strictEqual(
+                result.workspaceArtifactPath,
+                'force-app/main/default/flows/Active_Customer-2.flow-meta.xml'
+            );
+            assert.strictEqual(
+                result.retrievedArtifactCorrelation,
+                'unversioned_filename'
+            );
+            await fs.promises.rm(root, { recursive: true, force: true });
         }
     );
 
