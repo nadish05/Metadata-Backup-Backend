@@ -115,7 +115,7 @@ function runTest(name, fn) {
     });
 
     await runTest(
-        'post-delete verification passes when version absent but definition exists',
+        'post-delete: Check_Amount-4 absent with v1 present yields PASS (target version only; does not prove v1 preserved)',
         async () => {
             const result = await verifyVersionQualifiedFlowPostDeleteAbsence({
                 metadataName: 'Check_Amount-4',
@@ -129,6 +129,26 @@ function runTest(name, fn) {
                             sourceFlowVersionNumber: 1
                         }
                     ]
+                })
+            });
+
+            assert.strictEqual(
+                result.outcome,
+                FLOW_POST_DELETE_VERIFICATION_OUTCOME.PASS
+            );
+        }
+    );
+
+    await runTest(
+        'post-delete: Check_Amount-4 absent when definition and all versions missing yields PASS',
+        async () => {
+            const result = await verifyVersionQualifiedFlowPostDeleteAbsence({
+                metadataName: 'Check_Amount-4',
+                instanceUrl: 'https://example.com',
+                accessToken: 'token',
+                discoverFlowVersionsFn: async () => ({
+                    definitions: [],
+                    versions: []
                 })
             });
 

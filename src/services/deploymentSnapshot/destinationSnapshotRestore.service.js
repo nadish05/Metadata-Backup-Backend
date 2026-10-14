@@ -519,9 +519,18 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const inventoryBuilder =
         dependencies.buildDestinationInventory || buildDestinationInventory;
     const inventoryState = dependencies.getState || getState;
+    const discoverFlowVersionsForPostDeleteVerification =
+        dependencies.discoverFlowVersionsForPostDeleteVerification || null;
     const verifyFlowPostDeleteAbsenceFn =
         dependencies.verifyVersionQualifiedFlowPostDeleteAbsence ||
-        verifyVersionQualifiedFlowPostDeleteAbsence;
+        (discoverFlowVersionsForPostDeleteVerification
+            ? (params) =>
+                  verifyVersionQualifiedFlowPostDeleteAbsence({
+                      ...params,
+                      discoverFlowVersionsFn:
+                          discoverFlowVersionsForPostDeleteVerification
+                  })
+            : verifyVersionQualifiedFlowPostDeleteAbsence);
     const refreshAccessTokenFn =
         dependencies.refreshAccessToken || refreshAccessToken;
     const getLatestApiVersionFn =

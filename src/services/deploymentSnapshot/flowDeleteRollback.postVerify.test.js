@@ -90,15 +90,16 @@ async function sealFlowV4DeleteSnapshot() {
     return { capture, sealed, afterBytes };
 }
 
-function createFlowDeleteHarness({
+function buildFlowDeleteRestoreService({
     capture,
     retrieveBytes,
     inventoryState = DESTINATION_STATE.EXISTS,
-    verifyFlowPostDeleteAbsence
+    verifyFlowPostDeleteAbsence,
+    discoverFlowVersionsForPostDeleteVerification
 }) {
     const operationStore = createMemoryRollbackOperationStore();
 
-    return createDestinationSnapshotRestoreService({
+    const serviceOptions = {
         getRollbackOperationStore: () => operationStore,
         rollbackOperationService: createRollbackOperationService({
             getStore: () => operationStore
@@ -140,10 +141,86 @@ function createFlowDeleteHarness({
                     { state: inventoryState }
                 ])
             )
-        }),
-        verifyVersionQualifiedFlowPostDeleteAbsence:
-            verifyFlowPostDeleteAbsence
+        })
+    };
+
+    if (verifyFlowPostDeleteAbsence) {
+        serviceOptions.verifyVersionQualifiedFlowPostDeleteAbsence =
+            verifyFlowPostDeleteAbsence;
+    }
+
+    if (discoverFlowVersionsForPostDeleteVerification) {
+        serviceOptions.discoverFlowVersionsForPostDeleteVerification =
+            discoverFlowVersionsForPostDeleteVerification;
+    }
+
+    return {
+        service: createDestinationSnapshotRestoreService(serviceOptions),
+        operationStore
+    };
+}
+
+function createFlowDeleteHarness(options) {
+    const { service } = buildFlowDeleteRestoreService(options);
+
+    return service;
+}
+
+function discoveryWithV1Only() {
+    return {
+        definitions: [{ developerName: 'Check_Amount' }],
+        versions: [
+            {
+                flowDefinitionDeveloperName: 'Check_Amount',
+                sourceFlowVersionNumber: 1
+            }
+        ]
+    };
+}
+
+function discoveryWithV4Present() {
+    return {
+        definitions: [{ developerName: 'Check_Amount' }],
+        versions: [
+            {
+                flowDefinitionDeveloperName: 'Check_Amount',
+                sourceFlowVersionNumber: 4
+            }
+        ]
+    };
+}
+
+async function sealApexDeleteSnapshot() {
+    const capture = createSnapshotCaptureService({
+        metadataStore: createMemorySnapshotMetadataStore(),
+        blobStore: createMemorySnapshotBlobStore()
     });
+    const afterBytes = packMemberFiles([
+        {
+            relativePath:
+                'force-app/main/default/classes/DemoDeletedClass.cls',
+            bytes: Buffer.from(
+                'public class DemoDeletedClass {\n}\n',
+                'utf8'
+            )
+        }
+    ]);
+    const ready = await capture.captureSnapshot({
+        deploymentContext: { destinationOrgId: '00D000000000001' },
+        members: [
+            {
+                metadataType: 'ApexClass',
+                metadataName: 'DemoDeletedClass',
+                filePath:
+                    'force-app/main/default/classes/DemoDeletedClass.cls',
+                changeClass: CHANGE_CLASS.NEW,
+                expectedAfterHash: hashBytes(afterBytes)
+            }
+        ]
+    });
+    const sealed = await capture.sealSnapshot(ready.snapshotId);
+
+    return { capture, sealed, afterBytes };
 }
 
 (async () => {
@@ -318,6 +395,155 @@ function createFlowDeleteHarness({
                 instanceUrl: 'https://dest.example.com'
             });
 
+            assert.strictEqual(result.blocked, false);
+            assert.strictEqual(result.operationStatus, 'SUCCEEDED');
+        }
+    );
+
+    await runTest(
+        'restore integration: real verifier passes when v4 absent and v1 present despite definition inventory EXISTS',
+        async () => {
+            const { capture, sealed, afterBytes } =
+                await sealFlowV4DeleteSnapshot();
+            const { service } = buildFlowDeleteRestoreService({
+                capture,
+                retrieveBytes: afterBytes,
+                inventoryState: DESTINATION_STATE.EXISTS,
+                discoverFlowVersionsForPostDeleteVerification: async () =>
+                    discoveryWithV1Only()
+            });
+            const result = await service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(result.blocked, false);
+            assert.strictEqual(result.operationStatus, 'SUCCEEDED');
+        }
+    );
+
+    await runTest(
+        'restore integration: real verifier fails when target v4 still present on destination',
+        async () => {
+            const { capture, sealed, afterBytes } =
+                await sealFlowV4DeleteSnapshot();
+            const { service } = buildFlowDeleteRestoreService({
+                capture,
+                retrieveBytes: afterBytes,
+                discoverFlowVersionsForPostDeleteVerification: async () =>
+                    discoveryWithV4Present()
+            });
+            const result = await service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(
+                result.code,
+                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED
+            );
+        }
+    );
+
+    await runTest(
+        'restore integration: real verifier fails closed when Tooling discovery throws',
+        async () => {
+            const { capture, sealed, afterBytes } =
+                await sealFlowV4DeleteSnapshot();
+            const { service } = buildFlowDeleteRestoreService({
+                capture,
+                retrieveBytes: afterBytes,
+                discoverFlowVersionsForPostDeleteVerification: async () => {
+                    throw new Error('tooling unavailable');
+                }
+            });
+            const result = await service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(
+                result.code,
+                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED
+            );
+            assert.match(result.message, /tooling unavailable/i);
+        }
+    );
+
+    await runTest(
+        'restore integration: unversioned Flow still uses definition inventory when verifier defers',
+        async () => {
+            const capture = createSnapshotCaptureService({
+                metadataStore: createMemorySnapshotMetadataStore(),
+                blobStore: createMemorySnapshotBlobStore()
+            });
+            const path = 'force-app/main/default/flows/My_Flow.flow-meta.xml';
+            const afterBytes = packMemberFiles([
+                {
+                    relativePath: path,
+                    bytes: Buffer.from('<Flow/>', 'utf8')
+                }
+            ]);
+            const ready = await capture.captureSnapshot({
+                deploymentContext: { destinationOrgId: '00D000000000001' },
+                members: [
+                    {
+                        metadataType: 'Flow',
+                        metadataName: 'My_Flow',
+                        filePath: path,
+                        changeClass: CHANGE_CLASS.NEW,
+                        expectedAfterHash: hashBytes(afterBytes)
+                    }
+                ]
+            });
+            const sealed = await capture.sealSnapshot(ready.snapshotId);
+            let toolingCalls = 0;
+            const { service } = buildFlowDeleteRestoreService({
+                capture,
+                retrieveBytes: afterBytes,
+                inventoryState: DESTINATION_STATE.MISSING,
+                discoverFlowVersionsForPostDeleteVerification: async () => {
+                    toolingCalls += 1;
+                    throw new Error('Tooling must not run for unversioned Flow');
+                }
+            });
+            const result = await service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(toolingCalls, 0);
+            assert.strictEqual(result.blocked, false);
+            assert.strictEqual(result.operationStatus, 'SUCCEEDED');
+        }
+    );
+
+    await runTest(
+        'restore integration: non-Flow DELETE post-delete does not invoke Tooling discovery stub',
+        async () => {
+            const { capture, sealed, afterBytes } =
+                await sealApexDeleteSnapshot();
+            let toolingCalls = 0;
+            const { service } = buildFlowDeleteRestoreService({
+                capture,
+                retrieveBytes: afterBytes,
+                inventoryState: DESTINATION_STATE.MISSING,
+                discoverFlowVersionsForPostDeleteVerification: async () => {
+                    toolingCalls += 1;
+                    throw new Error('Tooling must not run for ApexClass');
+                }
+            });
+            const result = await service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(toolingCalls, 0);
             assert.strictEqual(result.blocked, false);
             assert.strictEqual(result.operationStatus, 'SUCCEEDED');
         }
