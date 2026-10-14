@@ -924,6 +924,173 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
     });
 
     await runTest(
+        'buildExpectedMemberSourcePaths resolves version-qualified Flow logical path',
+        () => {
+            const paths = buildExpectedMemberSourcePaths(
+                'Flow',
+                'Check_Amount-4'
+            );
+
+            assert.deepStrictEqual(paths, {
+                logical:
+                    'force-app/main/default/flows/Check_Amount-4.flow-meta.xml'
+            });
+        }
+    );
+
+    await runTest(
+        'prefers exact version-qualified Flow filename when versioned and unversioned are both present',
+        () => {
+            const versionedPath =
+                'force-app/main/default/flows/Check_Amount-4.flow-meta.xml';
+            const unversionedPath =
+                'force-app/main/default/flows/Check_Amount.flow-meta.xml';
+            const files = selectLogicalMemberFiles(
+                [
+                    {
+                        relativePath: unversionedPath,
+                        bytes: Buffer.from('flow-unversioned')
+                    },
+                    {
+                        relativePath: versionedPath,
+                        bytes: Buffer.from('flow-versioned')
+                    }
+                ],
+                'Flow',
+                'Check_Amount-4'
+            );
+
+            assert.strictEqual(files.length, 1);
+            assert.strictEqual(files[0].relativePath, versionedPath);
+            assert.strictEqual(
+                files[0].bytes.toString('utf8'),
+                'flow-versioned'
+            );
+        }
+    );
+
+    await runTest(
+        'accepts unversioned Flow filename for version-qualified member when unambiguous',
+        () => {
+            const unversionedPath =
+                'force-app/main/default/flows/Check_Amount.flow-meta.xml';
+            const files = selectLogicalMemberFiles(
+                [
+                    {
+                        relativePath: unversionedPath,
+                        bytes: Buffer.from('flow-unversioned-only')
+                    }
+                ],
+                'Flow',
+                'Check_Amount-4'
+            );
+
+            assert.deepStrictEqual(
+                files.map((file) => file.relativePath),
+                [unversionedPath]
+            );
+            assert.strictEqual(
+                files[0].bytes.toString('utf8'),
+                'flow-unversioned-only'
+            );
+        }
+    );
+
+    await runTest(
+        'rejects mismatched version-qualified Flow filename for requested version',
+        () => {
+            assert.throws(
+                () =>
+                    selectLogicalMemberFiles(
+                        [
+                            {
+                                relativePath:
+                                    'force-app/main/default/flows/Check_Amount-3.flow-meta.xml',
+                                bytes: Buffer.from('flow-wrong-version')
+                            }
+                        ],
+                        'Flow',
+                        'Check_Amount-4'
+                    ),
+                /did not return the logical file/
+            );
+        }
+    );
+
+    await runTest(
+        'rejects version-qualified Flow unversioned fallback when unrelated flow files are present',
+        () => {
+            assert.throws(
+                () =>
+                    selectLogicalMemberFiles(
+                        [
+                            {
+                                relativePath:
+                                    'force-app/main/default/flows/Check_Amount.flow-meta.xml',
+                                bytes: Buffer.from('flow-target')
+                            },
+                            {
+                                relativePath:
+                                    'force-app/main/default/flows/Other_Flow.flow-meta.xml',
+                                bytes: Buffer.from('flow-other')
+                            }
+                        ],
+                        'Flow',
+                        'Check_Amount-4'
+                    ),
+                /did not return the logical file/
+            );
+        }
+    );
+
+    await runTest(
+        'rejects version-qualified Flow fallback when wrong version and unversioned files are both present',
+        () => {
+            assert.throws(
+                () =>
+                    selectLogicalMemberFiles(
+                        [
+                            {
+                                relativePath:
+                                    'force-app/main/default/flows/Check_Amount-3.flow-meta.xml',
+                                bytes: Buffer.from('flow-wrong-version')
+                            },
+                            {
+                                relativePath:
+                                    'force-app/main/default/flows/Check_Amount.flow-meta.xml',
+                                bytes: Buffer.from('flow-unversioned')
+                            }
+                        ],
+                        'Flow',
+                        'Check_Amount-4'
+                    ),
+                /did not return the logical file/
+            );
+        }
+    );
+
+    await runTest(
+        'fails closed when version-qualified Flow member has no matching artifacts',
+        () => {
+            assert.throws(
+                () =>
+                    selectLogicalMemberFiles(
+                        [
+                            {
+                                relativePath:
+                                    'force-app/main/default/flows/Other_Flow.flow-meta.xml',
+                                bytes: Buffer.from('flow-other')
+                            }
+                        ],
+                        'Flow',
+                        'Check_Amount-4'
+                    ),
+                /did not return the logical file/
+            );
+        }
+    );
+
+    await runTest(
         'logs ROLLBACK_DESTINATION_ARTIFACT_DIAGNOSTIC when rollback context is provided',
         async () => {
             const workRoot = fs.mkdtempSync(

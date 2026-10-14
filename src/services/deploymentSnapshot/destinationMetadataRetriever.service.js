@@ -18,6 +18,11 @@ const {
     unpackMemberFiles
 } = require('./destinationMemberArtifact.service');
 const { hashBytes } = require('./snapshotIntegrity.service');
+const {
+    parseVersionQualifiedFlowMember,
+    FLOW_META_SUFFIX,
+    FLOWS_DIR_PREFIX
+} = require('../flowMetadata/flowMemberIdentity.service');
 
 const mkdir = util.promisify(fs.mkdir);
 const readdir = util.promisify(fs.readdir);
@@ -361,6 +366,142 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
     return null;
 }
 
+function normalizeRetrieveRelativePath(relativePath) {
+    return String(relativePath || '').replace(/\\/g, '/');
+}
+
+function isFlowsFlowMetaRelativePath(relativePath) {
+    const normalized = normalizeRetrieveRelativePath(relativePath);
+
+    return (
+        normalized.includes('/flows/') &&
+        normalized.endsWith(FLOW_META_SUFFIX)
+    );
+}
+
+function flowMetaBasenameFromRelativePath(relativePath) {
+    const normalized = normalizeRetrieveRelativePath(relativePath);
+
+    return normalized.split('/').pop() || '';
+}
+
+function buildFlowLogicalRelativePath(metadataName) {
+    const memberName = String(metadataName || '').trim();
+
+    if (!memberName) {
+        return null;
+    }
+
+    return `${FLOWS_DIR_PREFIX}${memberName}${FLOW_META_SUFFIX}`;
+}
+
+/**
+ * Flow destination retrieve may return a version-qualified filename or, for a
+ * version-qualified member request, an unversioned definition filename. Exact
+ * versioned path wins; unversioned fallback is allowed only when flow artifacts
+ * are unambiguous (no wrong version, no unrelated flows).
+ */
+function selectLogicalFlowMemberFiles(retrievedFiles, metadataName) {
+    const memberName = String(metadataName || '').trim();
+    const parsed = parseVersionQualifiedFlowMember(memberName);
+    const failMessage = `Destination snapshot retrieve did not return the logical file for Flow:${metadataName}.`;
+
+    if (!parsed) {
+        throw new Error(failMessage);
+    }
+
+    const primaryLogical = buildFlowLogicalRelativePath(memberName);
+
+    if (!primaryLogical) {
+        throw new Error(failMessage);
+    }
+
+    const normalizedFiles = retrievedFiles.map((file) => ({
+        ...file,
+        relativePath: normalizeRetrieveRelativePath(file.relativePath)
+    }));
+
+    const primaryMatches = normalizedFiles.filter(
+        (file) => file.relativePath === primaryLogical
+    );
+
+    if (primaryMatches.length > 0) {
+        return primaryMatches;
+    }
+
+    if (!parsed.isVersionQualified) {
+        throw new Error(failMessage);
+    }
+
+    const definitionDeveloperName = parsed.definitionDeveloperName;
+    const requestedVersion = parsed.sourceVersionNumber;
+    const unversionedBasename = `${definitionDeveloperName}${FLOW_META_SUFFIX}`;
+    const flowMetaFiles = normalizedFiles.filter((file) =>
+        isFlowsFlowMetaRelativePath(file.relativePath)
+    );
+
+    const hasConflictingVersionedFile = flowMetaFiles.some((file) => {
+        const stem = flowMetaBasenameFromRelativePath(file.relativePath).slice(
+            0,
+            -FLOW_META_SUFFIX.length
+        );
+        const stemParsed = parseVersionQualifiedFlowMember(stem);
+
+        if (!stemParsed || !stemParsed.isVersionQualified) {
+            return false;
+        }
+
+        return (
+            stemParsed.definitionDeveloperName === definitionDeveloperName &&
+            stemParsed.sourceVersionNumber !== requestedVersion
+        );
+    });
+
+    if (hasConflictingVersionedFile) {
+        throw new Error(failMessage);
+    }
+
+    const unversionedMatches = flowMetaFiles.filter(
+        (file) =>
+            flowMetaBasenameFromRelativePath(file.relativePath) ===
+            unversionedBasename
+    );
+
+    const unrelatedFlowFiles = flowMetaFiles.filter((file) => {
+        const basename = flowMetaBasenameFromRelativePath(file.relativePath);
+
+        if (basename === unversionedBasename) {
+            return false;
+        }
+
+        const stem = basename.slice(0, -FLOW_META_SUFFIX.length);
+        const stemParsed = parseVersionQualifiedFlowMember(stem);
+
+        if (
+            stemParsed.isVersionQualified &&
+            stemParsed.definitionDeveloperName === definitionDeveloperName &&
+            stemParsed.sourceVersionNumber === requestedVersion
+        ) {
+            return false;
+        }
+
+        if (
+            !stemParsed.isVersionQualified &&
+            stemParsed.definitionDeveloperName === definitionDeveloperName
+        ) {
+            return false;
+        }
+
+        return true;
+    });
+
+    if (unrelatedFlowFiles.length > 0 || unversionedMatches.length !== 1) {
+        throw new Error(failMessage);
+    }
+
+    return unversionedMatches;
+}
+
 function selectLogicalMemberFiles(
     retrievedFiles,
     metadataType,
@@ -391,11 +532,14 @@ function selectLogicalMemberFiles(
         return retrievedFiles;
     }
 
-    const selected = retrievedFiles.filter((file) =>
-        Object.values(expectedPaths).includes(
-            String(file.relativePath || '').replace(/\\/g, '/')
-        )
-    );
+    const selected =
+        metadataType === 'Flow'
+            ? selectLogicalFlowMemberFiles(retrievedFiles, metadataName)
+            : retrievedFiles.filter((file) =>
+                  Object.values(expectedPaths).includes(
+                      normalizeRetrieveRelativePath(file.relativePath)
+                  )
+              );
 
     if (selected.length === 0) {
         throw new Error(
