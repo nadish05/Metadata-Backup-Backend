@@ -61,6 +61,13 @@ const {
 } = require('../deploymentOrgLock/deploymentOrgLock.errors');
 const { OPERATION_TYPE } = require('../deploymentOrgLock/deploymentOrgLock.types');
 const { logLockEvent } = require('../deploymentOrgLock/deploymentOrgLock.log');
+const {
+    resolveFlowDestinationVersionForCapture,
+    FLOW_DESTINATION_CAPTURE_OUTCOME
+} = require('./flowDestinationVersionCapture.service');
+const {
+    parseVersionQualifiedFlowMember
+} = require('../flowMetadata/flowMemberIdentity.service');
 
 function fail(message, snapshot = null) {
     return {
@@ -101,6 +108,9 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
     const classifyExistingMember =
         dependencies.classifyExistingMemberChange ||
         classifyExistingMemberChange;
+    const resolveFlowDestinationVersion =
+        dependencies.resolveFlowDestinationVersionForCapture ||
+        resolveFlowDestinationVersionForCapture;
     // P0-R7.15.10: DEPLOY capture for Application Org persistence uses temporary
     // Node storage (MEMORY by default). Rollback still requires durable Node
     // storage via isDurableSnapshotStorageReady() in restore paths.
@@ -228,7 +238,69 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 );
             }
 
-            if (changeClass === CHANGE_CLASS.NEW) {
+            let captureChangeClass = changeClass;
+            let flowVersionAbsentBeforeDeploy = false;
+
+            if (member.metadataType === 'Flow') {
+                const flowParsed = parseVersionQualifiedFlowMember(
+                    member.metadataName
+                );
+
+                if (flowParsed?.isVersionQualified) {
+                    const versionState = await resolveFlowDestinationVersion({
+                        metadataName: member.metadataName,
+                        instanceUrl: resolvedInstanceUrl,
+                        accessToken
+                    });
+
+                    console.log(
+                        'FLOW_VERSION_CAPTURE_DECISION',
+                        JSON.stringify({
+                            metadataName: member.metadataName,
+                            inventoryChangeClass: changeClass,
+                            outcome: versionState.outcome,
+                            definitionDeveloperName:
+                                versionState.definitionDeveloperName || null,
+                            requestedVersion: versionState.requestedVersion ?? null
+                        })
+                    );
+
+                    if (
+                        versionState.outcome ===
+                        FLOW_DESTINATION_CAPTURE_OUTCOME.TOOLING_FAILED
+                    ) {
+                        return fail(
+                            buildUnknownReason(
+                                member.metadataType,
+                                member.metadataName,
+                                versionState.detail ||
+                                    'Flow destination version discovery failed.'
+                            )
+                        );
+                    }
+
+                    if (
+                        versionState.outcome ===
+                        FLOW_DESTINATION_CAPTURE_OUTCOME.DEFINITION_ABSENT
+                    ) {
+                        captureChangeClass = CHANGE_CLASS.NEW;
+                    } else if (
+                        versionState.outcome ===
+                        FLOW_DESTINATION_CAPTURE_OUTCOME
+                            .VERSION_ABSENT_DEFINITION_PRESENT
+                    ) {
+                        captureChangeClass = CHANGE_CLASS.NEW;
+                        flowVersionAbsentBeforeDeploy = true;
+                    } else if (
+                        versionState.outcome ===
+                        FLOW_DESTINATION_CAPTURE_OUTCOME.VERSION_PRESENT
+                    ) {
+                        captureChangeClass = CHANGE_CLASS.MODIFIED;
+                    }
+                }
+            }
+
+            if (captureChangeClass === CHANGE_CLASS.NEW) {
                 let expectedAfter;
 
                 try {
@@ -255,7 +327,7 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                     );
                 }
 
-                captureMembers.push({
+                const newCaptureMember = {
                     metadataType: member.metadataType,
                     metadataName: member.metadataName,
                     filePath: member.filePath,
@@ -267,7 +339,13 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                         expectedAfter.canonicalExpectedAfterHash,
                     recordTypeSemanticCaptureSpec:
                         expectedAfter.recordTypeSemanticCaptureSpec
-                });
+                };
+
+                if (flowVersionAbsentBeforeDeploy) {
+                    newCaptureMember.flowVersionAbsentBeforeDeploy = true;
+                }
+
+                captureMembers.push(newCaptureMember);
                 continue;
             }
 

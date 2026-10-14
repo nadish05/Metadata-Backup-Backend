@@ -23,7 +23,18 @@ function isModifiedRollbackEligibleMember(member) {
     );
 }
 
+function isFlowVersionAbsentBeforeDeployMember(member) {
+    return (
+        member?.metadataType === 'Flow' &&
+        member?.flowVersionAbsentBeforeDeploy === true
+    );
+}
+
 function isDeleteRollbackEligibleMember(member) {
+    if (isFlowVersionAbsentBeforeDeployMember(member)) {
+        return false;
+    }
+
     return (
         member?.changeClass === CHANGE_CLASS.NEW &&
         member.captureStatus === MEMBER_CAPTURE_STATUS.ABSENT_PROVEN &&
@@ -87,6 +98,7 @@ module.exports = {
     ROLLBACK_MODE,
     isModifiedRollbackEligibleMember,
     isDeleteRollbackEligibleMember,
+    isFlowVersionAbsentBeforeDeployMember,
     resolveRollbackMode,
     computeRollbackEligible
 };

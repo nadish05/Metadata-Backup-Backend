@@ -273,7 +273,7 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             expectedAfterHash = member.expectedAfterHash;
         }
 
-        return {
+        const nextMember = {
             snapshotId: snapshot.snapshotId,
             metadataType: member.metadataType,
             metadataName: member.metadataName,
@@ -287,6 +287,12 @@ function createSnapshotCaptureService({ metadataStore, blobStore } = {}) {
             artifactSize: 0,
             captureStatus: MEMBER_CAPTURE_STATUS.ABSENT_PROVEN
         };
+
+        if (member.flowVersionAbsentBeforeDeploy === true) {
+            nextMember.flowVersionAbsentBeforeDeploy = true;
+        }
+
+        return nextMember;
     }
 
     function buildUnknownMember(snapshot, member) {

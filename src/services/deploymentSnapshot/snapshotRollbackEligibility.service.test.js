@@ -71,6 +71,21 @@ function deleteMember(name = 'DemoDeletedClass') {
         assert.strictEqual(computeRollbackEligible(members), true);
     });
 
+    await runTest(
+        'Flow version absent before deploy blocks DELETE rollback eligibility',
+        () => {
+            const member = {
+                ...deleteMember('Check_Amount-4'),
+                metadataType: 'Flow',
+                flowVersionAbsentBeforeDeploy: true
+            };
+
+            assert.strictEqual(isDeleteRollbackEligibleMember(member), false);
+            assert.strictEqual(resolveRollbackMode([member]), ROLLBACK_MODE.INELIGIBLE);
+            assert.strictEqual(computeRollbackEligible([member]), false);
+        }
+    );
+
     await runTest('MIXED with unsupported member remains ineligible', () => {
         const members = [
             modifiedMember(),
