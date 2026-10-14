@@ -744,7 +744,90 @@ function buildExecFailureError(metadataType, metadataName, diagnostic) {
     return new Error(`${prefix} ${details.join(' — ')}`);
 }
 
+const FLOW_DESTINATION_VERSION_NOT_RETRIEVED =
+    'FLOW_DESTINATION_VERSION_NOT_RETRIEVED';
+
+function cliIndicatesMetadataMemberNotFound(
+    metadataType,
+    metadataName,
+    cliFailureMessages
+) {
+    if (!Array.isArray(cliFailureMessages) || cliFailureMessages.length === 0) {
+        return false;
+    }
+
+    const combined = cliFailureMessages.join(' ').toLowerCase();
+
+    if (!combined.includes('cannot be found')) {
+        return false;
+    }
+
+    const memberName = String(metadataName || '').toLowerCase();
+    const typeName = String(metadataType || '').toLowerCase();
+
+    if (memberName && combined.includes(memberName)) {
+        return true;
+    }
+
+    return typeName.length > 0 && combined.includes(typeName);
+}
+
+function buildFlowVersionZeroFilesError(metadataName, diagnostic, parsed) {
+    const prefix = `Destination snapshot capture failed for Flow:${metadataName}:`;
+    const definitionDeveloperName = parsed.definitionDeveloperName;
+    const sourceFlowVersionNumber = parsed.sourceVersionNumber;
+    const details = [
+        `code=${FLOW_DESTINATION_VERSION_NOT_RETRIEVED}`,
+        `the requested destination Flow version could not be retrieved (${definitionDeveloperName} version ${sourceFlowVersionNumber})`,
+        'snapshot capture was blocked because the org reported this Flow version as missing and zero metadata files were written to the retrieve workspace'
+    ];
+
+    if (diagnostic.cliStatus != null) {
+        details.push(`CLI status ${diagnostic.cliStatus}`);
+    }
+
+    if (diagnostic.cliFailureMessages?.length) {
+        details.push(
+            `CLI failures: ${diagnostic.cliFailureMessages.join('; ')}`
+        );
+    }
+
+    if (diagnostic.expectedSourcePaths?.logical) {
+        details.push(
+            `expected logical path: ${diagnostic.expectedSourcePaths.logical.relativePath} (${diagnostic.expectedSourcePaths.logical.exists ? 'found' : 'missing'})`
+        );
+    }
+
+    const error = new Error(`${prefix} ${details.join(' — ')}`);
+    error.code = FLOW_DESTINATION_VERSION_NOT_RETRIEVED;
+    error.metadataType = 'Flow';
+    error.metadataName = metadataName;
+    error.flowDefinitionDeveloperName = definitionDeveloperName;
+    error.sourceFlowVersionNumber = sourceFlowVersionNumber;
+
+    return error;
+}
+
 function buildZeroFilesError(metadataType, metadataName, diagnostic) {
+    if (metadataType === 'Flow') {
+        const parsed = parseVersionQualifiedFlowMember(metadataName);
+
+        if (
+            parsed?.isVersionQualified &&
+            cliIndicatesMetadataMemberNotFound(
+                metadataType,
+                metadataName,
+                diagnostic.cliFailureMessages
+            )
+        ) {
+            return buildFlowVersionZeroFilesError(
+                metadataName,
+                diagnostic,
+                parsed
+            );
+        }
+    }
+
     const prefix = `Destination snapshot capture failed for ${metadataType}:${metadataName}:`;
     const details = [
         'retrieve completed but zero files were collected from workspace',
@@ -1083,5 +1166,7 @@ module.exports = {
     buildRetrieveDiagnosticRecord,
     logDestinationRetrieveDiagnostic,
     buildRollbackDestinationArtifactDiagnostic,
-    logRollbackDestinationArtifactDiagnostic
+    logRollbackDestinationArtifactDiagnostic,
+    buildZeroFilesError,
+    FLOW_DESTINATION_VERSION_NOT_RETRIEVED
 };

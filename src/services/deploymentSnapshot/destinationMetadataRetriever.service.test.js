@@ -11,7 +11,9 @@ const {
     selectLogicalMemberFiles,
     buildRetrieveDiagnosticRecord,
     summarizeRetrieveCliOutput,
-    buildRollbackDestinationArtifactDiagnostic
+    buildRollbackDestinationArtifactDiagnostic,
+    buildZeroFilesError,
+    FLOW_DESTINATION_VERSION_NOT_RETRIEVED
 } = require('./destinationMetadataRetriever.service');
 const { ensureSfdxProject } = require('../sfdxProject.service');
 const {
@@ -1649,6 +1651,134 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         void error;
         assert.deepStrictEqual(listSnapshotWorkspaces(workRoot), []);
         await fs.promises.rm(workRoot, { recursive: true, force: true });
+    });
+
+    await runTest(
+        'version-qualified Flow zero retrieve with cannot be found reports FLOW_DESTINATION_VERSION_NOT_RETRIEVED',
+        async () => {
+            const workRoot = fs.mkdtempSync(
+                path.join(os.tmpdir(), 'p0r4-retr-flow-missing-version-')
+            );
+
+            const retriever = buildRetrieverHarness(workRoot, async (command) => {
+                if (String(command).includes('logout')) {
+                    return { stdout: '', stderr: '' };
+                }
+
+                return {
+                    stdout: JSON.stringify({
+                        status: 0,
+                        result: {
+                            files: [],
+                            failures: [
+                                {
+                                    message:
+                                        "Entity of type 'Flow' named 'Check_Amount-4' cannot be found"
+                                }
+                            ]
+                        }
+                    }),
+                    stderr: ''
+                };
+            });
+
+            const { error } = await captureConsoleLogs(() =>
+                retriever.retrieveDestinationMember({
+                    refreshToken: 'refresh-secret',
+                    instanceUrl: 'https://example.my.salesforce.com',
+                    metadataType: 'Flow',
+                    metadataName: 'Check_Amount-4'
+                })
+            );
+
+            assert.ok(error instanceof Error);
+            assert.strictEqual(error.code, FLOW_DESTINATION_VERSION_NOT_RETRIEVED);
+            assert.strictEqual(error.flowDefinitionDeveloperName, 'Check_Amount');
+            assert.strictEqual(error.sourceFlowVersionNumber, 4);
+            assert.ok(
+                error.message.includes(
+                    'the requested destination Flow version could not be retrieved (Check_Amount version 4)'
+                )
+            );
+            assert.ok(
+                error.message.includes(
+                    'snapshot capture was blocked because the org reported this Flow version as missing'
+                )
+            );
+            assert.ok(
+                error.message.includes(
+                    "Entity of type 'Flow' named 'Check_Amount-4' cannot be found"
+                )
+            );
+
+            await fs.promises.rm(workRoot, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
+        'unversioned Flow zero retrieve keeps generic zero-file error shape',
+        async () => {
+            const workRoot = fs.mkdtempSync(
+                path.join(os.tmpdir(), 'p0r4-retr-flow-unversioned-zero-')
+            );
+
+            const retriever = buildRetrieverHarness(workRoot, async (command) => {
+                if (String(command).includes('logout')) {
+                    return { stdout: '', stderr: '' };
+                }
+
+                return {
+                    stdout: JSON.stringify({
+                        status: 0,
+                        result: {
+                            files: [],
+                            failures: [
+                                {
+                                    message:
+                                        "Entity of type 'Flow' named 'My_Flow' cannot be found"
+                                }
+                            ]
+                        }
+                    }),
+                    stderr: ''
+                };
+            });
+
+            const { error } = await captureConsoleLogs(() =>
+                retriever.retrieveDestinationMember({
+                    refreshToken: 'refresh-secret',
+                    instanceUrl: 'https://example.my.salesforce.com',
+                    metadataType: 'Flow',
+                    metadataName: 'My_Flow'
+                })
+            );
+
+            assert.ok(error instanceof Error);
+            assert.strictEqual(error.code, undefined);
+            assert.ok(error.message.includes('retrieved file count = 0'));
+            assert.ok(!error.message.includes(FLOW_DESTINATION_VERSION_NOT_RETRIEVED));
+
+            await fs.promises.rm(workRoot, { recursive: true, force: true });
+        }
+    );
+
+    await runTest('buildZeroFilesError unit: version-qualified Flow cannot be found', () => {
+        const error = buildZeroFilesError('Flow', 'Check_Amount-4', {
+            cliStatus: 0,
+            cliFailureMessages: [
+                "Entity of type 'Flow' named 'Check_Amount-4' cannot be found"
+            ],
+            expectedSourcePaths: {
+                logical: {
+                    relativePath:
+                        'force-app/main/default/flows/Check_Amount-4.flow-meta.xml',
+                    exists: false
+                }
+            }
+        });
+
+        assert.strictEqual(error.code, FLOW_DESTINATION_VERSION_NOT_RETRIEVED);
+        assert.strictEqual(error.sourceFlowVersionNumber, 4);
     });
 
     await runTest('execAsync succeeds but zero files exist and reports diagnostic zero-file state', async () => {
