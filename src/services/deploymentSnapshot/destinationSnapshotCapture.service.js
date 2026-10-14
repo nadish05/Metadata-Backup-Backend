@@ -61,6 +61,10 @@ const {
 } = require('../deploymentOrgLock/deploymentOrgLock.errors');
 const { OPERATION_TYPE } = require('../deploymentOrgLock/deploymentOrgLock.types');
 const { logLockEvent } = require('../deploymentOrgLock/deploymentOrgLock.log');
+const {
+    FLOW_CAPTURE_VERSION_OUTCOME,
+    resolveVersionQualifiedFlowCaptureState
+} = require('../retrieval/flowVersionDiscovery.service');
 
 function fail(message, snapshot = null) {
     return {
@@ -101,6 +105,9 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
     const classifyExistingMember =
         dependencies.classifyExistingMemberChange ||
         classifyExistingMemberChange;
+    const resolveFlowCaptureVersionState =
+        dependencies.resolveVersionQualifiedFlowCaptureState ||
+        resolveVersionQualifiedFlowCaptureState;
     // P0-R7.15.10: DEPLOY capture for Application Org persistence uses temporary
     // Node storage (MEMORY by default). Rollback still requires durable Node
     // storage via isDurableSnapshotStorageReady() in restore paths.
@@ -228,7 +235,66 @@ function createDestinationSnapshotCaptureService(dependencies = {}) {
                 );
             }
 
-            if (changeClass === CHANGE_CLASS.NEW) {
+            let captureChangeClass = changeClass;
+
+            if (member.metadataType === 'Flow') {
+                const versionState = await resolveFlowCaptureVersionState({
+                    metadataName: member.metadataName,
+                    instanceUrl: resolvedInstanceUrl,
+                    accessToken
+                });
+
+                if (
+                    versionState.outcome ===
+                    FLOW_CAPTURE_VERSION_OUTCOME.TOOLING_FAILED
+                ) {
+                    return fail(
+                        buildUnknownReason(
+                            member.metadataType,
+                            member.metadataName,
+                            versionState.detail ||
+                                'Flow destination version discovery failed.'
+                        )
+                    );
+                }
+
+                if (
+                    versionState.outcome ===
+                    FLOW_CAPTURE_VERSION_OUTCOME.VERSION_PRESENT
+                ) {
+                    captureChangeClass = CHANGE_CLASS.MODIFIED;
+                    if (changeClass === CHANGE_CLASS.NEW) {
+                        return fail(
+                            buildUnknownReason(
+                                member.metadataType,
+                                member.metadataName,
+                                'Flow definition inventory disagrees with Tooling version presence.'
+                            )
+                        );
+                    }
+                } else if (
+                    versionState.outcome ===
+                    FLOW_CAPTURE_VERSION_OUTCOME.VERSION_ABSENT
+                ) {
+                    captureChangeClass = CHANGE_CLASS.NEW;
+                } else if (
+                    versionState.outcome ===
+                    FLOW_CAPTURE_VERSION_OUTCOME.DEFINITION_ABSENT
+                ) {
+                    captureChangeClass = CHANGE_CLASS.NEW;
+                    if (changeClass === CHANGE_CLASS.MODIFIED) {
+                        return fail(
+                            buildUnknownReason(
+                                member.metadataType,
+                                member.metadataName,
+                                'Flow definition inventory disagrees with Tooling absence.'
+                            )
+                        );
+                    }
+                }
+            }
+
+            if (captureChangeClass === CHANGE_CLASS.NEW) {
                 let expectedAfter;
 
                 try {

@@ -26,6 +26,14 @@ const {
     createDestinationSnapshotCaptureService
 } = require('./destinationSnapshotCapture.service');
 const {
+    FLOW_CAPTURE_VERSION_OUTCOME
+} = require('../retrieval/flowVersionDiscovery.service');
+const {
+    isDeleteRollbackEligibleMember,
+    computeRollbackEligible
+} = require('./snapshotRollbackEligibility.service');
+const { generateDestructiveChangesXml } = require('../packageXml.service');
+const {
     CANONICALIZATION_VERSION,
     canonicalizeForRollback
 } = require('./rollbackMetadataCanonicalizer.service');
@@ -140,7 +148,9 @@ function createHarness(overrides = {}) {
                     artifactBytes: bytes,
                     expectedAfterHash: hashBytes(bytes)
                 };
-            })
+            }),
+        resolveVersionQualifiedFlowCaptureState:
+            overrides.resolveVersionQualifiedFlowCaptureState
     });
 
     return {
@@ -1594,6 +1604,205 @@ const BASE_ARGS = {
                 members[0].destinationBeforeHash,
                 hashBytes(fieldBeforePacked)
             );
+        }
+    );
+
+    const FLOW_V4_PATH =
+        'force-app/main/default/flows/Check_Amount-4.flow-meta.xml';
+
+    const FLOW_VERSION_CAPTURE_ARGS = {
+        destinationOrgId: '00D000000000001',
+        sourceOrgId: '00D000000000002',
+        historyId: 'hist-flow-v4',
+        sourceBranch: 'feature',
+        destinationBranch: 'main',
+        refreshToken: 'refresh-secret',
+        instanceUrl: 'https://dest.example.com',
+        selectedMetadata: [
+            { metadataType: 'Flow', metadataName: 'Check_Amount-4' }
+        ],
+        generatedDeploymentPackage: {
+            metadata: [
+                {
+                    metadataType: 'Flow',
+                    metadataName: 'Check_Amount-4',
+                    filePath: FLOW_V4_PATH
+                }
+            ]
+        }
+    };
+
+    await runTest(
+        'version-qualified Flow capture retrieves when exact version exists on destination',
+        async () => {
+            const beforeBytes = packMemberFiles([
+                {
+                    relativePath: FLOW_V4_PATH,
+                    bytes: Buffer.from('<Flow version="4"/>', 'utf8')
+                }
+            ]);
+            const afterBytes = packMemberFiles([
+                {
+                    relativePath: FLOW_V4_PATH,
+                    bytes: Buffer.from('<Flow version="4-deploy"/>', 'utf8')
+                }
+            ]);
+            const harness = createHarness({
+                resolveVersionQualifiedFlowCaptureState: async () => ({
+                    outcome: FLOW_CAPTURE_VERSION_OUTCOME.VERSION_PRESENT,
+                    definitionDeveloperName: 'Check_Amount',
+                    requestedVersion: 4
+                }),
+                retrieveDestinationMember: async () => ({
+                    artifactBytes: beforeBytes,
+                    files: []
+                }),
+                collectExpectedAfterArtifact: async () => ({
+                    artifactBytes: afterBytes,
+                    expectedAfterHash: hashBytes(afterBytes),
+                    expectedAfterRepresentation:
+                        EXPECTED_AFTER_REPRESENTATION.RAW
+                })
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy(
+                FLOW_VERSION_CAPTURE_ARGS
+            );
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(harness.retrieveCalls.length, 1);
+            assert.strictEqual(
+                harness.retrieveCalls[0].metadataName,
+                'Check_Amount-4'
+            );
+            assert.strictEqual(members[0].changeClass, CHANGE_CLASS.MODIFIED);
+            assert.strictEqual(members[0].metadataName, 'Check_Amount-4');
+        }
+    );
+
+    await runTest(
+        'version-qualified Flow skips retrieve when version absent but definition exists',
+        async () => {
+            const afterBytes = packMemberFiles([
+                {
+                    relativePath: FLOW_V4_PATH,
+                    bytes: Buffer.from('<Flow version="4-deploy"/>', 'utf8')
+                }
+            ]);
+            const harness = createHarness({
+                resolveVersionQualifiedFlowCaptureState: async () => ({
+                    outcome: FLOW_CAPTURE_VERSION_OUTCOME.VERSION_ABSENT,
+                    definitionDeveloperName: 'Check_Amount',
+                    requestedVersion: 4
+                }),
+                collectExpectedAfterArtifact: async () => ({
+                    artifactBytes: afterBytes,
+                    expectedAfterHash: hashBytes(afterBytes),
+                    expectedAfterRepresentation:
+                        EXPECTED_AFTER_REPRESENTATION.RAW
+                })
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy(
+                FLOW_VERSION_CAPTURE_ARGS
+            );
+            const members = await harness.captureService.getMembers(
+                capture.snapshot.snapshotId
+            );
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(harness.retrieveCalls.length, 0);
+            assert.strictEqual(members[0].changeClass, CHANGE_CLASS.NEW);
+            assert.strictEqual(members[0].metadataName, 'Check_Amount-4');
+            assert.strictEqual(
+                members[0].captureStatus,
+                MEMBER_CAPTURE_STATUS.ABSENT_PROVEN
+            );
+            assert.strictEqual(isDeleteRollbackEligibleMember(members[0]), true);
+            assert.strictEqual(computeRollbackEligible(members), true);
+        }
+    );
+
+    await runTest(
+        'version-qualified Flow definition absent uses NEW capture without retrieve',
+        async () => {
+            const harness = createHarness({
+                buildDestinationInventory: async (args) =>
+                    inventoryFor(
+                        (args.items || []).map((item) => ({
+                            ...item,
+                            state: DESTINATION_STATE.MISSING
+                        }))
+                    ),
+                resolveVersionQualifiedFlowCaptureState: async () => ({
+                    outcome: FLOW_CAPTURE_VERSION_OUTCOME.DEFINITION_ABSENT,
+                    definitionDeveloperName: 'Check_Amount',
+                    requestedVersion: 4
+                }),
+                collectExpectedAfterArtifact: async () => {
+                    const afterBytes = packMemberFiles([
+                        {
+                            relativePath: FLOW_V4_PATH,
+                            bytes: Buffer.from('<Flow/>', 'utf8')
+                        }
+                    ]);
+                    return {
+                        artifactBytes: afterBytes,
+                        expectedAfterHash: hashBytes(afterBytes),
+                        expectedAfterRepresentation:
+                            EXPECTED_AFTER_REPRESENTATION.RAW
+                    };
+                }
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy(
+                FLOW_VERSION_CAPTURE_ARGS
+            );
+
+            assert.strictEqual(capture.ok, true);
+            assert.strictEqual(harness.retrieveCalls.length, 0);
+        }
+    );
+
+    await runTest(
+        'version-qualified Flow Tooling failure blocks capture',
+        async () => {
+            const harness = createHarness({
+                resolveVersionQualifiedFlowCaptureState: async () => ({
+                    outcome: FLOW_CAPTURE_VERSION_OUTCOME.TOOLING_FAILED,
+                    detail: 'tooling unavailable'
+                })
+            });
+
+            const capture = await harness.service.captureAndSealForDeploy(
+                FLOW_VERSION_CAPTURE_ARGS
+            );
+
+            assert.strictEqual(capture.ok, false);
+            assert.strictEqual(harness.retrieveCalls.length, 0);
+        }
+    );
+
+    await runTest(
+        'DELETE rollback manifest uses version-qualified Flow member name as-is',
+        () => {
+            const xml = generateDestructiveChangesXml(
+                {
+                    metadata: [
+                        {
+                            metadataType: 'Flow',
+                            metadataName: 'Check_Amount-4'
+                        }
+                    ]
+                },
+                '64.0'
+            );
+
+            assert.match(xml, /<members>Check_Amount-4<\/members>/);
+            assert.match(xml, /<name>Flow<\/name>/);
         }
     );
 })();

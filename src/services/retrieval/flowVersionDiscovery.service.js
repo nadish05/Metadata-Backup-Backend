@@ -3,6 +3,17 @@
 const axios = require('axios');
 
 const { getLatestApiVersion } = require('../destinationInventory/destinationInventoryBuilder.service');
+const {
+    parseVersionQualifiedFlowMember
+} = require('../flowMetadata/flowMemberIdentity.service');
+
+const FLOW_CAPTURE_VERSION_OUTCOME = {
+    NOT_VERSION_QUALIFIED: 'NOT_VERSION_QUALIFIED',
+    VERSION_PRESENT: 'VERSION_PRESENT',
+    VERSION_ABSENT: 'VERSION_ABSENT',
+    DEFINITION_ABSENT: 'DEFINITION_ABSENT',
+    TOOLING_FAILED: 'TOOLING_FAILED'
+};
 
 async function runToolingQuery(instanceUrl, accessToken, apiVersion, soql) {
     const encodedQuery = encodeURIComponent(soql);
@@ -106,7 +117,95 @@ async function discoverFlowVersions({
     };
 }
 
+function findFlowDefinition(definitions, developerName) {
+    return (definitions || []).find(
+        (row) => row.developerName === developerName
+    );
+}
+
+function findExactFlowVersion(versions, developerName, requestedVersion) {
+    return (versions || []).find((row) => {
+        if (row.flowDefinitionDeveloperName !== developerName) {
+            return false;
+        }
+
+        const candidate = Number(row.sourceFlowVersionNumber);
+
+        return Number.isFinite(candidate) && candidate === requestedVersion;
+    });
+}
+
+/**
+ * Tooling-backed version presence for pre-deploy snapshot capture only.
+ * Does not retrieve metadata.
+ */
+async function resolveVersionQualifiedFlowCaptureState({
+    metadataName,
+    instanceUrl,
+    accessToken,
+    discoverFlowVersionsFn = discoverFlowVersions
+} = {}) {
+    const parsed = parseVersionQualifiedFlowMember(metadataName);
+
+    if (!parsed?.isVersionQualified) {
+        return { outcome: FLOW_CAPTURE_VERSION_OUTCOME.NOT_VERSION_QUALIFIED };
+    }
+
+    const definitionDeveloperName = parsed.definitionDeveloperName;
+    const requestedVersion = parsed.sourceVersionNumber;
+
+    let discovery;
+
+    try {
+        discovery = await discoverFlowVersionsFn({
+            instanceUrl,
+            accessToken
+        });
+    } catch (error) {
+        return {
+            outcome: FLOW_CAPTURE_VERSION_OUTCOME.TOOLING_FAILED,
+            detail: error.message || 'Flow version discovery failed.'
+        };
+    }
+
+    const definition = findFlowDefinition(
+        discovery.definitions,
+        definitionDeveloperName
+    );
+    const exactVersion = findExactFlowVersion(
+        discovery.versions,
+        definitionDeveloperName,
+        requestedVersion
+    );
+
+    if (exactVersion) {
+        return {
+            outcome: FLOW_CAPTURE_VERSION_OUTCOME.VERSION_PRESENT,
+            definitionDeveloperName,
+            requestedVersion
+        };
+    }
+
+    if (definition) {
+        return {
+            outcome: FLOW_CAPTURE_VERSION_OUTCOME.VERSION_ABSENT,
+            definitionDeveloperName,
+            requestedVersion
+        };
+    }
+
+    return {
+        outcome: FLOW_CAPTURE_VERSION_OUTCOME.DEFINITION_ABSENT,
+        definitionDeveloperName,
+        requestedVersion
+    };
+}
+
 module.exports = {
+    FLOW_CAPTURE_VERSION_OUTCOME,
     discoverFlowVersions,
-    runToolingQuery
+    runToolingQuery,
+    resolveVersionQualifiedFlowCaptureState,
+    findFlowDefinition,
+    findExactFlowVersion
 };
