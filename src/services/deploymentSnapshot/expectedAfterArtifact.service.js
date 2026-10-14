@@ -24,6 +24,9 @@ const {
 const {
     buildExpectedMemberSourcePaths
 } = require('./destinationMetadataRetriever.service');
+const {
+    applyCanonicalFlowSnapshotPackPaths
+} = require('../flowMetadata/flowMemberIdentity.service');
 
 const CANONICAL_ELIGIBLE_TYPES = new Set(CANONICAL_EXPECTED_AFTER_TYPES);
 
@@ -230,7 +233,11 @@ function buildCanonicalExpectedAfterMetadata(member, artifactBytes) {
 
 async function collectExpectedAfterArtifact({ workspacePath, member } = {}) {
     const files = await collectWorkspaceMemberFiles(workspacePath, member);
-    const artifactBytes = packMemberFiles(files);
+    const snapshotPackFiles =
+        member?.metadataType === 'Flow'
+            ? applyCanonicalFlowSnapshotPackPaths(files, member.metadataName)
+            : files;
+    const artifactBytes = packMemberFiles(snapshotPackFiles);
     const representationMetadata = buildCanonicalExpectedAfterMetadata(
         member,
         artifactBytes

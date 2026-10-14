@@ -7,8 +7,11 @@ const {
     buildCanonicalFlowArtifactRelativePath,
     parseFlowArtifactBasename,
     enrichFlowMetadataItem,
-    getFlowMetadataUniquenessKey
+    getFlowMetadataUniquenessKey,
+    applyCanonicalFlowSnapshotPackPaths
 } = require('./flowMemberIdentity.service');
+const { packMemberFiles } = require('../deploymentSnapshot/destinationMemberArtifact.service');
+const { hashBytes } = require('../deploymentSnapshot/snapshotIntegrity.service');
 
 const {
     getMetadataUniquenessKey,
@@ -175,4 +178,76 @@ runTest('Flow uniqueness keys include version suffix', () => {
 
     assert.notStrictEqual(key1, key2);
     assert.strictEqual(key1, 'Flow:Get_Customer_Details-1');
+});
+
+runTest(
+    'applyCanonicalFlowSnapshotPackPaths aligns versioned and unversioned Flow pack hashes',
+    () => {
+        const xml = Buffer.from('<?xml version="1.0"?><Flow/>', 'utf8');
+        const versionedPath =
+            'force-app/main/default/flows/Check_Amount-4.flow-meta.xml';
+        const unversionedPath =
+            'force-app/main/default/flows/Check_Amount.flow-meta.xml';
+        const versionedHash = hashBytes(
+            packMemberFiles(
+                applyCanonicalFlowSnapshotPackPaths(
+                    [{ relativePath: versionedPath, bytes: xml }],
+                    'Check_Amount-4'
+                )
+            )
+        );
+        const unversionedHash = hashBytes(
+            packMemberFiles(
+                applyCanonicalFlowSnapshotPackPaths(
+                    [{ relativePath: unversionedPath, bytes: xml }],
+                    'Check_Amount-4'
+                )
+            )
+        );
+
+        assert.strictEqual(versionedHash, unversionedHash);
+    }
+);
+
+runTest('applyCanonicalFlowSnapshotPackPaths preserves different Flow XML hashes', () => {
+    const versionedPath =
+        'force-app/main/default/flows/Check_Amount-4.flow-meta.xml';
+    const baseHash = hashBytes(
+        packMemberFiles(
+            applyCanonicalFlowSnapshotPackPaths(
+                [
+                    {
+                        relativePath: versionedPath,
+                        bytes: Buffer.from('<Flow version="4"/>', 'utf8')
+                    }
+                ],
+                'Check_Amount-4'
+            )
+        )
+    );
+    const otherHash = hashBytes(
+        packMemberFiles(
+            applyCanonicalFlowSnapshotPackPaths(
+                [
+                    {
+                        relativePath: versionedPath,
+                        bytes: Buffer.from('<Flow version="5"/>', 'utf8')
+                    }
+                ],
+                'Check_Amount-4'
+            )
+        )
+    );
+
+    assert.notStrictEqual(baseHash, otherHash);
+});
+
+runTest('applyCanonicalFlowSnapshotPackPaths leaves unversioned Flow paths unchanged', () => {
+    const path = 'force-app/main/default/flows/My_Flow.flow-meta.xml';
+    const normalized = applyCanonicalFlowSnapshotPackPaths(
+        [{ relativePath: path, bytes: Buffer.from('<Flow/>', 'utf8') }],
+        'My_Flow'
+    );
+
+    assert.strictEqual(normalized[0].relativePath, path);
 });

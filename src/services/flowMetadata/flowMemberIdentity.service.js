@@ -141,6 +141,41 @@ function enrichFlowMetadataItem(item) {
     return enriched;
 }
 
+/**
+ * For version-qualified Flow members, normalize SNAPMEM1 pack paths to the
+ * canonical versioned relative path while preserving file bytes.
+ */
+function applyCanonicalFlowSnapshotPackPaths(files, metadataName) {
+    const parsed = parseVersionQualifiedFlowMember(metadataName);
+
+    if (!parsed?.isVersionQualified) {
+        return files;
+    }
+
+    const canonicalPath = buildCanonicalFlowArtifactRelativePath(metadataName);
+
+    if (!canonicalPath || !Array.isArray(files) || files.length !== 1) {
+        return files;
+    }
+
+    const file = files[0];
+    const relativePath = String(file.relativePath || '').replace(/\\/g, '/');
+
+    if (
+        !relativePath.includes('/flows/') ||
+        !relativePath.endsWith(FLOW_META_SUFFIX)
+    ) {
+        return files;
+    }
+
+    return [
+        {
+            ...file,
+            relativePath: canonicalPath
+        }
+    ];
+}
+
 function getFlowMetadataUniquenessKey(item) {
     if (!item || item.metadataType !== 'Flow') {
         return null;
@@ -163,5 +198,6 @@ module.exports = {
     buildCanonicalFlowArtifactRelativePath,
     parseFlowArtifactBasename,
     enrichFlowMetadataItem,
-    getFlowMetadataUniquenessKey
+    getFlowMetadataUniquenessKey,
+    applyCanonicalFlowSnapshotPackPaths
 };

@@ -19,6 +19,9 @@ const {
     unpackMemberFiles
 } = require('./destinationMemberArtifact.service');
 const { hashBytes } = require('./snapshotIntegrity.service');
+const {
+    applyCanonicalFlowSnapshotPackPaths
+} = require('../flowMetadata/flowMemberIdentity.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -1086,6 +1089,45 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
                         'Check_Amount-4'
                     ),
                 /did not return the logical file/
+            );
+        }
+    );
+
+    await runTest(
+        'version-qualified Flow destination and expected-after canonical packs share hash',
+        () => {
+            const xml = Buffer.from('<?xml version="1.0"?><Flow/>', 'utf8');
+            const versionedPath =
+                'force-app/main/default/flows/Check_Amount-4.flow-meta.xml';
+            const unversionedPath =
+                'force-app/main/default/flows/Check_Amount.flow-meta.xml';
+            const selected = selectLogicalMemberFiles(
+                [{ relativePath: unversionedPath, bytes: xml }],
+                'Flow',
+                'Check_Amount-4'
+            );
+            const destinationHash = hashBytes(
+                packMemberFiles(
+                    applyCanonicalFlowSnapshotPackPaths(
+                        selected,
+                        'Check_Amount-4'
+                    )
+                )
+            );
+            const expectedAfterHash = hashBytes(
+                packMemberFiles(
+                    applyCanonicalFlowSnapshotPackPaths(
+                        [{ relativePath: versionedPath, bytes: xml }],
+                        'Check_Amount-4'
+                    )
+                )
+            );
+
+            assert.strictEqual(destinationHash, expectedAfterHash);
+            assert.strictEqual(
+                applyCanonicalFlowSnapshotPackPaths(selected, 'Check_Amount-4')[0]
+                    .relativePath,
+                versionedPath
             );
         }
     );

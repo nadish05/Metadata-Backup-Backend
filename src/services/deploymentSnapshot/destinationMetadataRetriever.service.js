@@ -21,7 +21,8 @@ const { hashBytes } = require('./snapshotIntegrity.service');
 const {
     parseVersionQualifiedFlowMember,
     FLOW_META_SUFFIX,
-    FLOWS_DIR_PREFIX
+    FLOWS_DIR_PREFIX,
+    applyCanonicalFlowSnapshotPackPaths
 } = require('../flowMetadata/flowMemberIdentity.service');
 
 const mkdir = util.promisify(fs.mkdir);
@@ -1024,7 +1025,14 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                 metadataName
             );
 
-            const artifactBytes = packMemberFiles(logicalMemberFiles);
+            const snapshotPackFiles =
+                metadataType === 'Flow'
+                    ? applyCanonicalFlowSnapshotPackPaths(
+                          logicalMemberFiles,
+                          metadataName
+                      )
+                    : logicalMemberFiles;
+            const artifactBytes = packMemberFiles(snapshotPackFiles);
 
             if (artifactDiagnosticContext) {
                 logRollbackDestinationArtifactDiagnostic(

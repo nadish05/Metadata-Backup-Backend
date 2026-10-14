@@ -1061,4 +1061,63 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
             }
         }
     );
+
+    await runTest(
+        'buildExistenceQuery uses Flow definition DeveloperName for version-qualified members',
+        () => {
+            const soql = buildExistenceQuery('Flow', 'Check_Amount-4');
+
+            assert.ok(soql.includes("DeveloperName = 'Check_Amount'"));
+            assert.ok(!soql.includes("DeveloperName = 'Check_Amount-4'"));
+            assert.ok(soql.includes('FROM FlowDefinition'));
+        }
+    );
+
+    await runTest('buildExistenceQuery preserves unversioned Flow DeveloperName', () => {
+        const soql = buildExistenceQuery('Flow', 'My_Flow');
+
+        assert.strictEqual(
+            soql,
+            "SELECT Id FROM FlowDefinition WHERE DeveloperName = 'My_Flow' LIMIT 1"
+        );
+    });
+
+    await runTest('buildExistenceQuery leaves ApexClass existence unchanged', () => {
+        const soql = buildExistenceQuery('ApexClass', 'SessionController');
+
+        assert.ok(soql.includes("Name = 'SessionController'"));
+        assert.ok(soql.includes('FROM ApexClass'));
+    });
+
+    await runTest(
+        'Flow:Check_Amount-4 inventory EXISTS when FlowDefinition matches definition name',
+        async () => {
+            const stub = stubToolingQuery({ totalSize: 1, records: [{ Id: '0' }] });
+
+            try {
+                const result = await buildDestinationInventory({
+                    items: [
+                        {
+                            metadataType: 'Flow',
+                            metadataName: 'Check_Amount-4'
+                        }
+                    ],
+                    accessToken: 'token',
+                    instanceUrl: 'https://example.my.salesforce.com'
+                });
+
+                assert.strictEqual(
+                    result.inventory.get('Flow:Check_Amount-4').state,
+                    DESTINATION_STATE.EXISTS
+                );
+                assert.ok(
+                    decodeURIComponent(stub.requestedUrls[0]).includes(
+                        "DeveloperName = 'Check_Amount'"
+                    )
+                );
+            } finally {
+                stub.restore();
+            }
+        }
+    );
 })();

@@ -8,6 +8,10 @@
  * and does not decide Deploy/Skip or validation status.
  */
 
+const {
+    parseVersionQualifiedFlowMember
+} = require('../flowMetadata/flowMemberIdentity.service');
+
 function escapeSoql(value) {
     return String(value).replace(/'/g, "\\'");
 }
@@ -473,12 +477,19 @@ function buildExistenceQuery(type, name) {
                 'AND IsOwnedByProfile = false LIMIT 1'
             );
 
-        case 'Flow':
-            // Tooling FlowDefinition.DeveloperName = Flow API name.
+        case 'Flow': {
+            // Tooling FlowDefinition.DeveloperName = definition API name (not -N suffix).
+            const parsed = parseVersionQualifiedFlowMember(name);
+            const flowDeveloperName =
+                parsed?.isVersionQualified === true
+                    ? parsed.definitionDeveloperName
+                    : name;
+
             return (
                 'SELECT Id FROM FlowDefinition ' +
-                `WHERE DeveloperName = '${escapedName}' LIMIT 1`
+                `WHERE DeveloperName = '${escapeSoql(flowDeveloperName)}' LIMIT 1`
             );
+        }
 
         // EmailAlert / WorkflowAlert: no reliable SOQL existence query in this
         // catalog — callers receive UNKNOWN via unsupported query path.
