@@ -4,7 +4,9 @@ const assert = require('assert');
 
 const {
     FLOW_CAPTURE_VERSION_OUTCOME,
-    resolveVersionQualifiedFlowCaptureState
+    FLOW_POST_DELETE_VERIFICATION_OUTCOME,
+    resolveVersionQualifiedFlowCaptureState,
+    verifyVersionQualifiedFlowPostDeleteAbsence
 } = require('./flowVersionDiscovery.service');
 
 function runTest(name, fn) {
@@ -111,4 +113,89 @@ function runTest(name, fn) {
             FLOW_CAPTURE_VERSION_OUTCOME.TOOLING_FAILED
         );
     });
+
+    await runTest(
+        'post-delete verification passes when version absent but definition exists',
+        async () => {
+            const result = await verifyVersionQualifiedFlowPostDeleteAbsence({
+                metadataName: 'Check_Amount-4',
+                instanceUrl: 'https://example.com',
+                accessToken: 'token',
+                discoverFlowVersionsFn: async () => ({
+                    definitions: [{ developerName: 'Check_Amount' }],
+                    versions: [
+                        {
+                            flowDefinitionDeveloperName: 'Check_Amount',
+                            sourceFlowVersionNumber: 1
+                        }
+                    ]
+                })
+            });
+
+            assert.strictEqual(
+                result.outcome,
+                FLOW_POST_DELETE_VERIFICATION_OUTCOME.PASS
+            );
+        }
+    );
+
+    await runTest(
+        'post-delete verification fails when target version still present',
+        async () => {
+            const result = await verifyVersionQualifiedFlowPostDeleteAbsence({
+                metadataName: 'Check_Amount-4',
+                instanceUrl: 'https://example.com',
+                accessToken: 'token',
+                discoverFlowVersionsFn: async () => ({
+                    definitions: [{ developerName: 'Check_Amount' }],
+                    versions: [
+                        {
+                            flowDefinitionDeveloperName: 'Check_Amount',
+                            sourceFlowVersionNumber: 4
+                        }
+                    ]
+                })
+            });
+
+            assert.strictEqual(
+                result.outcome,
+                FLOW_POST_DELETE_VERIFICATION_OUTCOME.STILL_PRESENT
+            );
+        }
+    );
+
+    await runTest('post-delete verification fails closed on Tooling error', async () => {
+        const result = await verifyVersionQualifiedFlowPostDeleteAbsence({
+            metadataName: 'Check_Amount-4',
+            instanceUrl: 'https://example.com',
+            accessToken: 'token',
+            discoverFlowVersionsFn: async () => {
+                throw new Error('tooling unavailable');
+            }
+        });
+
+        assert.strictEqual(
+            result.outcome,
+            FLOW_POST_DELETE_VERIFICATION_OUTCOME.FAIL_CLOSED
+        );
+    });
+
+    await runTest(
+        'post-delete verification defers unversioned Flow to definition inventory',
+        async () => {
+            const result = await verifyVersionQualifiedFlowPostDeleteAbsence({
+                metadataName: 'My_Flow',
+                instanceUrl: 'https://example.com',
+                accessToken: 'token',
+                discoverFlowVersionsFn: async () => {
+                    throw new Error('should not be called');
+                }
+            });
+
+            assert.strictEqual(
+                result.outcome,
+                FLOW_POST_DELETE_VERIFICATION_OUTCOME.USE_DEFINITION_INVENTORY
+            );
+        }
+    );
 })();

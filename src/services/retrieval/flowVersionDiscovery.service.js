@@ -201,11 +201,70 @@ async function resolveVersionQualifiedFlowCaptureState({
     };
 }
 
+const FLOW_POST_DELETE_VERIFICATION_OUTCOME = {
+    PASS: 'PASS',
+    STILL_PRESENT: 'STILL_PRESENT',
+    FAIL_CLOSED: 'FAIL_CLOSED',
+    USE_DEFINITION_INVENTORY: 'USE_DEFINITION_INVENTORY'
+};
+
+/**
+ * After destructive rollback, confirm a version-qualified Flow member is absent
+ * on the destination without requiring FlowDefinition to be missing.
+ */
+async function verifyVersionQualifiedFlowPostDeleteAbsence({
+    metadataName,
+    instanceUrl,
+    accessToken,
+    discoverFlowVersionsFn = discoverFlowVersions
+} = {}) {
+    const parsed = parseVersionQualifiedFlowMember(metadataName);
+
+    if (!parsed?.isVersionQualified) {
+        return {
+            outcome: FLOW_POST_DELETE_VERIFICATION_OUTCOME.USE_DEFINITION_INVENTORY
+        };
+    }
+
+    const state = await resolveVersionQualifiedFlowCaptureState({
+        metadataName,
+        instanceUrl,
+        accessToken,
+        discoverFlowVersionsFn
+    });
+
+    if (state.outcome === FLOW_CAPTURE_VERSION_OUTCOME.TOOLING_FAILED) {
+        return {
+            outcome: FLOW_POST_DELETE_VERIFICATION_OUTCOME.FAIL_CLOSED,
+            detail:
+                state.detail ||
+                'Flow post-delete version verification failed (Tooling unavailable).'
+        };
+    }
+
+    if (state.outcome === FLOW_CAPTURE_VERSION_OUTCOME.VERSION_PRESENT) {
+        return { outcome: FLOW_POST_DELETE_VERIFICATION_OUTCOME.STILL_PRESENT };
+    }
+
+    if (
+        state.outcome === FLOW_CAPTURE_VERSION_OUTCOME.VERSION_ABSENT ||
+        state.outcome === FLOW_CAPTURE_VERSION_OUTCOME.DEFINITION_ABSENT
+    ) {
+        return { outcome: FLOW_POST_DELETE_VERIFICATION_OUTCOME.PASS };
+    }
+
+    return {
+        outcome: FLOW_POST_DELETE_VERIFICATION_OUTCOME.USE_DEFINITION_INVENTORY
+    };
+}
+
 module.exports = {
     FLOW_CAPTURE_VERSION_OUTCOME,
+    FLOW_POST_DELETE_VERIFICATION_OUTCOME,
     discoverFlowVersions,
     runToolingQuery,
     resolveVersionQualifiedFlowCaptureState,
+    verifyVersionQualifiedFlowPostDeleteAbsence,
     findFlowDefinition,
     findExactFlowVersion
 };

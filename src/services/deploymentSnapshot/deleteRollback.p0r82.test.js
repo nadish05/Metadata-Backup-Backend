@@ -501,6 +501,10 @@ function createDeleteRestoreHarness({
                 artifactBytes: Buffer.from('drifted-bytes'),
                 files: []
             }),
+            refreshAccessToken: async () => ({
+                accessToken: 'token',
+                instanceUrl: 'https://dest.example.com'
+            }),
             runDeploymentExecution: async () => {
                 executions += 1;
                 return { success: true, status: 'Succeeded' };
@@ -533,7 +537,11 @@ function createDeleteRestoreHarness({
                 }),
             resolveTrustedActor: () => createTestTrustedActor(),
             resolveVerifiedDestinationOrgId: async () => '00D000000000001',
-            retrieveDestinationMember: async () => ({ artifactBytes: null, files: [] })
+            retrieveDestinationMember: async () => ({ artifactBytes: null, files: [] }),
+            refreshAccessToken: async () => ({
+                accessToken: 'token',
+                instanceUrl: 'https://dest.example.com'
+            })
         });
         const result = await restore.runRollback({
             snapshotId: sealed.snapshotId,

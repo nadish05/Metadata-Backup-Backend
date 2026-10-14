@@ -115,6 +115,10 @@ const {
 } = require('./authorizedRollbackReconciliation.service');
 const { unpackMemberFiles } = require('./destinationMemberArtifact.service');
 const {
+    FLOW_POST_DELETE_VERIFICATION_OUTCOME,
+    verifyVersionQualifiedFlowPostDeleteAbsence
+} = require('../retrieval/flowVersionDiscovery.service');
+const {
     buildSemanticModelFromRecordTypeXml
 } = require('./recordTypeSemanticExpectedAfter.service');
 const {
@@ -395,6 +399,92 @@ function extractSalesforceDeploymentId(mappedResult) {
     );
 }
 
+async function evaluateDeleteRollbackMemberStillPresent({
+    member,
+    inventory,
+    inventoryStateFn,
+    accessToken,
+    instanceUrl,
+    verifyFlowPostDeleteAbsenceFn
+}) {
+    if (member.metadataType === 'Flow') {
+        const verification = await verifyFlowPostDeleteAbsenceFn({
+            metadataName: member.metadataName,
+            instanceUrl,
+            accessToken
+        });
+
+        if (
+            verification.outcome ===
+            FLOW_POST_DELETE_VERIFICATION_OUTCOME.PASS
+        ) {
+            return { stillPresent: false };
+        }
+
+        if (
+            verification.outcome ===
+            FLOW_POST_DELETE_VERIFICATION_OUTCOME.STILL_PRESENT
+        ) {
+            return { stillPresent: true };
+        }
+
+        if (
+            verification.outcome ===
+            FLOW_POST_DELETE_VERIFICATION_OUTCOME.FAIL_CLOSED
+        ) {
+            return {
+                stillPresent: false,
+                failClosed: true,
+                detail:
+                    verification.detail ||
+                    'Flow post-delete version verification could not confirm version absence.'
+            };
+        }
+    }
+
+    const state = inventoryStateFn(
+        inventory,
+        member.metadataType,
+        member.metadataName
+    );
+
+    return { stillPresent: state !== DESTINATION_STATE.MISSING };
+}
+
+async function collectStillPresentDeleteRollbackMembers(
+    members,
+    {
+        inventory,
+        accessToken,
+        instanceUrl,
+        inventoryStateFn,
+        verifyFlowPostDeleteAbsenceFn
+    }
+) {
+    const stillPresent = [];
+
+    for (const member of members) {
+        const evaluation = await evaluateDeleteRollbackMemberStillPresent({
+            member,
+            inventory,
+            inventoryStateFn,
+            accessToken,
+            instanceUrl,
+            verifyFlowPostDeleteAbsenceFn
+        });
+
+        if (evaluation.failClosed) {
+            throw new Error(evaluation.detail);
+        }
+
+        if (evaluation.stillPresent) {
+            stillPresent.push(member);
+        }
+    }
+
+    return stillPresent;
+}
+
 function createDestinationSnapshotRestoreService(dependencies = {}) {
     const isEnabled =
         dependencies.isSnapshotRollbackEnabled || isSnapshotRollbackEnabled;
@@ -429,6 +519,9 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const inventoryBuilder =
         dependencies.buildDestinationInventory || buildDestinationInventory;
     const inventoryState = dependencies.getState || getState;
+    const verifyFlowPostDeleteAbsenceFn =
+        dependencies.verifyVersionQualifiedFlowPostDeleteAbsence ||
+        verifyVersionQualifiedFlowPostDeleteAbsence;
     const refreshAccessTokenFn =
         dependencies.refreshAccessToken || refreshAccessToken;
     const getLatestApiVersionFn =
@@ -756,9 +849,10 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
         }
 
         let inventory;
+        let credentials;
 
         try {
-            const credentials = await resolvePostDeleteInventoryCredentials(args);
+            credentials = await resolvePostDeleteInventoryCredentials(args);
             const inventoryResult = await inventoryBuilder({
                 items: deleteMembers.map((member) => ({
                     metadataType: member.metadataType,
@@ -778,15 +872,28 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             };
         }
 
-        const stillPresent = deleteMembers.filter((member) => {
-            const state = inventoryState(
-                inventory,
-                member.metadataType,
-                member.metadataName
-            );
+        let stillPresent;
 
-            return state !== DESTINATION_STATE.MISSING;
-        });
+        try {
+            stillPresent = await collectStillPresentDeleteRollbackMembers(
+                deleteMembers,
+                {
+                    inventory,
+                    accessToken: credentials.accessToken,
+                    instanceUrl: credentials.instanceUrl,
+                    inventoryStateFn: inventoryState,
+                    verifyFlowPostDeleteAbsenceFn
+                }
+            );
+        } catch (error) {
+            return {
+                failed: true,
+                code: ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                message:
+                    error.message ||
+                    'Mixed rollback post-delete Flow version verification failed.'
+            };
+        }
 
         if (stillPresent.length) {
             return {
@@ -1706,9 +1813,10 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             if (classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED) {
                 if (executionRollbackMode === ROLLBACK_MODE.DELETE) {
                     let inventory;
+                    let credentials;
 
                     try {
-                        const credentials =
+                        credentials =
                             await resolvePostDeleteInventoryCredentials(args);
                         const inventoryResult = await inventoryBuilder({
                             items: automaticMembers.map((member) => ({
@@ -1751,15 +1859,51 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         return outcome;
                     }
 
-                    const stillPresent = automaticMembers.filter((member) => {
-                        const state = inventoryState(
-                            inventory,
-                            member.metadataType,
-                            member.metadataName
-                        );
+                    let stillPresent;
 
-                        return state !== DESTINATION_STATE.MISSING;
-                    });
+                    try {
+                        stillPresent =
+                            await collectStillPresentDeleteRollbackMembers(
+                                automaticMembers,
+                                {
+                                    inventory,
+                                    accessToken: credentials.accessToken,
+                                    instanceUrl: credentials.instanceUrl,
+                                    inventoryStateFn: inventoryState,
+                                    verifyFlowPostDeleteAbsenceFn
+                                }
+                            );
+                    } catch (error) {
+                        operation = await persistFailed(operation, {
+                            errorCode:
+                                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                            errorMessage:
+                                error.message ||
+                                'Delete rollback post-delete Flow version verification failed.'
+                        });
+                        outcome = withOperation(
+                            block(
+                                ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
+                                error.message ||
+                                    'Delete rollback post-delete Flow version verification failed.',
+                                {
+                                    snapshotId,
+                                    drift,
+                                    checkOnlyDeployment,
+                                    deploymentExecution,
+                                    generatedWorkspace
+                                }
+                            ),
+                            operation
+                        );
+                        outcome.historyId = await recordHistory(
+                            args,
+                            snapshot,
+                            outcome,
+                            operation
+                        );
+                        return outcome;
+                    }
 
                     if (stillPresent.length) {
                         operation = await persistFailed(operation, {
