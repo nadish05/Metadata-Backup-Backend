@@ -98,6 +98,7 @@ async function discoverFlowVersions({
             flowDefinitionDeveloperName: developerName,
             sourceFlowVersionNumber: versionNumber,
             sourceFlowVersionId: flowVersionId,
+            definitionLatestVersionId: definition.latestVersionId || null,
             flowVersionStatus: row.Status || null,
             flowIsActiveVersion:
                 definition.activeVersionId != null &&
@@ -125,6 +126,18 @@ function findFlowDefinition(definitions, developerName) {
 
 function findExactFlowVersion(versions, developerName, requestedVersion) {
     return (versions || []).find((row) => {
+        if (row.flowDefinitionDeveloperName !== developerName) {
+            return false;
+        }
+
+        const candidate = Number(row.sourceFlowVersionNumber);
+
+        return Number.isFinite(candidate) && candidate === requestedVersion;
+    });
+}
+
+function countExactFlowVersionRows(versions, developerName, requestedVersion) {
+    return (versions || []).filter((row) => {
         if (row.flowDefinitionDeveloperName !== developerName) {
             return false;
         }
@@ -266,5 +279,6 @@ module.exports = {
     resolveVersionQualifiedFlowCaptureState,
     verifyVersionQualifiedFlowPostDeleteAbsence,
     findFlowDefinition,
-    findExactFlowVersion
+    findExactFlowVersion,
+    countExactFlowVersionRows
 };

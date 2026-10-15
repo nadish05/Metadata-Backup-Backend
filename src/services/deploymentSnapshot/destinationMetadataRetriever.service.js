@@ -32,6 +32,11 @@ const {
 const {
     retrieveSingleFlowVersion
 } = require('../retrieval/flowVersionRetrieval.service');
+const {
+    ACCEPTABLE_EXACT_VERSION_RECOVERY_CORRELATIONS,
+    TOOLING_BOUND_UNVERSIONED_LATEST,
+    attemptToolingBoundUnversionedLatestRecovery
+} = require('./flowToolingBoundUnversionedRecovery.service');
 
 const mkdir = util.promisify(fs.mkdir);
 const readdir = util.promisify(fs.readdir);
@@ -863,6 +868,9 @@ function buildExactVersionRecoveryDiagnostic({
         retrievedArtifactPath: retrieved?.retrievedArtifactPath || null,
         retrievedArtifactCorrelation:
             retrieved?.retrievedArtifactCorrelation || null,
+        toolingBoundUnversionedLatest:
+            retrieved?.retrievedArtifactCorrelation ===
+            TOOLING_BOUND_UNVERSIONED_LATEST,
         recoveryOutcome: recoveryOutcome || null
     };
 }
@@ -979,29 +987,61 @@ async function retrieveExactVersionQualifiedFlowArtifact({
             execAsync,
             requireVersionedFilenameCorrelation: true
         });
-    } catch (error) {
+    } catch (strictRetrieveError) {
+        const workspaceFiles = await collectProjectFiles(workspacePath);
+        const toolingBound = await attemptToolingBoundUnversionedLatestRecovery({
+            workspacePath,
+            metadataName,
+            parsed,
+            discovery,
+            exactVersion,
+            retrievedFiles: workspaceFiles
+        });
+
+        if (!toolingBound.ok) {
+            logExactVersionRecoveryDiagnostic(
+                buildExactVersionRecoveryDiagnostic({
+                    metadataName,
+                    parsed,
+                    exactVersion,
+                    retrieved: {
+                        retrievedArtifactPath:
+                            strictRetrieveError.retrievedArtifactPath || null,
+                        retrievedArtifactCorrelation:
+                            strictRetrieveError.retrievedArtifactCorrelation ||
+                            null
+                    },
+                    recoveryOutcome: 'FAILED_RETRIEVE'
+                })
+            );
+            throw buildFlowExactVersionArtifactError(
+                metadataName,
+                parsed,
+                'version-aware Flow retrieve did not produce an exact version artifact',
+                [
+                    strictRetrieveError.message || String(strictRetrieveError),
+                    toolingBound.reason || 'TOOLING_BOUND_RECOVERY_REJECTED'
+                ].join(' — ')
+            );
+        }
+
+        retrieved = toolingBound.retrieved;
         logExactVersionRecoveryDiagnostic(
             buildExactVersionRecoveryDiagnostic({
                 metadataName,
                 parsed,
                 exactVersion,
-                retrieved: {
-                    retrievedArtifactPath: error.retrievedArtifactPath || null,
-                    retrievedArtifactCorrelation:
-                        error.retrievedArtifactCorrelation || null
-                },
-                recoveryOutcome: 'FAILED_RETRIEVE'
+                retrieved,
+                recoveryOutcome: 'TOOLING_BOUND_UNVERSIONED_LATEST_ACCEPTED'
             })
-        );
-        throw buildFlowExactVersionArtifactError(
-            metadataName,
-            parsed,
-            'version-aware Flow retrieve did not produce an exact version artifact',
-            error.message || String(error)
         );
     }
 
-    if (retrieved.retrievedArtifactCorrelation !== 'versioned_filename') {
+    if (
+        !ACCEPTABLE_EXACT_VERSION_RECOVERY_CORRELATIONS.has(
+            retrieved.retrievedArtifactCorrelation
+        )
+    ) {
         logExactVersionRecoveryDiagnostic(
             buildExactVersionRecoveryDiagnostic({
                 metadataName,
@@ -1014,7 +1054,7 @@ async function retrieveExactVersionQualifiedFlowArtifact({
         throw buildFlowExactVersionArtifactError(
             metadataName,
             parsed,
-            'unversioned Flow filename correlation cannot establish exact version identity for rollback drift verification',
+            'Flow artifact correlation cannot establish exact version identity for rollback drift verification',
             `correlation=${retrieved.retrievedArtifactCorrelation || 'unknown'}`
         );
     }
@@ -1488,6 +1528,7 @@ module.exports = {
     buildExpectedMemberSourcePaths,
     selectLogicalMemberFiles,
     retrieveExactVersionQualifiedFlowArtifact,
+    collectProjectFiles,
     buildExactVersionRecoveryDiagnostic,
     logExactVersionRecoveryDiagnostic,
     summarizeRetrieveCliOutput,

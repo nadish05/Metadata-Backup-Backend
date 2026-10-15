@@ -105,15 +105,29 @@ function buildFlowRetrieverHarness(workRoot, options = {}) {
                         flowDefinitionDeveloperName: 'Check_Amount',
                         sourceFlowVersionNumber: 4,
                         sourceFlowVersionId: '301NS00003Eov6NYAR',
-                        flowIsLatestVersion: false,
-                        flowIsActiveVersion: false
+                        definitionLatestVersionId: '301NS00003Eov6NYAR',
+                        flowIsLatestVersion: true,
+                        flowIsActiveVersion: false,
+                        flowVersionStatus: 'Draft'
                     }
                 ],
-                definitions: [{ developerName: 'Check_Amount' }]
+                definitions: [
+                    {
+                        developerName: 'Check_Amount',
+                        latestVersionId: '301NS00003Eov6NYAR',
+                        latestVersionNumber: 4
+                    }
+                ]
             })),
         retrieveSingleFlowVersion:
             options.retrieveSingleFlowVersion ||
-            (async ({ projectPath }) => {
+            (options.strictVersionedRetrieveFails
+                ? async () => {
+                      throw new Error(
+                          'Retrieve for Flow:Check_Amount-4 did not report a version-qualified filename for strict version identity (correlation=unversioned_filename).'
+                      );
+                  }
+                : async ({ projectPath }) => {
                 const absolute = path.join(projectPath, ...versionedPath.split('/'));
                 await fs.promises.mkdir(path.dirname(absolute), {
                     recursive: true
@@ -275,7 +289,9 @@ function buildFlowRetrieverHarness(workRoot, options = {}) {
                 'utf8'
             );
             const retriever = buildFlowRetrieverHarness(workRoot, {
-                versionXml
+                versionXml,
+                unversionedXml: versionXml,
+                strictVersionedRetrieveFails: true
             });
 
             const result = await retriever.retrieveDestinationMember({
@@ -288,6 +304,11 @@ function buildFlowRetrieverHarness(workRoot, options = {}) {
 
             const expectedAfterHash = hashBytes(packFlowV4(versionXml));
             assert.strictEqual(hashBytes(result.artifactBytes), expectedAfterHash);
+            assert.strictEqual(result.flowExactVersionArtifactVerified, true);
+            assert.strictEqual(
+                result.exactVersionRecovery?.retrievedArtifactCorrelation,
+                'tooling_bound_unversioned_latest'
+            );
             await fs.promises.rm(workRoot, { recursive: true, force: true });
         }
     );
