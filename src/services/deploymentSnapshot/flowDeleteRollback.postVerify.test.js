@@ -40,9 +40,13 @@ const {
 const {
     FLOW_POST_DELETE_VERIFICATION_OUTCOME
 } = require('../retrieval/flowVersionDiscovery.service');
+const {
+    applyCanonicalFlowSnapshotPackPaths
+} = require('../flowMetadata/flowMemberIdentity.service');
 
 const FLOW_V4_PATH =
     'force-app/main/default/flows/Check_Amount-4.flow-meta.xml';
+const FLOW_METADATA_NAME = 'Check_Amount-4';
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -95,7 +99,9 @@ function buildFlowDeleteRestoreService({
     retrieveBytes,
     inventoryState = DESTINATION_STATE.EXISTS,
     verifyFlowPostDeleteAbsence,
-    discoverFlowVersionsForPostDeleteVerification
+    discoverFlowVersionsForPostDeleteVerification,
+    discoverFlowVersions,
+    retrieveExtras = {}
 }) {
     const operationStore = createMemoryRollbackOperationStore();
 
@@ -118,7 +124,9 @@ function buildFlowDeleteRestoreService({
         resolveVerifiedDestinationOrgId: async () => '00D000000000001',
         retrieveDestinationMember: async () => ({
             artifactBytes: retrieveBytes,
-            files: []
+            files: [],
+            flowExactVersionArtifactVerified: true,
+            ...retrieveExtras
         }),
         runCheckOnlyDeployment: async () => ({
             executed: true,
@@ -152,6 +160,10 @@ function buildFlowDeleteRestoreService({
     if (discoverFlowVersionsForPostDeleteVerification) {
         serviceOptions.discoverFlowVersionsForPostDeleteVerification =
             discoverFlowVersionsForPostDeleteVerification;
+    }
+
+    if (discoverFlowVersions) {
+        serviceOptions.discoverFlowVersions = discoverFlowVersions;
     }
 
     return {
@@ -223,7 +235,93 @@ async function sealApexDeleteSnapshot() {
     return { capture, sealed, afterBytes };
 }
 
+function packStatusFlowXml(status) {
+    const bytes = Buffer.from(
+        `<?xml version="1.0" encoding="UTF-8"?>\n` +
+            `<Flow xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+            `    <apiVersion>61.0</apiVersion>\n` +
+            `    <label>Check Amount</label>\n` +
+            `    <processType>AutoLaunchedFlow</processType>\n` +
+            `    <status>${status}</status>\n` +
+            `</Flow>\n`,
+        'utf8'
+    );
+
+    return packMemberFiles(
+        applyCanonicalFlowSnapshotPackPaths(
+            [{ relativePath: FLOW_V4_PATH, bytes }],
+            FLOW_METADATA_NAME
+        )
+    );
+}
+
+async function sealFlowV4DeleteSnapshotWithExpectedBytes(afterBytes) {
+    const capture = createSnapshotCaptureService({
+        metadataStore: createMemorySnapshotMetadataStore(),
+        blobStore: createMemorySnapshotBlobStore()
+    });
+    const ready = await capture.captureSnapshot({
+        deploymentContext: {
+            destinationOrgId: '00D000000000001',
+            sourceOrgId: '00D000000000002'
+        },
+        members: [
+            {
+                metadataType: 'Flow',
+                metadataName: FLOW_METADATA_NAME,
+                filePath: FLOW_V4_PATH,
+                changeClass: CHANGE_CLASS.NEW,
+                expectedAfterHash: hashBytes(afterBytes)
+            }
+        ]
+    });
+    const sealed = await capture.sealSnapshot(ready.snapshotId);
+
+    return { capture, sealed, afterBytes };
+}
+
 (async () => {
+    await runTest(
+        'J. status-only RAW drift allows DELETE rollback and post-delete still runs',
+        async () => {
+            const obsoletePack = packStatusFlowXml('Obsolete');
+            const draftPack = packStatusFlowXml('Draft');
+            assert.notStrictEqual(hashBytes(obsoletePack), hashBytes(draftPack));
+
+            const { capture, sealed } =
+                await sealFlowV4DeleteSnapshotWithExpectedBytes(obsoletePack);
+            const restore = createFlowDeleteHarness({
+                capture,
+                retrieveBytes: draftPack,
+                discoverFlowVersions: async () => ({
+                    apiVersion: '61.0',
+                    versions: [
+                        {
+                            flowDefinitionDeveloperName: 'Check_Amount',
+                            sourceFlowVersionNumber: 4,
+                            sourceFlowVersionId: '301FLOWV4',
+                            flowVersionStatus: 'Draft',
+                            flowIsLatestVersion: true,
+                            flowIsActiveVersion: false
+                        }
+                    ],
+                    definitions: [{ developerName: 'Check_Amount' }]
+                }),
+                verifyFlowPostDeleteAbsence: async () => ({
+                    outcome: FLOW_POST_DELETE_VERIFICATION_OUTCOME.PASS
+                })
+            });
+            const result = await restore.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com'
+            });
+
+            assert.strictEqual(result.blocked, false);
+            assert.strictEqual(result.operationStatus, 'SUCCEEDED');
+        }
+    );
+
     await runTest(
         'version-qualified Flow passes post-delete when target version absent but definition inventory EXISTS',
         async () => {

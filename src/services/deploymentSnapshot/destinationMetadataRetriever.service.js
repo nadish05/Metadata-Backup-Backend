@@ -1384,6 +1384,7 @@ function createDestinationMetadataRetriever(dependencies = {}) {
             let logicalMemberFiles;
             let artifactBytes;
             let exactVersionRecovery = null;
+            let flowExactVersionArtifactVerified = false;
 
             try {
                 logicalMemberFiles = selectLogicalMemberFiles(
@@ -1401,6 +1402,15 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                           )
                         : logicalMemberFiles;
                 artifactBytes = packMemberFiles(snapshotPackFiles);
+
+                if (
+                    metadataType === 'Flow' &&
+                    requireExactVersionQualifiedFlowArtifact === true &&
+                    parseVersionQualifiedFlowMember(metadataName)
+                        ?.isVersionQualified === true
+                ) {
+                    flowExactVersionArtifactVerified = true;
+                }
             } catch (selectionError) {
                 if (
                     metadataType === 'Flow' &&
@@ -1422,6 +1432,8 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                     exactVersionRecovery =
                         recoveryResult.exactVersionRecovery || null;
                     logicalMemberFiles = [];
+                    flowExactVersionArtifactVerified =
+                        exactVersionRecovery?.recoveryOutcome === 'SUCCEEDED';
                 } else {
                     throw selectionError;
                 }
@@ -1448,7 +1460,9 @@ function createDestinationMetadataRetriever(dependencies = {}) {
 
             return {
                 files: retrievedFiles,
-                artifactBytes
+                artifactBytes,
+                exactVersionRecovery,
+                flowExactVersionArtifactVerified
             };
         } finally {
             await logoutAlias(alias, execAsync);

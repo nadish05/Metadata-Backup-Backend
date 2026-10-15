@@ -71,6 +71,11 @@ const {
     parseVersionQualifiedFlowMember
 } = require('../flowMetadata/flowMemberIdentity.service');
 const {
+    evaluateFlowDeleteRollbackStatusParity,
+    FLOW_DELETE_STATUS_ONLY_PARITY_V1
+} = require('./flowDeleteRollbackStatusParity.service');
+const { discoverFlowVersions } = require('../retrieval/flowVersionDiscovery.service');
+const {
     resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap,
     logRollbackRetrieveApiVersionDiagnostic
 } = require('./rollbackDestinationRetrieveApiVersion.service');
@@ -271,6 +276,12 @@ function logRollbackDriftCheck({
             matchesExpectedAfter:
                 comparison.classification ===
                 DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
+            rawHashMatched:
+                comparison.classification ===
+                    DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER &&
+                comparison.flowDeleteRollbackStatusParity?.applied !== true,
+            flowDeleteRollbackStatusParity:
+                comparison.flowDeleteRollbackStatusParity || null,
             rollbackMode
         })
     );
@@ -524,6 +535,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const inventoryState = dependencies.getState || getState;
     const discoverFlowVersionsForPostDeleteVerification =
         dependencies.discoverFlowVersionsForPostDeleteVerification || null;
+    const discoverFlowVersionsForDrift =
+        dependencies.discoverFlowVersions || discoverFlowVersions;
     const verifyFlowPostDeleteAbsenceFn =
         dependencies.verifyVersionQualifiedFlowPostDeleteAbsence ||
         (discoverFlowVersionsForPostDeleteVerification
@@ -765,7 +778,63 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
         }
 
-        return compareMemberExpectedAfterDrift(comparisonInput);
+        const comparison = compareMemberExpectedAfterDrift(comparisonInput);
+
+        if (
+            !isDeleteRollback ||
+            member.metadataType !== 'Flow' ||
+            comparison.classification ===
+                DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER
+        ) {
+            return comparison;
+        }
+
+        const parsedFlow = parseVersionQualifiedFlowMember(member.metadataName);
+
+        if (!parsedFlow?.isVersionQualified) {
+            return comparison;
+        }
+
+        const statusParity = await evaluateFlowDeleteRollbackStatusParity({
+            metadataName: member.metadataName,
+            expectedAfterHash: member.expectedAfterHash,
+            currentDestinationHash,
+            destinationArtifactBytes: retrieved.artifactBytes,
+            retrieved,
+            accessToken: credentials?.accessToken || null,
+            instanceUrl: credentials?.instanceUrl || null,
+            discoverFlowVersionsFn: discoverFlowVersionsForDrift
+        });
+
+        if (!statusParity.qualified) {
+            return {
+                ...comparison,
+                rawHashMatched: false,
+                flowDeleteRollbackStatusParity: {
+                    applied: false,
+                    reason: statusParity.reason || 'NOT_QUALIFIED',
+                    detail: statusParity.detail || null
+                }
+            };
+        }
+
+        return {
+            classification: DRIFT_CLASSIFICATION.MATCHES_EXPECTED_AFTER,
+            expectedAfterAvailable: comparison.expectedAfterAvailable === true,
+            comparisonMode: FLOW_DELETE_STATUS_ONLY_PARITY_V1,
+            failClosed: false,
+            rawHashMatched: false,
+            rawDestinationHash: currentDestinationHash,
+            sealedExpectedAfterHash: member.expectedAfterHash,
+            flowDeleteRollbackStatusParity: {
+                applied: true,
+                destinationStatus: statusParity.destinationStatus,
+                qualifyingStatus: statusParity.qualifyingStatus,
+                toolingFlowVersionId: statusParity.toolingFlowVersionId,
+                toolingFlowVersionStatus: statusParity.toolingFlowVersionStatus,
+                toolingFlowVersionNumber: statusParity.toolingFlowVersionNumber
+            }
+        };
     }
 
     function buildExecutionTerminalPatch(
