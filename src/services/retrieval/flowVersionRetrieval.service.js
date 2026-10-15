@@ -122,7 +122,8 @@ function resolveRetrievedFlowPath({
     retrievedFiles,
     developerName,
     versionNumber,
-    flowIsLatestVersion
+    flowIsLatestVersion,
+    disallowUnversionedFilenameCorrelation = false
 }) {
     const versionedBasename = expectedVersionedBasename(
         developerName,
@@ -153,7 +154,10 @@ function resolveRetrievedFlowPath({
         };
     }
 
-    if (flowIsLatestVersion === true) {
+    if (
+        flowIsLatestVersion === true &&
+        disallowUnversionedFilenameCorrelation !== true
+    ) {
         const unversionedPath = paths.find(
             (relativePath) =>
                 basenameFromRelativePath(relativePath) === unversionedBasename
@@ -253,7 +257,8 @@ async function retrieveSingleFlowVersion({
     projectPath,
     alias,
     versionDescriptor,
-    execAsync
+    execAsync,
+    requireVersionedFilenameCorrelation = false
 }) {
     const {
         flowDefinitionDeveloperName,
@@ -301,19 +306,37 @@ async function retrieveSingleFlowVersion({
         retrievedFiles: parsed.files,
         developerName: flowDefinitionDeveloperName,
         versionNumber: sourceFlowVersionNumber,
-        flowIsLatestVersion: versionDescriptor.flowIsLatestVersion === true
+        flowIsLatestVersion: versionDescriptor.flowIsLatestVersion === true,
+        disallowUnversionedFilenameCorrelation:
+            requireVersionedFilenameCorrelation === true
     });
 
     if (!resolved) {
         const failure = new Error(
             `Retrieve for ${member} did not report an acceptable flow file. ` +
                 'Expected a version-qualified filename' +
-                (versionDescriptor.flowIsLatestVersion
+                (versionDescriptor.flowIsLatestVersion &&
+                requireVersionedFilenameCorrelation !== true
                     ? ' or unversioned filename for the latest version.'
                     : '.')
         );
         failure.member = member;
         failure.versionDescriptor = versionDescriptor;
+        throw failure;
+    }
+
+    if (
+        requireVersionedFilenameCorrelation === true &&
+        resolved.correlation !== 'versioned_filename'
+    ) {
+        const failure = new Error(
+            `Retrieve for ${member} did not report a version-qualified filename ` +
+                `for strict version identity (correlation=${resolved.correlation}).`
+        );
+        failure.member = member;
+        failure.versionDescriptor = versionDescriptor;
+        failure.retrievedArtifactCorrelation = resolved.correlation;
+        failure.retrievedArtifactPath = resolved.relativePath;
         throw failure;
     }
 

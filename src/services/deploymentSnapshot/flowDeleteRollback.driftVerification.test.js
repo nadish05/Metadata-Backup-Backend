@@ -21,6 +21,10 @@ const {
     compareNewMemberForDeleteRollback,
     DRIFT_CLASSIFICATION
 } = require('./snapshotDriftComparison.service');
+const {
+    buildRetrieveSuccessJson
+} = require('../retrieval/flowVersionRetrieval.service');
+
 function runTest(name, fn) {
     return Promise.resolve()
         .then(fn)
@@ -100,6 +104,7 @@ function buildFlowRetrieverHarness(workRoot, options = {}) {
                     {
                         flowDefinitionDeveloperName: 'Check_Amount',
                         sourceFlowVersionNumber: 4,
+                        sourceFlowVersionId: '301NS00003Eov6NYAR',
                         flowIsLatestVersion: false,
                         flowIsActiveVersion: false
                     }
@@ -116,6 +121,8 @@ function buildFlowRetrieverHarness(workRoot, options = {}) {
                 await fs.promises.writeFile(absolute, versionXml);
                 return {
                     workspaceArtifactPath: versionedPath,
+                    retrievedArtifactPath: versionedPath,
+                    retrievedArtifactCorrelation: 'versioned_filename',
                     artifactSha256: hashBytes(versionXml)
                 };
             }),
@@ -156,6 +163,104 @@ function buildFlowRetrieverHarness(workRoot, options = {}) {
                     ),
                 /did not return the logical file/
             );
+        }
+    );
+
+    await runTest(
+        '1. v1 active v4 latest draft with only unversioned CLI file fails closed',
+        async () => {
+            const workRoot = fs.mkdtempSync(
+                path.join(os.tmpdir(), 'flow-drift-unversioned-latest-')
+            );
+            const unversionedPath =
+                'force-app/main/default/flows/Check_Amount.flow-meta.xml';
+            const unversionedXml = Buffer.from(
+                '<?xml version="1.0"?><Flow version="1-active"/>',
+                'utf8'
+            );
+            const retriever = createDestinationMetadataRetriever({
+                tmpdir: () => workRoot,
+                ensureSfdxProject: async (workspacePath) => {
+                    await fs.promises.writeFile(
+                        path.join(workspacePath, 'sfdx-project.json'),
+                        '{}'
+                    );
+                    return { success: true, sourceApiVersion: '61.0' };
+                },
+                refreshAccessToken: async () => ({
+                    accessToken: 'access-token',
+                    instanceUrl: 'https://example.my.salesforce.com'
+                }),
+                loginSfOrg: async () => {},
+                discoverFlowVersions: async () => ({
+                    apiVersion: '61.0',
+                    versions: [
+                        {
+                            flowDefinitionDeveloperName: 'Check_Amount',
+                            sourceFlowVersionNumber: 4,
+                            sourceFlowVersionId: '301NS00003Eov6NYAR',
+                            flowIsLatestVersion: true,
+                            flowIsActiveVersion: false
+                        }
+                    ],
+                    definitions: [{ developerName: 'Check_Amount' }]
+                }),
+                execAsync: async (command) => {
+                    if (String(command).includes('logout')) {
+                        return { stdout: '', stderr: '' };
+                    }
+
+                    const cmd = String(command);
+
+                    if (cmd.includes('Flow:Check_Amount-4')) {
+                        await writeMemberFile(
+                            workRoot,
+                            unversionedPath,
+                            unversionedXml
+                        );
+                        return {
+                            stdout: buildRetrieveSuccessJson(unversionedPath),
+                            stderr: ''
+                        };
+                    }
+
+                    await writeMemberFile(
+                        workRoot,
+                        unversionedPath,
+                        unversionedXml
+                    );
+                    return {
+                        stdout: JSON.stringify({
+                            status: 0,
+                            result: { files: [] }
+                        }),
+                        stderr: ''
+                    };
+                }
+            });
+
+            await assert.rejects(
+                () =>
+                    retriever.retrieveDestinationMember({
+                        refreshToken: 'refresh',
+                        instanceUrl: 'https://example.my.salesforce.com',
+                        metadataType: 'Flow',
+                        metadataName: 'Check_Amount-4',
+                        requireExactVersionQualifiedFlowArtifact: true
+                    }),
+                (error) => {
+                    assert.strictEqual(
+                        error.code,
+                        FLOW_DESTINATION_VERSION_NOT_RETRIEVED
+                    );
+                    assert.match(
+                        error.message,
+                        /exact version identity|version-qualified filename|exact version artifact/i
+                    );
+                    return true;
+                }
+            );
+            await fs.promises.rm(workRoot, { recursive: true, force: true });
         }
     );
 

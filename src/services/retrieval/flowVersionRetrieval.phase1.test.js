@@ -396,6 +396,45 @@ function flowsDir(root) {
     );
 
     await runTest(
+        'retrieveSingleFlowVersion strict mode rejects unversioned latest correlation',
+        async () => {
+            const root = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'flow-version-strict-')
+            );
+            const flows = flowsDir(root);
+            const cliRelative =
+                'force-app/main/default/flows/Active_Customer.flow-meta.xml';
+
+            await mkdir(flows, { recursive: true });
+            await writeFile(
+                path.join(flows, 'Active_Customer.flow-meta.xml'),
+                '<Flow>version-3</Flow>',
+                'utf8'
+            );
+
+            await assert.rejects(
+                () =>
+                    retrieveSingleFlowVersion({
+                        projectPath: root,
+                        alias: 'temporg',
+                        versionDescriptor: versionDescriptor(
+                            'Active_Customer',
+                            3,
+                            'id-3',
+                            { flowIsLatestVersion: true }
+                        ),
+                        execAsync: async () => ({
+                            stdout: buildRetrieveSuccessJson(cliRelative)
+                        }),
+                        requireVersionedFilenameCorrelation: true
+                    }),
+                /version-qualified filename/
+            );
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
         'retrieveSingleFlowVersion fails when CLI does not report an acceptable file',
         async () => {
             const root = await fs.promises.mkdtemp(

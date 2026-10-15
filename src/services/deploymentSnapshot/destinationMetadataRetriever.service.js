@@ -702,7 +702,8 @@ function buildRollbackDestinationArtifactDiagnostic({
     artifactBytes,
     artifactDiagnosticContext,
     requestedSourceApiVersion,
-    effectiveSourceApiVersion
+    effectiveSourceApiVersion,
+    exactVersionRecovery = null
 } = {}) {
     const context = artifactDiagnosticContext || {};
     const selectedFiles = (logicalMemberFiles || []).map((file) => ({
@@ -731,7 +732,8 @@ function buildRollbackDestinationArtifactDiagnostic({
         ),
         packedArtifactHash: hashBytes(artifactBytes),
         requestedSourceApiVersion: requestedSourceApiVersion ?? null,
-        effectiveSourceApiVersion: effectiveSourceApiVersion ?? null
+        effectiveSourceApiVersion: effectiveSourceApiVersion ?? null,
+        exactVersionRecovery: exactVersionRecovery || null
     };
 }
 
@@ -829,6 +831,49 @@ function buildFlowVersionZeroFilesError(metadataName, diagnostic, parsed) {
     return error;
 }
 
+function buildExactVersionRecoveryDiagnostic({
+    metadataName,
+    parsed,
+    exactVersion,
+    retrieved,
+    recoveryOutcome
+}) {
+    return {
+        exactVersionRecoveryInvoked: true,
+        metadataName: metadataName || null,
+        flowDefinitionDeveloperName:
+            parsed?.definitionDeveloperName ||
+            exactVersion?.flowDefinitionDeveloperName ||
+            null,
+        requestedVersionNumber:
+            parsed?.sourceVersionNumber ??
+            exactVersion?.sourceFlowVersionNumber ??
+            null,
+        sourceFlowVersionId: exactVersion?.sourceFlowVersionId || null,
+        flowIsLatestVersion:
+            exactVersion?.flowIsLatestVersion === true ||
+            exactVersion?.flowIsLatestVersion === false
+                ? exactVersion.flowIsLatestVersion
+                : null,
+        flowIsActiveVersion:
+            exactVersion?.flowIsActiveVersion === true ||
+            exactVersion?.flowIsActiveVersion === false
+                ? exactVersion.flowIsActiveVersion
+                : null,
+        retrievedArtifactPath: retrieved?.retrievedArtifactPath || null,
+        retrievedArtifactCorrelation:
+            retrieved?.retrievedArtifactCorrelation || null,
+        recoveryOutcome: recoveryOutcome || null
+    };
+}
+
+function logExactVersionRecoveryDiagnostic(payload) {
+    console.log(
+        'FLOW_EXACT_VERSION_RECOVERY_DIAGNOSTIC',
+        JSON.stringify(payload)
+    );
+}
+
 function buildFlowExactVersionArtifactError(
     metadataName,
     parsed,
@@ -884,6 +929,15 @@ async function retrieveExactVersionQualifiedFlowArtifact({
             accessToken
         });
     } catch (error) {
+        logExactVersionRecoveryDiagnostic(
+            buildExactVersionRecoveryDiagnostic({
+                metadataName,
+                parsed,
+                exactVersion: null,
+                retrieved: null,
+                recoveryOutcome: 'FAILED_TOOLING_DISCOVERY'
+            })
+        );
         throw buildFlowExactVersionArtifactError(
             metadataName,
             parsed,
@@ -899,6 +953,15 @@ async function retrieveExactVersionQualifiedFlowArtifact({
     );
 
     if (!exactVersion) {
+        logExactVersionRecoveryDiagnostic(
+            buildExactVersionRecoveryDiagnostic({
+                metadataName,
+                parsed,
+                exactVersion: null,
+                retrieved: null,
+                recoveryOutcome: 'FAILED_VERSION_ABSENT'
+            })
+        );
         throw buildFlowExactVersionArtifactError(
             metadataName,
             parsed,
@@ -913,14 +976,46 @@ async function retrieveExactVersionQualifiedFlowArtifact({
             projectPath: workspacePath,
             alias,
             versionDescriptor: exactVersion,
-            execAsync
+            execAsync,
+            requireVersionedFilenameCorrelation: true
         });
     } catch (error) {
+        logExactVersionRecoveryDiagnostic(
+            buildExactVersionRecoveryDiagnostic({
+                metadataName,
+                parsed,
+                exactVersion,
+                retrieved: {
+                    retrievedArtifactPath: error.retrievedArtifactPath || null,
+                    retrievedArtifactCorrelation:
+                        error.retrievedArtifactCorrelation || null
+                },
+                recoveryOutcome: 'FAILED_RETRIEVE'
+            })
+        );
         throw buildFlowExactVersionArtifactError(
             metadataName,
             parsed,
             'version-aware Flow retrieve did not produce an exact version artifact',
             error.message || String(error)
+        );
+    }
+
+    if (retrieved.retrievedArtifactCorrelation !== 'versioned_filename') {
+        logExactVersionRecoveryDiagnostic(
+            buildExactVersionRecoveryDiagnostic({
+                metadataName,
+                parsed,
+                exactVersion,
+                retrieved,
+                recoveryOutcome: 'FAILED_AMBIGUOUS_CORRELATION'
+            })
+        );
+        throw buildFlowExactVersionArtifactError(
+            metadataName,
+            parsed,
+            'unversioned Flow filename correlation cannot establish exact version identity for rollback drift verification',
+            `correlation=${retrieved.retrievedArtifactCorrelation || 'unknown'}`
         );
     }
 
@@ -958,7 +1053,28 @@ async function retrieveExactVersionQualifiedFlowArtifact({
         metadataName
     );
 
-    return packMemberFiles(snapshotPackFiles);
+    const artifactBytes = packMemberFiles(snapshotPackFiles);
+
+    logExactVersionRecoveryDiagnostic(
+        buildExactVersionRecoveryDiagnostic({
+            metadataName,
+            parsed,
+            exactVersion,
+            retrieved,
+            recoveryOutcome: 'SUCCEEDED'
+        })
+    );
+
+    return {
+        artifactBytes,
+        exactVersionRecovery: buildExactVersionRecoveryDiagnostic({
+            metadataName,
+            parsed,
+            exactVersion,
+            retrieved,
+            recoveryOutcome: 'SUCCEEDED'
+        })
+    };
 }
 
 function buildZeroFilesError(metadataType, metadataName, diagnostic) {
@@ -1267,6 +1383,7 @@ function createDestinationMetadataRetriever(dependencies = {}) {
 
             let logicalMemberFiles;
             let artifactBytes;
+            let exactVersionRecovery = null;
 
             try {
                 logicalMemberFiles = selectLogicalMemberFiles(
@@ -1289,7 +1406,7 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                     metadataType === 'Flow' &&
                     requireExactVersionQualifiedFlowArtifact === true
                 ) {
-                    artifactBytes =
+                    const recoveryResult =
                         await retrieveExactVersionQualifiedFlowArtifact({
                             workspacePath,
                             alias,
@@ -1301,6 +1418,9 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                             discoverFlowVersionsFn,
                             retrieveSingleFlowVersionFn
                         });
+                    artifactBytes = recoveryResult.artifactBytes;
+                    exactVersionRecovery =
+                        recoveryResult.exactVersionRecovery || null;
                     logicalMemberFiles = [];
                 } else {
                     throw selectionError;
@@ -1308,8 +1428,8 @@ function createDestinationMetadataRetriever(dependencies = {}) {
             }
 
             if (artifactDiagnosticContext) {
-                logRollbackDestinationArtifactDiagnostic(
-                    buildRollbackDestinationArtifactDiagnostic({
+                const artifactDiagnostic = buildRollbackDestinationArtifactDiagnostic(
+                    {
                         metadataType,
                         metadataName,
                         workspacePath,
@@ -1319,9 +1439,11 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                         artifactDiagnosticContext,
                         requestedSourceApiVersion: sourceApiVersion ?? null,
                         effectiveSourceApiVersion:
-                            bootstrap?.sourceApiVersion ?? null
-                    })
+                            bootstrap?.sourceApiVersion ?? null,
+                        exactVersionRecovery
+                    }
                 );
+                logRollbackDestinationArtifactDiagnostic(artifactDiagnostic);
             }
 
             return {
@@ -1352,6 +1474,8 @@ module.exports = {
     buildExpectedMemberSourcePaths,
     selectLogicalMemberFiles,
     retrieveExactVersionQualifiedFlowArtifact,
+    buildExactVersionRecoveryDiagnostic,
+    logExactVersionRecoveryDiagnostic,
     summarizeRetrieveCliOutput,
     redactDiagnosticText,
     buildRetrieveDiagnosticRecord,
