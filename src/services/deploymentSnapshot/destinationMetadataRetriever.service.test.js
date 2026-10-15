@@ -975,6 +975,30 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
     );
 
     await runTest(
+        'rejects unversioned Flow filename when requireExactVersionQualifiedFlowArtifact is set',
+        () => {
+            const unversionedPath =
+                'force-app/main/default/flows/Check_Amount.flow-meta.xml';
+
+            assert.throws(
+                () =>
+                    selectLogicalMemberFiles(
+                        [
+                            {
+                                relativePath: unversionedPath,
+                                bytes: Buffer.from('flow-unversioned-only')
+                            }
+                        ],
+                        'Flow',
+                        'Check_Amount-4',
+                        { requireExactVersionQualifiedFlowArtifact: true }
+                    ),
+                /did not return the logical file/
+            );
+        }
+    );
+
+    await runTest(
         'accepts unversioned Flow filename for version-qualified member when unambiguous',
         () => {
             const unversionedPath =

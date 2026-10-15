@@ -68,6 +68,9 @@ const {
     redactDiagnosticText
 } = require('./destinationMetadataRetriever.service');
 const {
+    parseVersionQualifiedFlowMember
+} = require('../flowMetadata/flowMemberIdentity.service');
+const {
     resolveRollbackDestinationRetrieveSourceApiVersionWithDestinationCap,
     logRollbackRetrieveApiVersionDiagnostic
 } = require('./rollbackDestinationRetrieveApiVersion.service');
@@ -1319,6 +1322,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         metadataName: member.metadataName,
                         sourceApiVersion:
                             rollbackDestinationRetrieveSourceApiVersion,
+                        requireExactVersionQualifiedFlowArtifact:
+                            member.metadataType === 'Flow' &&
+                            parseVersionQualifiedFlowMember(
+                                member.metadataName
+                            )?.isVersionQualified === true,
                         artifactDiagnosticContext: {
                             memberKey: memberKey(member),
                             operationId: args.operationId || operation?.operationId || null,

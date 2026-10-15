@@ -22,8 +22,16 @@ const {
     parseVersionQualifiedFlowMember,
     FLOW_META_SUFFIX,
     FLOWS_DIR_PREFIX,
-    applyCanonicalFlowSnapshotPackPaths
+    applyCanonicalFlowSnapshotPackPaths,
+    buildCanonicalFlowArtifactRelativePath
 } = require('../flowMetadata/flowMemberIdentity.service');
+const {
+    discoverFlowVersions,
+    findExactFlowVersion
+} = require('../retrieval/flowVersionDiscovery.service');
+const {
+    retrieveSingleFlowVersion
+} = require('../retrieval/flowVersionRetrieval.service');
 
 const mkdir = util.promisify(fs.mkdir);
 const readdir = util.promisify(fs.readdir);
@@ -402,7 +410,11 @@ function buildFlowLogicalRelativePath(metadataName) {
  * versioned path wins; unversioned fallback is allowed only when flow artifacts
  * are unambiguous (no wrong version, no unrelated flows).
  */
-function selectLogicalFlowMemberFiles(retrievedFiles, metadataName) {
+function selectLogicalFlowMemberFiles(
+    retrievedFiles,
+    metadataName,
+    options = {}
+) {
     const memberName = String(metadataName || '').trim();
     const parsed = parseVersionQualifiedFlowMember(memberName);
     const failMessage = `Destination snapshot retrieve did not return the logical file for Flow:${metadataName}.`;
@@ -431,6 +443,10 @@ function selectLogicalFlowMemberFiles(retrievedFiles, metadataName) {
     }
 
     if (!parsed.isVersionQualified) {
+        throw new Error(failMessage);
+    }
+
+    if (options.requireExactVersionQualifiedFlowArtifact === true) {
         throw new Error(failMessage);
     }
 
@@ -506,7 +522,8 @@ function selectLogicalFlowMemberFiles(retrievedFiles, metadataName) {
 function selectLogicalMemberFiles(
     retrievedFiles,
     metadataType,
-    metadataName
+    metadataName,
+    options = {}
 ) {
     const expectedPaths = buildExpectedMemberSourcePaths(
         metadataType,
@@ -535,7 +552,11 @@ function selectLogicalMemberFiles(
 
     const selected =
         metadataType === 'Flow'
-            ? selectLogicalFlowMemberFiles(retrievedFiles, metadataName)
+            ? selectLogicalFlowMemberFiles(
+                  retrievedFiles,
+                  metadataName,
+                  options
+              )
             : retrievedFiles.filter((file) =>
                   Object.values(expectedPaths).includes(
                       normalizeRetrieveRelativePath(file.relativePath)
@@ -808,6 +829,138 @@ function buildFlowVersionZeroFilesError(metadataName, diagnostic, parsed) {
     return error;
 }
 
+function buildFlowExactVersionArtifactError(
+    metadataName,
+    parsed,
+    reason,
+    detail = null
+) {
+    const prefix = `Destination snapshot capture failed for Flow:${metadataName}:`;
+    const definitionDeveloperName = parsed.definitionDeveloperName;
+    const sourceFlowVersionNumber = parsed.sourceVersionNumber;
+    const details = [
+        `code=${FLOW_DESTINATION_VERSION_NOT_RETRIEVED}`,
+        `exact Flow version artifact required for rollback drift verification (${definitionDeveloperName} version ${sourceFlowVersionNumber})`,
+        reason
+    ];
+
+    if (detail) {
+        details.push(detail);
+    }
+
+    const error = new Error(`${prefix} ${details.join(' — ')}`);
+    error.code = FLOW_DESTINATION_VERSION_NOT_RETRIEVED;
+    error.metadataType = 'Flow';
+    error.metadataName = metadataName;
+    error.flowDefinitionDeveloperName = definitionDeveloperName;
+    error.sourceFlowVersionNumber = sourceFlowVersionNumber;
+
+    return error;
+}
+
+async function retrieveExactVersionQualifiedFlowArtifact({
+    workspacePath,
+    alias,
+    metadataName,
+    accessToken,
+    instanceUrl,
+    execAsync,
+    discoverFlowVersionsFn = discoverFlowVersions,
+    retrieveSingleFlowVersionFn = retrieveSingleFlowVersion
+}) {
+    const parsed = parseVersionQualifiedFlowMember(metadataName);
+
+    if (!parsed?.isVersionQualified) {
+        throw new Error(
+            `Exact Flow version artifact retrieval requires a version-qualified member name (Flow:${metadataName}).`
+        );
+    }
+
+    let discovery;
+
+    try {
+        discovery = await discoverFlowVersionsFn({
+            instanceUrl,
+            accessToken
+        });
+    } catch (error) {
+        throw buildFlowExactVersionArtifactError(
+            metadataName,
+            parsed,
+            'Flow version discovery via Tooling API failed',
+            error.message || String(error)
+        );
+    }
+
+    const exactVersion = findExactFlowVersion(
+        discovery.versions,
+        parsed.definitionDeveloperName,
+        parsed.sourceVersionNumber
+    );
+
+    if (!exactVersion) {
+        throw buildFlowExactVersionArtifactError(
+            metadataName,
+            parsed,
+            'requested Flow version is not present on the destination'
+        );
+    }
+
+    let retrieved;
+
+    try {
+        retrieved = await retrieveSingleFlowVersionFn({
+            projectPath: workspacePath,
+            alias,
+            versionDescriptor: exactVersion,
+            execAsync
+        });
+    } catch (error) {
+        throw buildFlowExactVersionArtifactError(
+            metadataName,
+            parsed,
+            'version-aware Flow retrieve did not produce an exact version artifact',
+            error.message || String(error)
+        );
+    }
+
+    const canonicalRelative =
+        retrieved.workspaceArtifactPath ||
+        buildCanonicalFlowArtifactRelativePath(metadataName);
+
+    if (!canonicalRelative) {
+        throw buildFlowExactVersionArtifactError(
+            metadataName,
+            parsed,
+            'version-aware Flow retrieve did not report a canonical artifact path'
+        );
+    }
+
+    const absolutePath = path.join(
+        workspacePath,
+        ...canonicalRelative.split('/')
+    );
+    let sourceBytes;
+
+    try {
+        sourceBytes = await readFile(absolutePath);
+    } catch (error) {
+        throw buildFlowExactVersionArtifactError(
+            metadataName,
+            parsed,
+            'version-aware Flow retrieve artifact is missing on disk',
+            error.message || String(error)
+        );
+    }
+
+    const snapshotPackFiles = applyCanonicalFlowSnapshotPackPaths(
+        [{ relativePath: canonicalRelative, bytes: sourceBytes }],
+        metadataName
+    );
+
+    return packMemberFiles(snapshotPackFiles);
+}
+
 function buildZeroFilesError(metadataType, metadataName, diagnostic) {
     if (metadataType === 'Flow') {
         const parsed = parseVersionQualifiedFlowMember(metadataName);
@@ -958,6 +1111,10 @@ function createDestinationMetadataRetriever(dependencies = {}) {
     const mkdirFn = dependencies.mkdir || mkdir;
     const rmFn = dependencies.rm || rm;
     const tmpdirFn = dependencies.tmpdir || os.tmpdir;
+    const discoverFlowVersionsFn =
+        dependencies.discoverFlowVersions || discoverFlowVersions;
+    const retrieveSingleFlowVersionFn =
+        dependencies.retrieveSingleFlowVersion || retrieveSingleFlowVersion;
 
     async function retrieveDestinationMember({
         refreshToken,
@@ -965,7 +1122,8 @@ function createDestinationMetadataRetriever(dependencies = {}) {
         metadataType,
         metadataName,
         sourceApiVersion,
-        artifactDiagnosticContext
+        artifactDiagnosticContext,
+        requireExactVersionQualifiedFlowArtifact = false
     }) {
         if (!refreshToken || !instanceUrl) {
             throw new Error(
@@ -1102,20 +1260,52 @@ function createDestinationMetadataRetriever(dependencies = {}) {
                 );
             }
 
-            const logicalMemberFiles = selectLogicalMemberFiles(
-                retrievedFiles,
-                metadataType,
-                metadataName
-            );
+            const selectionOptions =
+                requireExactVersionQualifiedFlowArtifact === true
+                    ? { requireExactVersionQualifiedFlowArtifact: true }
+                    : {};
 
-            const snapshotPackFiles =
-                metadataType === 'Flow'
-                    ? applyCanonicalFlowSnapshotPackPaths(
-                          logicalMemberFiles,
-                          metadataName
-                      )
-                    : logicalMemberFiles;
-            const artifactBytes = packMemberFiles(snapshotPackFiles);
+            let logicalMemberFiles;
+            let artifactBytes;
+
+            try {
+                logicalMemberFiles = selectLogicalMemberFiles(
+                    retrievedFiles,
+                    metadataType,
+                    metadataName,
+                    selectionOptions
+                );
+
+                const snapshotPackFiles =
+                    metadataType === 'Flow'
+                        ? applyCanonicalFlowSnapshotPackPaths(
+                              logicalMemberFiles,
+                              metadataName
+                          )
+                        : logicalMemberFiles;
+                artifactBytes = packMemberFiles(snapshotPackFiles);
+            } catch (selectionError) {
+                if (
+                    metadataType === 'Flow' &&
+                    requireExactVersionQualifiedFlowArtifact === true
+                ) {
+                    artifactBytes =
+                        await retrieveExactVersionQualifiedFlowArtifact({
+                            workspacePath,
+                            alias,
+                            metadataName,
+                            accessToken: tokenResult.accessToken,
+                            instanceUrl:
+                                tokenResult.instanceUrl || instanceUrl,
+                            execAsync,
+                            discoverFlowVersionsFn,
+                            retrieveSingleFlowVersionFn
+                        });
+                    logicalMemberFiles = [];
+                } else {
+                    throw selectionError;
+                }
+            }
 
             if (artifactDiagnosticContext) {
                 logRollbackDestinationArtifactDiagnostic(
@@ -1161,6 +1351,7 @@ module.exports = {
     buildRetrieveCommand: defaultRetriever.buildRetrieveCommand,
     buildExpectedMemberSourcePaths,
     selectLogicalMemberFiles,
+    retrieveExactVersionQualifiedFlowArtifact,
     summarizeRetrieveCliOutput,
     redactDiagnosticText,
     buildRetrieveDiagnosticRecord,
