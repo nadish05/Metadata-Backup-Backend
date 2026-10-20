@@ -191,7 +191,10 @@ function createRollbackOperationService({ getStore } = {}) {
             lockReleasedAt: null,
             reconciledAt: null,
             reconciledBy: null,
-            reconciliationReason: null
+            reconciliationReason: null,
+            flowDeleteRollbackDeactivation: null,
+            flowDeleteRollbackPartialDeactivation: false,
+            flowDeleteRollbackFailureStage: null
         });
 
         const stored = await resolveStore().createOperation(record);
@@ -390,7 +393,18 @@ function createRollbackOperationService({ getStore } = {}) {
             leaseGeneration:
                 outcome.leaseGeneration ?? current.leaseGeneration,
             lockAcquiredAt: outcome.lockAcquiredAt || current.lockAcquiredAt,
-            lockReleasedAt: outcome.lockReleasedAt || current.lockReleasedAt
+            lockReleasedAt: outcome.lockReleasedAt || current.lockReleasedAt,
+            flowDeleteRollbackDeactivation:
+                outcome.flowDeleteRollbackDeactivation !== undefined
+                    ? outcome.flowDeleteRollbackDeactivation
+                    : current.flowDeleteRollbackDeactivation,
+            flowDeleteRollbackPartialDeactivation:
+                outcome.flowDeleteRollbackPartialDeactivation === true ||
+                current.flowDeleteRollbackPartialDeactivation === true,
+            flowDeleteRollbackFailureStage:
+                outcome.flowDeleteRollbackFailureStage ||
+                current.flowDeleteRollbackFailureStage ||
+                null
         });
 
         if (outcome.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED) {

@@ -135,22 +135,10 @@ const {
 const {
     ensureFlowDeleteRollbackActiveDeactivation
 } = require('./flowDeleteRollbackActiveDeactivation.service');
-
-function buildFlowDeactivationFailureExtra(records, failureStage) {
-    const deactivated = (records || []).filter(
-        (entry) => entry.deactivated === true
-    );
-
-    if (!deactivated.length) {
-        return {};
-    }
-
-    return {
-        flowDeleteRollbackDeactivation: deactivated,
-        flowDeleteRollbackPartialDeactivation: true,
-        flowDeleteRollbackFailureStage: failureStage || null
-    };
-}
+const {
+    buildFlowDeleteRollbackPartialDeactivationOutcome,
+    resolveFlowDeactivationFailureStageForRollbackCode
+} = require('./flowDeleteRollbackPartialDeactivation.service');
 
 function block(code, message, extra = {}) {
     const result = {
@@ -1296,6 +1284,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
         let generatedWorkspace = null;
         let outcome = null;
         let executionStarted = false;
+        let flowDeleteRollbackDeactivationRecords = [];
 
         try {
             if (!operation?.operationId) {
@@ -1360,7 +1349,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
 
             const drift = [];
-            const flowDeleteRollbackDeactivationRecords = [];
+            flowDeleteRollbackDeactivationRecords = [];
             const recordTypeBusinessProcessByMemberKey = new Map();
             const driftCredentials = await resolvePostDeleteInventoryCredentials(args);
             const retrieveApiVersionResolution =
@@ -1449,9 +1438,14 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     if (error instanceof RollbackBlockedError) {
                         if (error.details?.partialDeactivation === true) {
                             flowDeleteRollbackDeactivationRecords.push({
-                                performed: true,
-                                deactivated: error.details.deactivated === true,
-                                failureStage: 'DEACTIVATION_VERIFICATION',
+                                partialDeactivation: true,
+                                deactivationVerified:
+                                    error.details.deactivationVerified === true,
+                                deactivationDeploySucceeded:
+                                    error.details.deactivationDeploySucceeded === true,
+                                failureStage:
+                                    error.details.failureStage ||
+                                    'DEACTIVATION_VERIFICATION',
                                 metadataName: error.details.metadataName || null,
                                 flowDefinitionDeveloperName:
                                     error.details.flowDefinitionDeveloperName ||
@@ -1664,10 +1658,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             });
 
             if (drifted.length) {
-                const deactivationExtra = buildFlowDeactivationFailureExtra(
-                    flowDeleteRollbackDeactivationRecords,
-                    'DRIFT'
-                );
+                const deactivationExtra =
+                    buildFlowDeleteRollbackPartialDeactivationOutcome(
+                        flowDeleteRollbackDeactivationRecords,
+                        'DRIFT'
+                    );
                 operation = await persistFailed(operation, {
                     errorCode: ROLLBACK_CODE.DRIFT_DETECTED,
                     errorMessage:
@@ -1808,10 +1803,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     void error;
                 }
 
-                const deactivationExtra = buildFlowDeactivationFailureExtra(
-                    flowDeleteRollbackDeactivationRecords,
-                    'CHECK_ONLY'
-                );
+                const deactivationExtra =
+                    buildFlowDeleteRollbackPartialDeactivationOutcome(
+                        flowDeleteRollbackDeactivationRecords,
+                        'CHECK_ONLY'
+                    );
                 operation = await persistFailed(operation, {
                     errorCode: ROLLBACK_CODE.CHECK_ONLY_FAILED,
                     errorMessage:
@@ -1941,10 +1937,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         ? ROLLBACK_CODE.RESULT_UNKNOWN
                         : ROLLBACK_CODE.EXECUTION_FAILED;
 
-                const deactivationExtra = buildFlowDeactivationFailureExtra(
-                    flowDeleteRollbackDeactivationRecords,
-                    'EXECUTION'
-                );
+                const deactivationExtra =
+                    buildFlowDeleteRollbackPartialDeactivationOutcome(
+                        flowDeleteRollbackDeactivationRecords,
+                        'EXECUTION'
+                    );
                 outcome = withOperation(
                     block(code, classified.errorMessage, {
                         snapshotId,
@@ -1973,15 +1970,26 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     executionRollbackMode === ROLLBACK_MODE.MIXED) &&
                 classified.status === ROLLBACK_OPERATION_STATUS.SUCCEEDED;
 
+            const executionFailureDeactivationExtra =
+                classified.status === ROLLBACK_OPERATION_STATUS.FAILED
+                    ? buildFlowDeleteRollbackPartialDeactivationOutcome(
+                          flowDeleteRollbackDeactivationRecords,
+                          'EXECUTION'
+                      )
+                    : {};
+
             if (!deferTerminalSuccess) {
                 try {
                     operation = await operationService.markTerminal(
                         operation.operationId,
-                        buildExecutionTerminalPatch(
-                            classified,
-                            deploymentExecution,
-                            salesforceDeploymentId
-                        )
+                        {
+                            ...buildExecutionTerminalPatch(
+                                classified,
+                                deploymentExecution,
+                                salesforceDeploymentId
+                            ),
+                            ...executionFailureDeactivationExtra
+                        }
                     );
                 } catch (persistError) {
                     outcome = withOperation(
@@ -2031,10 +2039,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         });
                         inventory = inventoryResult.inventory;
                     } catch (error) {
-                        const deactivationExtra = buildFlowDeactivationFailureExtra(
-                            flowDeleteRollbackDeactivationRecords,
-                            'POST_DELETE'
-                        );
+                        const deactivationExtra =
+                            buildFlowDeleteRollbackPartialDeactivationOutcome(
+                                flowDeleteRollbackDeactivationRecords,
+                                'POST_DELETE'
+                            );
                         operation = await persistFailed(operation, {
                             errorCode:
                                 ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
@@ -2083,10 +2092,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                                 }
                             );
                     } catch (error) {
-                        const deactivationExtra = buildFlowDeactivationFailureExtra(
-                            flowDeleteRollbackDeactivationRecords,
-                            'POST_DELETE'
-                        );
+                        const deactivationExtra =
+                            buildFlowDeleteRollbackPartialDeactivationOutcome(
+                                flowDeleteRollbackDeactivationRecords,
+                                'POST_DELETE'
+                            );
                         operation = await persistFailed(operation, {
                             errorCode:
                                 ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
@@ -2121,10 +2131,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     }
 
                     if (stillPresent.length) {
-                        const deactivationExtra = buildFlowDeactivationFailureExtra(
-                            flowDeleteRollbackDeactivationRecords,
-                            'POST_DELETE'
-                        );
+                        const deactivationExtra =
+                            buildFlowDeleteRollbackPartialDeactivationOutcome(
+                                flowDeleteRollbackDeactivationRecords,
+                                'POST_DELETE'
+                            );
                         operation = await persistFailed(operation, {
                             errorCode:
                                 ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
@@ -2281,7 +2292,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         drift,
                         checkOnlyDeployment,
                         deploymentExecution,
-                        generatedWorkspace
+                        generatedWorkspace,
+                        ...executionFailureDeactivationExtra
                     }
                 ),
                 operation
@@ -2338,14 +2350,26 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
 
             if (error instanceof RollbackBlockedError) {
+                const deactivationFailureStage =
+                    resolveFlowDeactivationFailureStageForRollbackCode(
+                        error.code
+                    ) || null;
+                const deactivationExtra =
+                    buildFlowDeleteRollbackPartialDeactivationOutcome(
+                        flowDeleteRollbackDeactivationRecords,
+                        deactivationFailureStage,
+                        error.details
+                    );
                 operation = await persistFailed(operation, {
                     errorCode: error.code,
-                    errorMessage: error.message
+                    errorMessage: error.message,
+                    ...deactivationExtra
                 });
                 const blocked = withOperation(
                     block(error.code, error.message, {
                         snapshotId,
-                        generatedWorkspace
+                        generatedWorkspace,
+                        ...deactivationExtra
                     }),
                     operation
                 );

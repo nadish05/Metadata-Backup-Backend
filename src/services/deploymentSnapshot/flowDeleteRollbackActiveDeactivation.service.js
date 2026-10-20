@@ -364,7 +364,8 @@ async function ensureFlowDeleteRollbackActiveDeactivation({
             `Flow deactivation verification failed (${verification.reason}).`,
             {
                 partialDeactivation: true,
-                deactivated: true,
+                deactivationVerified: false,
+                deactivationDeploySucceeded: deploymentExecution?.success === true,
                 metadataName: member.metadataName,
                 flowDefinitionDeveloperName: parsed.definitionDeveloperName,
                 targetFlowVersionId: exactVersion.sourceFlowVersionId || null,
@@ -372,7 +373,8 @@ async function ensureFlowDeleteRollbackActiveDeactivation({
                 priorActiveVersionId,
                 priorActiveVersionNumber,
                 deploymentExecution,
-                verificationReason: verification.reason
+                verificationReason: verification.reason,
+                failureStage: 'DEACTIVATION_VERIFICATION'
             }
         );
     }
@@ -380,6 +382,8 @@ async function ensureFlowDeleteRollbackActiveDeactivation({
     return {
         performed: true,
         deactivated: true,
+        deactivationVerified: true,
+        deactivationDeploySucceeded: deploymentExecution?.success === true,
         metadataName: member.metadataName,
         flowDefinitionDeveloperName: parsed.definitionDeveloperName,
         targetFlowVersionId: exactVersion.sourceFlowVersionId || null,

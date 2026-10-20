@@ -386,6 +386,8 @@ async function main() {
                 ROLLBACK_CODE.FLOW_DEACTIVATION_NOT_VERIFIED
             );
             assert.strictEqual(error.details.partialDeactivation, true);
+            assert.strictEqual(error.details.deactivationVerified, false);
+            assert.strictEqual(error.details.deactivationDeploySucceeded, true);
             assert.strictEqual(error.details.priorActiveVersionId, 'FLOW_V4_ID');
         }
     });
