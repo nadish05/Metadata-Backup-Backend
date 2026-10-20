@@ -275,14 +275,21 @@ function buildValidationRuleSoql(name) {
 
 function buildLayoutSoql(name) {
     const memberName = String(name || '').trim();
+    const parsed = parseLayoutMemberName(memberName);
 
-    if (!memberName || !parseLayoutMemberName(memberName)) {
+    if (!parsed) {
         return null;
     }
 
+    const { objectApiName, layoutName } = parsed;
+
+    // Tooling Layout.FullName is not filterable in WHERE (INVALID_FIELD).
+    // MDAPI member {Object}-{Label} maps to TableEnumOrId + Name (filterable).
     return (
         'SELECT Id FROM Layout ' +
-        `WHERE FullName = '${escapeSoql(memberName)}' LIMIT 1`
+        `WHERE TableEnumOrId = '${escapeSoql(objectApiName)}' ` +
+        `AND Name = '${escapeSoql(layoutName)}' ` +
+        'LIMIT 2'
     );
 }
 

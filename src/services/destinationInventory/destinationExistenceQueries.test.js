@@ -211,18 +211,29 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         assert.ok(soql.includes('FROM CompactLayout'));
     });
 
-    await runTest('buildLayoutSoql targets Tooling Layout FullName', () => {
+    await runTest('buildLayoutSoql targets Tooling Layout TableEnumOrId and Name', () => {
         const soql = buildLayoutSoql('Account-Gym Member Layout');
 
         assert.ok(soql.includes('FROM Layout'));
-        assert.ok(soql.includes("FullName = 'Account-Gym Member Layout'"));
-        assert.ok(soql.includes('LIMIT 1'));
+        assert.ok(soql.includes("TableEnumOrId = 'Account'"));
+        assert.ok(soql.includes("Name = 'Gym Member Layout'"));
+        assert.ok(!soql.includes('FullName'));
+        assert.ok(soql.includes('LIMIT 2'));
     });
 
-    await runTest('buildLayoutSoql preserves spaces and hyphens in member name', () => {
+    await runTest('buildLayoutSoql supports custom object layout members', () => {
+        const soql = buildLayoutSoql('Vehicle1__c-Vehicle1 Layout');
+
+        assert.ok(soql.includes("TableEnumOrId = 'Vehicle1__c'"));
+        assert.ok(soql.includes("Name = 'Vehicle1 Layout'"));
+        assert.ok(!soql.includes('FullName'));
+    });
+
+    await runTest('buildLayoutSoql preserves spaces in layout Name filter', () => {
         const soql = buildLayoutSoql('Account-Account Layout');
 
-        assert.ok(soql.includes("FullName = 'Account-Account Layout'"));
+        assert.ok(soql.includes("Name = 'Account Layout'"));
+        assert.ok(soql.includes("TableEnumOrId = 'Account'"));
     });
 
     await runTest('buildLayoutSoql returns null for malformed member names', () => {
@@ -231,10 +242,11 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         assert.strictEqual(buildLayoutSoql(''), null);
     });
 
-    await runTest('buildLayoutSoql escapes SOQL quotes', () => {
+    await runTest('buildLayoutSoql escapes SOQL quotes in Name', () => {
         const soql = buildLayoutSoql("Account-Opp's Layout");
 
-        assert.ok(soql.includes("FullName = 'Account-Opp\\'s Layout'"));
+        assert.ok(soql.includes("Name = 'Opp\\'s Layout'"));
+        assert.ok(soql.includes("TableEnumOrId = 'Account'"));
     });
 
     await runTest('buildExistenceQuery wires Layout to Tooling SOQL', () => {
@@ -242,7 +254,9 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         const soql = buildExistenceQuery('Layout', 'Account-Gym Member Layout');
 
         assert.ok(soql.includes('FROM Layout'));
-        assert.ok(soql.includes("FullName = 'Account-Gym Member Layout'"));
+        assert.ok(soql.includes("TableEnumOrId = 'Account'"));
+        assert.ok(soql.includes("Name = 'Gym Member Layout'"));
+        assert.ok(!soql.includes('WHERE FullName'));
     });
 
     await runTest('inventory reports EXISTS when Layout query returns rows', async () => {
@@ -311,6 +325,33 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
             const entry = result.inventory.get('Layout:Account-Gym Member Layout');
             assert.strictEqual(entry.state, DESTINATION_STATE.UNKNOWN);
             assert.notStrictEqual(entry.state, DESTINATION_STATE.MISSING);
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when multiple Layout rows match', async () => {
+        const stub = stubToolingQuery({
+            totalSize: 2,
+            records: [{ Id: '0' }, { Id: '1' }]
+        });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: 'Account-Gym Member Layout'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            const entry = result.inventory.get('Layout:Account-Gym Member Layout');
+            assert.strictEqual(entry.state, DESTINATION_STATE.UNKNOWN);
+            assert.notStrictEqual(entry.state, DESTINATION_STATE.MISSING);
+            assert.ok(String(entry.warning || '').includes('ambiguous'));
         } finally {
             stub.restore();
         }

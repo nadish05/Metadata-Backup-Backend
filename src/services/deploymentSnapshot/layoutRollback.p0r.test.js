@@ -222,13 +222,19 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         );
     });
 
-    await runTest('TEST 7 — buildLayoutSoql targets Tooling Layout FullName', () => {
+    await runTest('TEST 7 — buildLayoutSoql uses TableEnumOrId and Name filters', () => {
         const soql = buildLayoutSoql(METADATA_NAME);
 
         assert.ok(soql.includes('FROM Layout'));
-        assert.ok(soql.includes("FullName = 'Account-Gym Member Layout'"));
-        assert.ok(soql.includes('LIMIT 1'));
+        assert.ok(soql.includes("TableEnumOrId = 'Account'"));
+        assert.ok(soql.includes("Name = 'Gym Member Layout'"));
+        assert.ok(!soql.includes('FullName'));
+        assert.ok(soql.includes('LIMIT 2'));
         assert.strictEqual(buildLayoutSoql('InvalidMember'), null);
+
+        const customSoql = buildLayoutSoql('Vehicle1__c-Vehicle1 Layout');
+        assert.ok(customSoql.includes("TableEnumOrId = 'Vehicle1__c'"));
+        assert.ok(customSoql.includes("Name = 'Vehicle1 Layout'"));
     });
 
     await runTest('TEST 8 — RAW expected-after artifact without explicit filePath', async () => {

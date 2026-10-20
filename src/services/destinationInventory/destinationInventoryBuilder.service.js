@@ -385,7 +385,33 @@ async function querySingleExistence({
             { metadataType, metadataName }
         );
 
-        const exists = (queryResult.totalSize || 0) > 0;
+        const totalSize = queryResult.totalSize || 0;
+
+        if (metadataType === 'Layout' && totalSize > 1) {
+            const ambiguousWarning =
+                'Multiple Tooling Layout records matched; existence is ambiguous.';
+
+            personAccountTrace.logDestinationStep({
+                metadataType,
+                metadataName,
+                soql,
+                records: queryResult.records || [],
+                totalSize,
+                decision: DESTINATION_STATE.UNKNOWN,
+                warning: ambiguousWarning
+            });
+
+            return createEntry({
+                metadataType,
+                metadataName,
+                state: DESTINATION_STATE.UNKNOWN,
+                api,
+                queried: true,
+                warning: ambiguousWarning
+            });
+        }
+
+        const exists = totalSize > 0;
 
         // TEMP (Phase 15.3.1) — PersonAccount trace step 4.
         personAccountTrace.logDestinationStep({
@@ -393,7 +419,7 @@ async function querySingleExistence({
             metadataName,
             soql,
             records: queryResult.records || [],
-            totalSize: queryResult.totalSize || 0,
+            totalSize,
             decision: exists
                 ? DESTINATION_STATE.EXISTS
                 : DESTINATION_STATE.MISSING
