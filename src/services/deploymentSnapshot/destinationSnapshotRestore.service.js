@@ -132,6 +132,25 @@ const {
 const {
     partitionRollbackExecutionMembers
 } = require('./rollbackMemberExecutionPolicy.service');
+const {
+    ensureFlowDeleteRollbackActiveDeactivation
+} = require('./flowDeleteRollbackActiveDeactivation.service');
+
+function buildFlowDeactivationFailureExtra(records, failureStage) {
+    const deactivated = (records || []).filter(
+        (entry) => entry.deactivated === true
+    );
+
+    if (!deactivated.length) {
+        return {};
+    }
+
+    return {
+        flowDeleteRollbackDeactivation: deactivated,
+        flowDeleteRollbackPartialDeactivation: true,
+        flowDeleteRollbackFailureStage: failureStage || null
+    };
+}
 
 function block(code, message, extra = {}) {
     const result = {
@@ -154,6 +173,16 @@ function block(code, message, extra = {}) {
         result.manualRollbackRequired = true;
         result.manualRollbackItems = extra.manualRollbackItems || [];
         result.partialSuccess = extra.partialSuccess === true;
+    }
+
+    if (extra.flowDeleteRollbackDeactivation) {
+        result.flowDeleteRollbackDeactivation = extra.flowDeleteRollbackDeactivation;
+    }
+
+    if (extra.flowDeleteRollbackPartialDeactivation === true) {
+        result.flowDeleteRollbackPartialDeactivation = true;
+        result.flowDeleteRollbackFailureStage =
+            extra.flowDeleteRollbackFailureStage || null;
     }
 
     return result;
@@ -558,6 +587,9 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
     const buildRecordTypeSemanticDestinationFn =
         dependencies.buildRecordTypeSemanticFromDestination ||
         buildRecordTypeSemanticFromDestination;
+    const ensureFlowDeleteRollbackActiveDeactivationFn =
+        dependencies.ensureFlowDeleteRollbackActiveDeactivation ||
+        ensureFlowDeleteRollbackActiveDeactivation;
     const deleteWorkspace =
         dependencies.deleteRestoreWorkspace || deleteRestoreWorkspace;
     const resolveOperationStore =
@@ -1328,6 +1360,7 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             }
 
             const drift = [];
+            const flowDeleteRollbackDeactivationRecords = [];
             const recordTypeBusinessProcessByMemberKey = new Map();
             const driftCredentials = await resolvePostDeleteInventoryCredentials(args);
             const retrieveApiVersionResolution =
@@ -1379,6 +1412,74 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                 sourceMetadataApiVersionSource:
                     retrieveApiVersionResolution.sourceMetadataApiVersionSource
             });
+
+            for (const member of members) {
+                try {
+                    const deactivation =
+                        await ensureFlowDeleteRollbackActiveDeactivationFn({
+                            member,
+                            rollbackMode,
+                            accessToken: driftCredentials.accessToken,
+                            instanceUrl: driftCredentials.instanceUrl,
+                            refreshToken: args.refreshToken,
+                            deploymentApiVersion: args.deploymentApiVersion || null,
+                            discoverFlowVersionsFn: discoverFlowVersionsForDrift,
+                            checkOnlyFn,
+                            executeFn,
+                            assertOrgLockHeldFn:
+                                isLockEnabled() && lockHandle
+                                    ? () =>
+                                          resolveLockService().assertHeld({
+                                              destinationOrgId:
+                                                  lockHandle.destinationOrgId,
+                                              ownerId: lockHandle.ownerId,
+                                              leaseGeneration:
+                                                  lockHandle.leaseGeneration
+                                          })
+                                    : null
+                        });
+
+                    if (
+                        deactivation.performed === true ||
+                        deactivation.skipped === true
+                    ) {
+                        flowDeleteRollbackDeactivationRecords.push(deactivation);
+                    }
+                } catch (error) {
+                    if (error instanceof RollbackBlockedError) {
+                        if (error.details?.partialDeactivation === true) {
+                            flowDeleteRollbackDeactivationRecords.push({
+                                performed: true,
+                                deactivated: error.details.deactivated === true,
+                                failureStage: 'DEACTIVATION_VERIFICATION',
+                                metadataName: error.details.metadataName || null,
+                                flowDefinitionDeveloperName:
+                                    error.details.flowDefinitionDeveloperName ||
+                                    null,
+                                targetFlowVersionId:
+                                    error.details.targetFlowVersionId || null,
+                                targetFlowVersionNumber:
+                                    error.details.targetFlowVersionNumber || null,
+                                priorActiveVersionId:
+                                    error.details.priorActiveVersionId || null,
+                                priorActiveVersionNumber:
+                                    error.details.priorActiveVersionNumber || null,
+                                deploymentExecution:
+                                    error.details.deploymentExecution || null,
+                                verificationReason:
+                                    error.details.verificationReason || null
+                            });
+                        }
+
+                        throw error;
+                    }
+
+                    throw new RollbackBlockedError(
+                        ROLLBACK_CODE.FLOW_DEACTIVATION_EXECUTION_FAILED,
+                        error.message || 'Flow deactivation failed.'
+                    );
+                }
+            }
 
             for (const member of members) {
                 let retrieved;
@@ -1563,18 +1664,23 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
             });
 
             if (drifted.length) {
+                const deactivationExtra = buildFlowDeactivationFailureExtra(
+                    flowDeleteRollbackDeactivationRecords,
+                    'DRIFT'
+                );
                 operation = await persistFailed(operation, {
                     errorCode: ROLLBACK_CODE.DRIFT_DETECTED,
                     errorMessage:
                         'Rollback blocked because destination state does not match expected-after for every member.',
                     driftDetected: true,
-                    driftSummary: `driftedMembers=${drifted.length}`
+                    driftSummary: `driftedMembers=${drifted.length}`,
+                    ...deactivationExtra
                 });
                 outcome = withOperation(
                     block(
                         ROLLBACK_CODE.DRIFT_DETECTED,
                         'Rollback blocked because destination state does not match expected-after for every member.',
-                        { snapshotId, drift }
+                        { snapshotId, drift, ...deactivationExtra }
                     ),
                     operation
                 );
@@ -1702,12 +1808,17 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     void error;
                 }
 
+                const deactivationExtra = buildFlowDeactivationFailureExtra(
+                    flowDeleteRollbackDeactivationRecords,
+                    'CHECK_ONLY'
+                );
                 operation = await persistFailed(operation, {
                     errorCode: ROLLBACK_CODE.CHECK_ONLY_FAILED,
                     errorMessage:
                         checkOnlyDeployment?.message ||
                         'Rollback check-only validation failed.',
-                    checkOnlyStatus: CHECK_ONLY_STATUS.FAILED
+                    checkOnlyStatus: CHECK_ONLY_STATUS.FAILED,
+                    ...deactivationExtra
                 });
                 outcome = withOperation(
                     block(
@@ -1718,7 +1829,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                             snapshotId,
                             drift,
                             checkOnlyDeployment,
-                            generatedWorkspace
+                            generatedWorkspace,
+                            ...deactivationExtra
                         }
                     ),
                     operation
@@ -1829,12 +1941,17 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         ? ROLLBACK_CODE.RESULT_UNKNOWN
                         : ROLLBACK_CODE.EXECUTION_FAILED;
 
+                const deactivationExtra = buildFlowDeactivationFailureExtra(
+                    flowDeleteRollbackDeactivationRecords,
+                    'EXECUTION'
+                );
                 outcome = withOperation(
                     block(code, classified.errorMessage, {
                         snapshotId,
                         drift,
                         checkOnlyDeployment,
-                        generatedWorkspace
+                        generatedWorkspace,
+                        ...deactivationExtra
                     }),
                     operation
                 );
@@ -1914,12 +2031,17 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         });
                         inventory = inventoryResult.inventory;
                     } catch (error) {
+                        const deactivationExtra = buildFlowDeactivationFailureExtra(
+                            flowDeleteRollbackDeactivationRecords,
+                            'POST_DELETE'
+                        );
                         operation = await persistFailed(operation, {
                             errorCode:
                                 ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
                             errorMessage:
                                 error.message ||
-                                'Delete rollback post-delete inventory verification failed.'
+                                'Delete rollback post-delete inventory verification failed.',
+                            ...deactivationExtra
                         });
                         outcome = withOperation(
                             block(
@@ -1931,7 +2053,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                                     drift,
                                     checkOnlyDeployment,
                                     deploymentExecution,
-                                    generatedWorkspace
+                                    generatedWorkspace,
+                                    ...deactivationExtra
                                 }
                             ),
                             operation
@@ -1960,12 +2083,17 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                                 }
                             );
                     } catch (error) {
+                        const deactivationExtra = buildFlowDeactivationFailureExtra(
+                            flowDeleteRollbackDeactivationRecords,
+                            'POST_DELETE'
+                        );
                         operation = await persistFailed(operation, {
                             errorCode:
                                 ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
                             errorMessage:
                                 error.message ||
-                                'Delete rollback post-delete Flow version verification failed.'
+                                'Delete rollback post-delete Flow version verification failed.',
+                            ...deactivationExtra
                         });
                         outcome = withOperation(
                             block(
@@ -1977,7 +2105,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                                     drift,
                                     checkOnlyDeployment,
                                     deploymentExecution,
-                                    generatedWorkspace
+                                    generatedWorkspace,
+                                    ...deactivationExtra
                                 }
                             ),
                             operation
@@ -1992,12 +2121,17 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                     }
 
                     if (stillPresent.length) {
+                        const deactivationExtra = buildFlowDeactivationFailureExtra(
+                            flowDeleteRollbackDeactivationRecords,
+                            'POST_DELETE'
+                        );
                         operation = await persistFailed(operation, {
                             errorCode:
                                 ROLLBACK_CODE.POST_DELETE_VERIFICATION_FAILED,
                             errorMessage:
                                 'Delete rollback completed deployment but destination member still exists.',
-                            driftSummary: `stillPresent=${stillPresent.length}`
+                            driftSummary: `stillPresent=${stillPresent.length}`,
+                            ...deactivationExtra
                         });
                         outcome = withOperation(
                             block(
@@ -2011,7 +2145,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                                     generatedWorkspace,
                                     stillPresent: stillPresent.map((member) =>
                                         memberKey(member)
-                                    )
+                                    ),
+                                    ...deactivationExtra
                                 }
                             ),
                             operation
