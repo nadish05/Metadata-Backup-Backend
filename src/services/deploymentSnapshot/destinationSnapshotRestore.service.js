@@ -1899,6 +1899,11 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         error,
                         executionStarted
                     );
+                const deactivationExtra =
+                    buildFlowDeleteRollbackPartialDeactivationOutcome(
+                        flowDeleteRollbackDeactivationRecords,
+                        'EXECUTION'
+                    );
 
                 try {
                     operation = await operationService.markTerminal(
@@ -1906,7 +1911,8 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         {
                             ...classified,
                             resultCode: classified.errorCode,
-                            resultMessage: classified.errorMessage
+                            resultMessage: classified.errorMessage,
+                            ...deactivationExtra
                         }
                     );
                 } catch (persistError) {
@@ -1937,11 +1943,6 @@ function createDestinationSnapshotRestoreService(dependencies = {}) {
                         ? ROLLBACK_CODE.RESULT_UNKNOWN
                         : ROLLBACK_CODE.EXECUTION_FAILED;
 
-                const deactivationExtra =
-                    buildFlowDeleteRollbackPartialDeactivationOutcome(
-                        flowDeleteRollbackDeactivationRecords,
-                        'EXECUTION'
-                    );
                 outcome = withOperation(
                     block(code, classified.errorMessage, {
                         snapshotId,

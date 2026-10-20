@@ -522,6 +522,84 @@ async function main() {
     );
 
     await runTest(
+        'integration 4b — deactivation succeeds but destructive execute throws',
+        async () => {
+            const { capture, sealed, afterBytes } = await sealFlowDeleteSnapshot([
+                {
+                    metadataType: 'Flow',
+                    metadataName: 'Check_Amount-4',
+                    changeClass: CHANGE_CLASS.NEW
+                }
+            ]);
+
+            const { service, operationStore } = buildRestoreHarness({
+                capture,
+                sealed,
+                afterBytes,
+                discoverFlowVersions: async () => discoveryInactiveV4(),
+                ensureFlowDeleteRollbackActiveDeactivation: async () => ({
+                    performed: true,
+                    deactivated: true,
+                    deactivationVerified: true,
+                    deactivationDeploySucceeded: true,
+                    flowDefinitionDeveloperName: 'Check_Amount',
+                    priorActiveVersionId: 'FLOW_V4_ID',
+                    targetFlowVersionId: 'FLOW_V4_ID',
+                    targetFlowVersionNumber: 4
+                }),
+                runCheckOnlyDeployment: async () => ({
+                    success: true,
+                    status: 'Succeeded'
+                }),
+                runDeploymentExecution: async (args) => {
+                    if (
+                        workspaceMetadataTypes(args.generatedWorkspace).includes(
+                            'FlowDefinition'
+                        )
+                    ) {
+                        return {
+                            success: true,
+                            status: 'Succeeded',
+                            deploymentId: '0Af_DEACT'
+                        };
+                    }
+
+                    throw new Error('destructive execute threw');
+                }
+            });
+
+            const result = await service.runRollback({
+                snapshotId: sealed.snapshotId,
+                refreshToken: 'refresh',
+                instanceUrl: 'https://dest.example.com',
+                accessToken: 'token'
+            });
+
+            assert.strictEqual(result.success, false);
+            assert.strictEqual(result.flowDeleteRollbackPartialDeactivation, true);
+            assert.strictEqual(result.flowDeleteRollbackFailureStage, 'EXECUTION');
+
+            const operations = await operationStore.findByDestinationAndSnapshot(
+                '00D000000000001',
+                sealed.snapshotId
+            );
+            const terminal = operations.find((row) => row.status === 'FAILED');
+            assert.ok(terminal);
+            assert.notStrictEqual(terminal.success, true);
+            assert.strictEqual(
+                terminal.flowDeleteRollbackPartialDeactivation,
+                true
+            );
+            assert.strictEqual(terminal.flowDeleteRollbackFailureStage, 'EXECUTION');
+            assert.ok(Array.isArray(terminal.flowDeleteRollbackDeactivation));
+            assert.strictEqual(
+                terminal.flowDeleteRollbackDeactivation[0].flowDefinitionDeveloperName,
+                'Check_Amount'
+            );
+        }
+    );
+
+    await runTest(
         'integration 5 — inactive NEW Flow DELETE skips deactivation deploy',
         async () => {
             const { capture, sealed, afterBytes } = await sealFlowDeleteSnapshot([
