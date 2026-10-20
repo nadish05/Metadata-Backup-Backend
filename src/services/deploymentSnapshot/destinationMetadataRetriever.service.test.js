@@ -690,6 +690,79 @@ function buildRetrieverHarness(workRoot, execAsyncImpl) {
         );
     });
 
+    await runTest('buildExpectedMemberSourcePaths resolves Layout logical path', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'Layout',
+            'Account-Gym Member Layout'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/layouts/Account-Gym Member Layout.layout-meta.xml'
+        });
+    });
+
+    await runTest('buildExpectedMemberSourcePaths preserves Layout member spaces', () => {
+        const paths = buildExpectedMemberSourcePaths(
+            'Layout',
+            'Account-Account Layout'
+        );
+
+        assert.deepStrictEqual(paths, {
+            logical:
+                'force-app/main/default/layouts/Account-Account Layout.layout-meta.xml'
+        });
+    });
+
+    await runTest('selects only the Layout logical file', () => {
+        const files = selectLogicalMemberFiles(
+            [
+                {
+                    relativePath:
+                        'force-app/main/default/layouts/Account-Gym Member Layout.layout-meta.xml',
+                    bytes: Buffer.from('layout')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/layouts/Contact-Contact Layout.layout-meta.xml',
+                    bytes: Buffer.from('other')
+                },
+                {
+                    relativePath:
+                        'force-app/main/default/objects/Account/Account.object-meta.xml',
+                    bytes: Buffer.from('object')
+                }
+            ],
+            'Layout',
+            'Account-Gym Member Layout'
+        );
+
+        assert.deepStrictEqual(
+            files.map((file) => file.relativePath),
+            [
+                'force-app/main/default/layouts/Account-Gym Member Layout.layout-meta.xml'
+            ]
+        );
+    });
+
+    await runTest('fails closed when Layout logical file is missing', () => {
+        assert.throws(
+            () =>
+                selectLogicalMemberFiles(
+                    [
+                        {
+                            relativePath:
+                                'force-app/main/default/layouts/Contact-Contact Layout.layout-meta.xml',
+                            bytes: Buffer.from('other')
+                        }
+                    ],
+                    'Layout',
+                    'Account-Gym Member Layout'
+                ),
+            /did not return the logical file/
+        );
+    });
+
     await runTest('buildExpectedMemberSourcePaths resolves NamedCredential logical path', () => {
         const paths = buildExpectedMemberSourcePaths(
             'NamedCredential',

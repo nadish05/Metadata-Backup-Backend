@@ -25,6 +25,7 @@ const {
     applyCanonicalFlowSnapshotPackPaths,
     buildCanonicalFlowArtifactRelativePath
 } = require('../flowMetadata/flowMemberIdentity.service');
+const { parseLayoutMemberName } = require('../../utils/layoutMemberName.util');
 const {
     discoverFlowVersions,
     findExactFlowVersion
@@ -329,6 +330,22 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'Layout' && metadataName) {
+        const memberName = String(metadataName).trim();
+
+        if (!memberName) {
+            return null;
+        }
+
+        if (!parseLayoutMemberName(memberName)) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/layouts/${memberName}.layout-meta.xml`
+        };
+    }
+
     if (metadataType === 'NamedCredential' && metadataName) {
         const developerName = String(metadataName).trim();
 
@@ -545,6 +562,7 @@ function selectLogicalMemberFiles(
             'RecordType',
             'BusinessProcess',
             'CompactLayout',
+            'Layout',
             'NamedCredential',
             'ExternalCredential',
             'CustomMetadata',

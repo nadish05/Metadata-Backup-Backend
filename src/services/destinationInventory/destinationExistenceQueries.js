@@ -11,6 +11,7 @@
 const {
     parseVersionQualifiedFlowMember
 } = require('../flowMetadata/flowMemberIdentity.service');
+const { parseLayoutMemberName } = require('../../utils/layoutMemberName.util');
 
 function escapeSoql(value) {
     return String(value).replace(/'/g, "\\'");
@@ -29,6 +30,7 @@ function usesToolingApi(type) {
         type === 'Flow' ||
         type === 'StandardValueSet' ||
         type === 'CompactLayout' ||
+        type === 'Layout' ||
         type === 'ExternalCredential'
     );
 }
@@ -271,6 +273,19 @@ function buildValidationRuleSoql(name) {
     );
 }
 
+function buildLayoutSoql(name) {
+    const memberName = String(name || '').trim();
+
+    if (!memberName || !parseLayoutMemberName(memberName)) {
+        return null;
+    }
+
+    return (
+        'SELECT Id FROM Layout ' +
+        `WHERE FullName = '${escapeSoql(memberName)}' LIMIT 1`
+    );
+}
+
 function buildCompactLayoutSoql(name) {
     const separator = String(name || '').indexOf('.');
 
@@ -427,6 +442,9 @@ function buildExistenceQuery(type, name) {
         case 'CompactLayout':
             return buildCompactLayoutSoql(name);
 
+        case 'Layout':
+            return buildLayoutSoql(name);
+
         case 'ValidationRule':
             return buildValidationRuleSoql(name);
 
@@ -518,6 +536,7 @@ module.exports = {
     buildValidationRuleSoql,
     buildListViewSoql,
     buildCompactLayoutSoql,
+    buildLayoutSoql,
     buildRecordTypeSoql,
     buildBusinessProcessSoql,
     buildStandardValueSetSoql,

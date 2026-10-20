@@ -149,6 +149,36 @@ function runTest(name, fn) {
     );
 
     await runTest(
+        'Layout expected-after derives logical path when filePath is null',
+        async () => {
+            const root = fs.mkdtempSync(
+                path.join(os.tmpdir(), 'p0r51-after-layout-')
+            );
+            const rel =
+                'force-app/main/default/layouts/Account-Gym Member Layout.layout-meta.xml';
+            const xml = Buffer.from('<Layout/>');
+
+            await fs.promises.mkdir(path.dirname(path.join(root, rel)), {
+                recursive: true
+            });
+            await fs.promises.writeFile(path.join(root, rel), xml);
+
+            const result = await collectExpectedAfterArtifact({
+                workspacePath: root,
+                member: {
+                    metadataType: 'Layout',
+                    metadataName: 'Account-Gym Member Layout',
+                    filePath: null
+                }
+            });
+
+            assert.strictEqual(result.files[0].relativePath, rel);
+            assert.ok(result.expectedAfterHash);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    );
+
+    await runTest(
         'NamedCredential expected-after derives logical path when filePath is null',
         async () => {
             const root = fs.mkdtempSync(

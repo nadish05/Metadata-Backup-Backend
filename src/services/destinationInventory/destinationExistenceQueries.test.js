@@ -8,6 +8,7 @@ const {
     buildValidationRuleSoql,
     buildBusinessProcessSoql,
     buildCompactLayoutSoql,
+    buildLayoutSoql,
     buildStandardValueSetSoql,
     buildCustomMetadataSoql,
     buildCustomMetadataEntityDefinitionSoql,
@@ -208,6 +209,111 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         assert.ok(soql.includes("DeveloperName = 'Opportunity_Highlights'"));
         assert.ok(soql.includes("SobjectType = 'Opportunity'"));
         assert.ok(soql.includes('FROM CompactLayout'));
+    });
+
+    await runTest('buildLayoutSoql targets Tooling Layout FullName', () => {
+        const soql = buildLayoutSoql('Account-Gym Member Layout');
+
+        assert.ok(soql.includes('FROM Layout'));
+        assert.ok(soql.includes("FullName = 'Account-Gym Member Layout'"));
+        assert.ok(soql.includes('LIMIT 1'));
+    });
+
+    await runTest('buildLayoutSoql preserves spaces and hyphens in member name', () => {
+        const soql = buildLayoutSoql('Account-Account Layout');
+
+        assert.ok(soql.includes("FullName = 'Account-Account Layout'"));
+    });
+
+    await runTest('buildLayoutSoql returns null for malformed member names', () => {
+        assert.strictEqual(buildLayoutSoql('NoHyphen'), null);
+        assert.strictEqual(buildLayoutSoql('-Bad'), null);
+        assert.strictEqual(buildLayoutSoql(''), null);
+    });
+
+    await runTest('buildLayoutSoql escapes SOQL quotes', () => {
+        const soql = buildLayoutSoql("Account-Opp's Layout");
+
+        assert.ok(soql.includes("FullName = 'Account-Opp\\'s Layout'"));
+    });
+
+    await runTest('buildExistenceQuery wires Layout to Tooling SOQL', () => {
+        assert.strictEqual(usesToolingApi('Layout'), true);
+        const soql = buildExistenceQuery('Layout', 'Account-Gym Member Layout');
+
+        assert.ok(soql.includes('FROM Layout'));
+        assert.ok(soql.includes("FullName = 'Account-Gym Member Layout'"));
+    });
+
+    await runTest('inventory reports EXISTS when Layout query returns rows', async () => {
+        const stub = stubToolingQuery({ totalSize: 1, records: [{ Id: '0' }] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: 'Account-Gym Member Layout'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('Layout:Account-Gym Member Layout').state,
+                DESTINATION_STATE.EXISTS
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports MISSING when Layout query is empty', async () => {
+        const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: 'Account-Gym Member Layout'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('Layout:Account-Gym Member Layout').state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when Layout query fails', async () => {
+        const stub = stubToolingQuery({ fail: true });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'Layout',
+                        metadataName: 'Account-Gym Member Layout'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            const entry = result.inventory.get('Layout:Account-Gym Member Layout');
+            assert.strictEqual(entry.state, DESTINATION_STATE.UNKNOWN);
+            assert.notStrictEqual(entry.state, DESTINATION_STATE.MISSING);
+        } finally {
+            stub.restore();
+        }
     });
 
     await runTest('inventory reports EXISTS when CompactLayout query returns rows', async () => {

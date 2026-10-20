@@ -95,6 +95,7 @@ function resolveWorkspaceRelativeFilePath(member) {
 
     if (
         (metadataType === 'CompactLayout' ||
+            metadataType === 'Layout' ||
             metadataType === 'NamedCredential' ||
             metadataType === 'ExternalCredential' ||
             metadataType === 'CustomMetadata' ||
