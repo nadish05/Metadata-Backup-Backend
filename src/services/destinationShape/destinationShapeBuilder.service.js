@@ -112,7 +112,7 @@ async function getLatestApiVersion(instanceUrl, accessToken) {
 /**
  * Describe one sObject (one HTTP call per parent object).
  *
- * @returns {Promise<{ fieldsByName: Map<string, object>, warning: string|null }>}
+ * @returns {Promise<{ fieldsByName: Map<string, object>, childRelationships: Array<object>, warning: string|null }>}
  */
 async function describeSObject({
     instanceUrl,
@@ -121,6 +121,7 @@ async function describeSObject({
     objectApiName
 }) {
     const fieldsByName = new Map();
+    let childRelationships = [];
 
     try {
         const response = await axios.get(
@@ -145,10 +146,15 @@ async function describeSObject({
             }
         }
 
-        return { fieldsByName, warning: null };
+        childRelationships = Array.isArray(response.data?.childRelationships)
+            ? response.data.childRelationships
+            : [];
+
+        return { fieldsByName, childRelationships, warning: null };
     } catch (error) {
         return {
             fieldsByName,
+            childRelationships: [],
             warning:
                 error?.response?.data?.[0]?.message ||
                 error?.message ||
@@ -366,6 +372,8 @@ async function buildDestinationShapeIndex({
 module.exports = {
     SUPPORTED_SHAPE_TYPES,
     buildDestinationShapeIndex,
+    describeSObject,
+    getLatestApiVersion,
     mapDescribeFieldToAttributes,
     serializeDestinationShapeIndex,
     getShapeEntry,

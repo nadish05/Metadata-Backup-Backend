@@ -228,6 +228,7 @@ function logFindings(findings, summary, overallCompatibility) {
  *   discoveredReferences?: Array,
  *   resolvedDependencies?: Array,
  *   destinationStates?: Map
+ *   parentObjectRelationshipIndex?: Map
  * }} options
  */
 function analyzeDeploymentCompatibility({
@@ -235,7 +236,8 @@ function analyzeDeploymentCompatibility({
     discoveredRelationships = [],
     discoveredReferences = [],
     resolvedDependencies = [],
-    destinationStates = new Map()
+    destinationStates = new Map(),
+    parentObjectRelationshipIndex = new Map()
 } = {}) {
     logSection('Deployment Compatibility Analyzer');
 
@@ -252,7 +254,8 @@ function analyzeDeploymentCompatibility({
         discoveredReferences,
         resolvedDependencies,
         availability,
-        destinationStates
+        destinationStates,
+        parentObjectRelationshipIndex
     };
 
     const findings = [];

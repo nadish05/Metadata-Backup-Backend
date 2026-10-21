@@ -2,6 +2,11 @@ const path = require('path');
 
 const { buildGraphNodeId } = require('../graphId');
 const {
+    extractDynamicRelatedListReferences,
+    parseRelationshipNameFromRelatedListApiName,
+    resolveRelationshipDefiningField
+} = require('../graphExpansion/structuralActionOverrideRelatedList.discoverer');
+const {
     isSalesforceSystemField,
     isDeployableField
 } = require('../../../utils/salesforceSystemFields.util');
@@ -241,6 +246,74 @@ function discoverComponentReferences(flexiPageXml, sourceMetadata, depth) {
     return references;
 }
 
+async function discoverDynamicRelatedListReferences({
+    flexiPageXml,
+    sourceMetadata,
+    sobjectType,
+    depth,
+    repoFiles,
+    readRepoFile
+}) {
+    const references = [];
+    const parentObject = String(sobjectType || '').trim();
+
+    if (!parentObject) {
+        return references;
+    }
+
+    const dynamicRefs = extractDynamicRelatedListReferences(flexiPageXml);
+
+    for (const dynamicRef of dynamicRefs) {
+        const relatedListApiName = String(
+            dynamicRef?.relatedListApiName || ''
+        ).trim();
+
+        if (!relatedListApiName) {
+            continue;
+        }
+
+        let relationshipDefiningFieldQualifiedName = null;
+
+        if (readRepoFile && Array.isArray(repoFiles)) {
+            const relationshipName = parseRelationshipNameFromRelatedListApiName(
+                relatedListApiName
+            );
+
+            if (relationshipName) {
+                const resolvedField = await resolveRelationshipDefiningField({
+                    relationshipName,
+                    referenceTo: parentObject,
+                    repoFiles,
+                    readRepoFile
+                });
+
+                if (resolvedField?.qualifiedName) {
+                    relationshipDefiningFieldQualifiedName =
+                        resolvedField.qualifiedName;
+                }
+            }
+        }
+
+        references.push({
+            ...createReference({
+                name: relatedListApiName,
+                metadataType: 'RelatedList',
+                sourceMetadata,
+                sourceElement: 'relatedListApiName',
+                referenceType: 'FlexiPageDynamicRelatedList',
+                depth,
+                reason: 'Dynamic related list referenced by FlexiPage.',
+                deployable: false,
+                blocking: false,
+                sobjectType: parentObject
+            }),
+            relationshipDefiningFieldQualifiedName
+        });
+    }
+
+    return references;
+}
+
 function discoverRelatedListReferences(flexiPageXml, sourceMetadata, depth) {
     const references = [];
     const componentBlocks = String(flexiPageXml).matchAll(
@@ -253,7 +326,8 @@ function discoverRelatedListReferences(flexiPageXml, sourceMetadata, depth) {
 
         if (
             !componentName ||
-            !/relatedList/i.test(componentName)
+            !/relatedList/i.test(componentName) ||
+            componentName === 'lst:dynamicRelatedList'
         ) {
             continue;
         }
@@ -598,6 +672,14 @@ const flexiPageReferenceDiscoverer = {
                         flexiPageName,
                         pageDepth
                     ),
+                    ...(await discoverDynamicRelatedListReferences({
+                        flexiPageXml,
+                        sourceMetadata: flexiPageName,
+                        sobjectType,
+                        depth: pageDepth,
+                        repoFiles: normalizedRepoFiles,
+                        readRepoFile
+                    })),
                     ...discoverRelatedListReferences(
                         flexiPageXml,
                         flexiPageName,

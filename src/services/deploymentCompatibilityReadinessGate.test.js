@@ -19,6 +19,7 @@ const {
 } = require('./dependencyResolution/dependencyResolution.service');
 const { generateDeploymentPackage } = require('./deploymentPackage.service');
 const layoutReferenceDiscoverer = require('./dependencyResolution/discoverers/layoutReference.discoverer');
+const flexiPageReferenceDiscoverer = require('./dependencyResolution/discoverers/flexiPageReference.discoverer');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -94,6 +95,77 @@ function resolveReadinessFromCompatibilityFindings({
         deploymentReadiness,
         compatibilityDeploymentSkipped,
         checkOnlyDeployment
+    };
+}
+
+const MEMBER_RECORD_PAGE_PATH =
+    'force-app/main/default/flexipages/Member_Record_Page.flexipage-meta.xml';
+
+const MEMBER_RECORD_PAGE_SUBSCRIPTIONS_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<FlexiPage xmlns="http://soap.sforce.com/2006/04/metadata">
+    <sobjectType>Member__c</sobjectType>
+    <masterLabel>Member Record Page</masterLabel>
+    <type>RecordPage</type>
+    <flexiPageRegions>
+        <itemInstances>
+            <componentInstance>
+                <componentInstanceProperties>
+                    <name>relatedListApiName</name>
+                    <value>Subscriptions__r</value>
+                </componentInstanceProperties>
+                <componentName>lst:dynamicRelatedList</componentName>
+            </componentInstance>
+        </itemInstances>
+    </flexiPageRegions>
+</FlexiPage>`;
+
+async function simulateFlexiPageRelatedListScenario({
+    flexiPageXml,
+    parentObjectRelationshipIndex,
+    destinationStates = new Map()
+}) {
+    const discovery = await flexiPageReferenceDiscoverer.discover({
+        selectedMetadata: [
+            {
+                metadataType: 'FlexiPage',
+                metadataName: 'Member_Record_Page',
+                filePath: MEMBER_RECORD_PAGE_PATH
+            }
+        ],
+        repoFiles: [MEMBER_RECORD_PAGE_PATH],
+        readRepoFile: async () => flexiPageXml,
+        depth: 1
+    });
+
+    const selectedMetadata = [
+        {
+            metadataType: 'FlexiPage',
+            metadataName: 'Member_Record_Page',
+            filePath: MEMBER_RECORD_PAGE_PATH
+        }
+    ];
+
+    const compatibility = analyzeDeploymentCompatibility({
+        selectedMetadata,
+        discoveredReferences: discovery.references,
+        resolvedDependencies: [],
+        destinationStates,
+        parentObjectRelationshipIndex
+    });
+
+    const generatedDeploymentPackage = generateDeploymentPackage({
+        selectedMetadata,
+        requiredDependencies: []
+    });
+
+    const readiness = resolveReadinessFromCompatibilityFindings({
+        compatibilityFindings: compatibility.findings,
+        generatedDeploymentPackage
+    });
+
+    return {
+        ...readiness,
+        compatibility
     };
 }
 
@@ -424,6 +496,43 @@ async function main() {
             assert.strictEqual(layoutBlocker, undefined);
             assert.strictEqual(result.deploymentReadiness.readyForDeployment, true);
             assert.strictEqual(result.compatibilityDeploymentSkipped, false);
+        }
+    );
+
+    await runTest(
+        'TEST 7: primary FlexiPage missing related list BLOCK blocks check-only',
+        async () => {
+            const result = await simulateFlexiPageRelatedListScenario({
+                flexiPageXml: MEMBER_RECORD_PAGE_SUBSCRIPTIONS_XML,
+                parentObjectRelationshipIndex: new Map([
+                    [
+                        'Member__c',
+                        {
+                            queried: true,
+                            ok: true,
+                            warning: null,
+                            childRelationships: [
+                                { relationshipName: 'Sessions' }
+                            ]
+                        }
+                    ]
+                ])
+            });
+
+            const relatedListBlocker = result.analyzerBlockingComponents.find(
+                (item) =>
+                    item.metadataType === 'FlexiPageRelatedList' &&
+                    item.metadataName === 'Member__c.Subscriptions__r'
+            );
+
+            assert.ok(relatedListBlocker);
+            assert.strictEqual(
+                relatedListBlocker.category,
+                'flexiPage.relatedListRelationship'
+            );
+            assert.strictEqual(result.deploymentReadiness.readyForDeployment, false);
+            assert.strictEqual(result.compatibilityDeploymentSkipped, true);
+            assert.strictEqual(result.checkOnlyDeployment.executed, false);
         }
     );
 }

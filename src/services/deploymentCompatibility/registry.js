@@ -4,6 +4,7 @@
  */
 
 const flexiPageFieldReferenceRule = require('./rules/flexiPageFieldReference.rule');
+const flexiPageRelatedListRelationshipRule = require('./rules/flexiPageRelatedListRelationship.rule');
 const layoutFieldReferenceRule = require('./rules/layoutFieldReference.rule');
 const layoutWebLinkReferenceRule = require('./rules/layoutWebLinkReference.rule');
 const layoutParentObjectRule = require('./rules/layoutParentObject.rule');
@@ -17,6 +18,7 @@ function getRegisteredCompatibilityRules() {
     return [
         artifactExistsRule,
         flexiPageFieldReferenceRule,
+        flexiPageRelatedListRelationshipRule,
         layoutFieldReferenceRule,
         layoutWebLinkReferenceRule,
         layoutParentObjectRule,

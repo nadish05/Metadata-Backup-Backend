@@ -51,6 +51,9 @@ const {
 const dependencyExplorerService = require('./dependencyResolution/dependencyExplorer.service');
 const deploymentCompatibilityAnalyzerService = require('./deploymentCompatibility/deploymentCompatibilityAnalyzer.service');
 const {
+    buildFlexiPageParentObjectRelationshipIndex
+} = require('./deploymentCompatibility/flexiPageParentObjectRelationshipIndex.service');
+const {
     extractDeploymentSelections
 } = require('./deploymentPlanner/deploymentSelections.foundation');
 const deploymentPlannerService = require('./deploymentPlanner/deploymentPlanner.service');
@@ -1032,6 +1035,21 @@ async function validateDeployment({
         // Keep resolved decisions unchanged if planner application fails.
     }
 
+    let parentObjectRelationshipIndex = new Map();
+
+    try {
+        parentObjectRelationshipIndex =
+            await buildFlexiPageParentObjectRelationshipIndex({
+                discoveredReferences,
+                accessToken: accessTokenForDownstream,
+                instanceUrl: resolvedInstanceUrl
+            });
+    } catch (parentRelationshipIndexError) {
+        console.error('FLEXIPAGE PARENT RELATIONSHIP INDEX ERROR');
+        console.error(parentRelationshipIndexError);
+        parentObjectRelationshipIndex = new Map();
+    }
+
     try {
         deploymentCompatibility =
             deploymentCompatibilityAnalyzerService.analyzeDeploymentCompatibility(
@@ -1043,7 +1061,8 @@ async function validateDeployment({
                         resolvedRequiredDependencies,
                         destinationStatesForAnalyzer
                     ),
-                    destinationStates: destinationStatesForAnalyzer
+                    destinationStates: destinationStatesForAnalyzer,
+                    parentObjectRelationshipIndex
                 }
             );
         compatibilitySummary =
