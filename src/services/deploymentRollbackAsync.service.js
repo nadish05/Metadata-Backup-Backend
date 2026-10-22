@@ -10,8 +10,10 @@
 const deploymentRollbackService = require('./deploymentRollback.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
 const {
-    getSalesforceInlineRollbackOperationStore
+    getSharedRollbackOperationStore,
+    UNAVAILABLE_MESSAGE
 } = require('./deploymentSnapshot/rollbackOperation.resolver');
+const { RollbackOperationPersistenceError } = require('./deploymentSnapshot/rollbackOperation.errors');
 const {
     createRollbackOperationService,
     evaluateExistingOperations
@@ -32,9 +34,9 @@ function text(value) {
     return value === undefined || value === null ? '' : String(value).trim();
 }
 
-function startRejected(code, message) {
+function startRejected(code, message, httpStatus = 400) {
     return {
-        httpStatus: 400,
+        httpStatus,
         body: {
             success: false,
             accepted: false,
@@ -46,14 +48,17 @@ function startRejected(code, message) {
     };
 }
 
+function getDefaultRollbackOperationStore() {
+    return getSharedRollbackOperationStore();
+}
+
 function createDeploymentRollbackAsyncService(dependencies = {}) {
     const executeRollback =
         dependencies.executeRollback ||
         deploymentRollbackService.executeRollback;
     const historyService =
         dependencies.historyService || deploymentHistoryService;
-    const resolveStore =
-        dependencies.getStore || getSalesforceInlineRollbackOperationStore;
+    const resolveStore = dependencies.getStore || getDefaultRollbackOperationStore;
     const operationService =
         dependencies.rollbackOperationService ||
         createRollbackOperationService({ getStore: resolveStore });
@@ -296,12 +301,31 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
             validated.destinationOrgId,
             validated.snapshotId
         );
-        const reservation = await reserveOperation({
-            request,
-            destinationOrgId: validated.destinationOrgId,
-            snapshotId: validated.snapshotId,
-            scopeKey
-        });
+
+        let reservation;
+
+        try {
+            reservation = await reserveOperation({
+                request,
+                destinationOrgId: validated.destinationOrgId,
+                snapshotId: validated.snapshotId,
+                scopeKey
+            });
+        } catch (error) {
+            const persistenceFailure =
+                error instanceof RollbackOperationPersistenceError ||
+                error?.code === 'ROLLBACK_OPERATION_PERSISTENCE';
+
+            if (persistenceFailure) {
+                return startRejected(
+                    ROLLBACK_CODE.OPERATION_STORE_UNAVAILABLE,
+                    error.message || UNAVAILABLE_MESSAGE,
+                    503
+                );
+            }
+
+            throw error;
+        }
 
         if (!reservation.launch) {
             const code =
@@ -393,6 +417,7 @@ const defaultService = createDeploymentRollbackAsyncService();
 module.exports = {
     ASYNC_ERROR_CODE,
     createDeploymentRollbackAsyncService,
+    getDefaultRollbackOperationStore,
     startRollback: defaultService.startRollback,
     getRollbackStatus: defaultService.getRollbackStatus
 };

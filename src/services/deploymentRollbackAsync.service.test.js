@@ -1,9 +1,13 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
-    createDeploymentRollbackAsyncService
+    createDeploymentRollbackAsyncService,
+    getDefaultRollbackOperationStore
 } = require('./deploymentRollbackAsync.service');
 const {
     createRollbackOperationService
@@ -17,10 +21,15 @@ const {
 const {
     createDeploymentRollbackService
 } = require('./deploymentRollback.service');
+const { ROLLBACK_CODE } = require('./deploymentSnapshot/snapshotRestore.errors');
 const {
-    getSalesforceInlineRollbackOperationStore,
-    resetSalesforceInlineRollbackOperationStoreForTests
+    getSharedRollbackOperationStore,
+    resetSharedRollbackOperationStoreForTests
 } = require('./deploymentSnapshot/rollbackOperation.resolver');
+const {
+    STORAGE_MODE_ENV,
+    DURABLE_ROOT_ENV
+} = require('./deploymentSnapshot/snapshotStorage.config');
 
 function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,46 +59,116 @@ async function waitForRelease() {
 
 let releaseExecution;
 
+function restoreEnv(previous) {
+    Object.entries(previous).forEach(([key, value]) => {
+        if (value === undefined) {
+            delete process.env[key];
+        } else {
+            process.env[key] = value;
+        }
+    });
+    resetSharedRollbackOperationStoreForTests();
+}
+
 async function main() {
-    resetSalesforceInlineRollbackOperationStoreForTests();
-    const productionStore = getSalesforceInlineRollbackOperationStore();
-    let productionStartStore = null;
-    const productionService = createDeploymentRollbackAsyncService({
+    assert.strictEqual(
+        getDefaultRollbackOperationStore(),
+        getSharedRollbackOperationStore(),
+        'default async store must be the shared rollback operation store'
+    );
+
+    const previousEnv = {
+        [STORAGE_MODE_ENV]: process.env[STORAGE_MODE_ENV],
+        [DURABLE_ROOT_ENV]: process.env[DURABLE_ROOT_ENV]
+    };
+    delete process.env[STORAGE_MODE_ENV];
+    delete process.env[DURABLE_ROOT_ENV];
+    resetSharedRollbackOperationStoreForTests();
+
+    const unavailableStart = await createDeploymentRollbackAsyncService().startRollback(
+        {
+            historyId: 'history_unconfigured_store',
+            refreshToken: 'token',
+            instanceUrl: 'https://example.my.salesforce.com',
+            snapshotId: 'snapshot_unconfigured',
+            orgId: '00DUNCONFIGURED'
+        }
+    );
+    assert.strictEqual(unavailableStart.httpStatus, 503);
+    assert.strictEqual(
+        unavailableStart.body.code,
+        ROLLBACK_CODE.OPERATION_STORE_UNAVAILABLE
+    );
+    assert.match(
+        unavailableStart.body.message,
+        /Durable rollback operation storage is not configured/i
+    );
+
+    const durableRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'rollback-async-shared-store-')
+    );
+    process.env[STORAGE_MODE_ENV] = 'DURABLE';
+    process.env[DURABLE_ROOT_ENV] = durableRoot;
+    resetSharedRollbackOperationStoreForTests();
+
+    const sharedStore = getSharedRollbackOperationStore();
+    let injectedStoreResolver = null;
+    const sharedDefaultService = createDeploymentRollbackAsyncService({
         executeRollback: async (args) => {
-            productionStartStore = args.rollbackOperationStore;
+            injectedStoreResolver = args.rollbackOperationStore;
             return {
-                success: true,
-                operationId: args.operationId,
-                operationStatus: ROLLBACK_OPERATION_STATUS.SUCCEEDED
+                body: {
+                    success: true,
+                    operationId: args.operationId,
+                    operationStatus: ROLLBACK_OPERATION_STATUS.SUCCEEDED,
+                    code: 'ROLLBACK_SUCCEEDED',
+                    message: 'shared store rollback complete'
+                }
             };
         }
     });
-    const productionStart = await productionService.startRollback({
-        historyId: 'history_production_default',
+    const sharedStart = await sharedDefaultService.startRollback({
+        historyId: 'history_shared_default',
         refreshToken: 'token',
         instanceUrl: 'https://example.my.salesforce.com',
-        snapshotId: 'snapshot_production_default',
-        orgId: '00DPRODUCTION'
+        snapshotId: 'snapshot_shared_default',
+        orgId: '00DSHARED'
     });
-    assert.strictEqual(productionStart.success, true);
+    assert.strictEqual(sharedStart.success, true);
     assert.strictEqual(
-        productionStartStore,
-        productionStore,
-        'production async transport must inject the inline singleton'
+        sharedStart.status,
+        ROLLBACK_OPERATION_STATUS.IN_PROGRESS
     );
-    const productionStatus = await waitForStatus(
-        productionService,
-        productionStart.operationId,
+    assert.strictEqual(injectedStoreResolver(), sharedStore);
+
+    const sharedCompleted = await waitForStatus(
+        sharedDefaultService,
+        sharedStart.operationId,
         ROLLBACK_OPERATION_STATUS.SUCCEEDED
     );
     assert.strictEqual(
-        productionStatus.operationId,
-        productionStart.operationId
+        sharedCompleted.operationId,
+        sharedStart.operationId
     );
-    const unknownStatus = await productionService.getRollbackStatus(
-        'rbo-does-not-exist'
+    assert.strictEqual(sharedCompleted.resultCode, 'ROLLBACK_SUCCEEDED');
+
+    const persistedShared = await sharedStore.findByOperationId(
+        sharedStart.operationId
     );
-    assert.strictEqual(unknownStatus.found, false);
+    assert.strictEqual(
+        persistedShared.status,
+        ROLLBACK_OPERATION_STATUS.SUCCEEDED
+    );
+    assert.strictEqual(persistedShared.destinationOrgId, '00DSHARED');
+    assert.strictEqual(persistedShared.snapshotId, 'snapshot_shared_default');
+    assert.ok(persistedShared.completedAt);
+    assert.strictEqual(persistedShared.resultCode, 'ROLLBACK_SUCCEEDED');
+    assert.strictEqual(
+        persistedShared.resultMessage,
+        'shared store rollback complete'
+    );
+
+    restoreEnv(previousEnv);
 
     const store = createMemoryRollbackOperationStore();
     const operationService = createRollbackOperationService({
@@ -304,6 +383,12 @@ async function main() {
     });
     assert.strictEqual(syncArgs[0].operationId, undefined);
     assert.strictEqual(syncArgs[0].rollbackOperationStore, undefined);
+
+    try {
+        fs.rmSync(durableRoot, { recursive: true, force: true });
+    } catch (error) {
+        void error;
+    }
 }
 
 main()
