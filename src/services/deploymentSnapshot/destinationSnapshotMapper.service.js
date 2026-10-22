@@ -20,6 +20,7 @@ const SNAPSHOT_CAPTURE_ALLOWLIST = Object.freeze([
     'Layout',
     'NamedCredential',
     'ExternalCredential',
+    'PermissionSet',
     'StandardValueSet',
     'Flow'
 ]);

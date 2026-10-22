@@ -98,6 +98,7 @@ function resolveWorkspaceRelativeFilePath(member) {
             metadataType === 'Layout' ||
             metadataType === 'NamedCredential' ||
             metadataType === 'ExternalCredential' ||
+            metadataType === 'PermissionSet' ||
             metadataType === 'CustomMetadata' ||
             metadataType === 'Flow') &&
         metadataName

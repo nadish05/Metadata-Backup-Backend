@@ -358,6 +358,18 @@ function buildExpectedMemberSourcePaths(metadataType, metadataName) {
         };
     }
 
+    if (metadataType === 'PermissionSet' && metadataName) {
+        const apiName = String(metadataName).trim();
+
+        if (!apiName) {
+            return null;
+        }
+
+        return {
+            logical: `force-app/main/default/permissionsets/${apiName}.permissionset-meta.xml`
+        };
+    }
+
     if (metadataType === 'ExternalCredential' && metadataName) {
         const developerName = String(metadataName).trim();
 
@@ -565,6 +577,7 @@ function selectLogicalMemberFiles(
             'Layout',
             'NamedCredential',
             'ExternalCredential',
+            'PermissionSet',
             'CustomMetadata',
             'StandardValueSet',
             'Flow'

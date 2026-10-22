@@ -773,6 +773,142 @@ function stubToolingQuery({ totalSize, records = [], fail = false }) {
         }
     });
 
+    await runTest('buildExistenceQuery wires PermissionSet to REST SOQL', () => {
+        assert.strictEqual(usesToolingApi('PermissionSet'), false);
+        const soql = buildExistenceQuery('PermissionSet', 'Subscription_Access');
+
+        assert.ok(soql.includes("Name = 'Subscription_Access'"));
+        assert.ok(soql.includes('FROM PermissionSet'));
+        assert.ok(soql.includes('IsOwnedByProfile = false'));
+        assert.ok(soql.includes('LIMIT 1'));
+    });
+
+    await runTest('buildExistenceQuery escapes PermissionSet Name in SOQL', () => {
+        const soql = buildExistenceQuery('PermissionSet', "Sub's_Access");
+
+        assert.ok(soql.includes("Name = 'Sub\\'s_Access'"));
+        assert.ok(soql.includes('FROM PermissionSet'));
+    });
+
+    await runTest('inventory reports EXISTS when PermissionSet query returns rows', async () => {
+        const stub = stubToolingQuery({
+            totalSize: 1,
+            records: [{ Id: '0', Name: 'Subscription_Access' }]
+        });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'PermissionSet',
+                        metadataName: 'Subscription_Access'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('PermissionSet:Subscription_Access').state,
+                DESTINATION_STATE.EXISTS
+            );
+            assert.ok(
+                stub.requestedUrls.some(
+                    (url) =>
+                        url.includes('/query') && !url.includes('/tooling/query')
+                )
+            );
+            assert.ok(
+                stub.requestedUrls.some((url) =>
+                    decodeURIComponent(url).includes(
+                        "Name = 'Subscription_Access'"
+                    )
+                )
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports MISSING when PermissionSet query is empty', async () => {
+        const stub = stubToolingQuery({ totalSize: 0, records: [] });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'PermissionSet',
+                        metadataName: 'Subscription_Access'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('PermissionSet:Subscription_Access').state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when PermissionSet query fails', async () => {
+        const stub = stubToolingQuery({ fail: true });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'PermissionSet',
+                        metadataName: 'Subscription_Access'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            assert.strictEqual(
+                result.inventory.get('PermissionSet:Subscription_Access').state,
+                DESTINATION_STATE.UNKNOWN
+            );
+            assert.notStrictEqual(
+                result.inventory.get('PermissionSet:Subscription_Access').state,
+                DESTINATION_STATE.MISSING
+            );
+        } finally {
+            stub.restore();
+        }
+    });
+
+    await runTest('inventory reports UNKNOWN when multiple PermissionSet rows match', async () => {
+        const stub = stubToolingQuery({
+            totalSize: 2,
+            records: [{ Id: '0', Name: 'Subscription_Access' }]
+        });
+
+        try {
+            const result = await buildDestinationInventory({
+                items: [
+                    {
+                        metadataType: 'PermissionSet',
+                        metadataName: 'Subscription_Access'
+                    }
+                ],
+                accessToken: 'token',
+                instanceUrl: 'https://example.my.salesforce.com'
+            });
+
+            const entry = result.inventory.get('PermissionSet:Subscription_Access');
+            assert.strictEqual(entry.state, DESTINATION_STATE.UNKNOWN);
+            assert.notStrictEqual(entry.state, DESTINATION_STATE.MISSING);
+            assert.ok(String(entry.warning || '').includes('ambiguous'));
+        } finally {
+            stub.restore();
+        }
+    });
+
     await runTest('buildExistenceQuery wires ExternalCredential to Tooling SOQL', () => {
         assert.strictEqual(usesToolingApi('ExternalCredential'), true);
         const soql = buildExistenceQuery(
