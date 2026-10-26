@@ -17,7 +17,9 @@ let runValidation =
 
 /**
  * Start validation in the background. Returns immediately with validationId.
- * @param {object} args Same arguments as validateDeployment(...)
+ * @param {object} args Same arguments as validateDeployment(...).
+ *   autoExcludeShapeFormulaConflicts must already be resolved on deploymentPackage
+ *   (see extractValidationRequestArgs in deployment.controller.js).
  * @returns {{ success: true, accepted: true, status: 'RUNNING', validationId: string }}
  */
 function startValidation(args) {

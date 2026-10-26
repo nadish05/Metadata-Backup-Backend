@@ -308,6 +308,9 @@ const deploymentValidationAsyncService = require('../services/deploymentValidati
 const {
     attachReservedDeploymentSelections
 } = require('../services/deploymentPlanner/deploymentSelections.foundation');
+const {
+    resolveAutoExcludeShapeFormulaConflictsPolicy
+} = require('../services/deploymentShapeFormulaExclusionPolicy.service');
 
 function extractValidationRequestArgs(req) {
     const {
@@ -362,14 +365,14 @@ function extractValidationRequestArgs(req) {
         deploymentSelections
     );
 
-    if (
-        autoExcludeShapeFormulaConflicts === true &&
-        packageForValidation &&
-        typeof packageForValidation === 'object'
-    ) {
+    if (packageForValidation && typeof packageForValidation === 'object') {
         packageForValidation = {
             ...packageForValidation,
-            autoExcludeShapeFormulaConflicts: true
+            autoExcludeShapeFormulaConflicts:
+                resolveAutoExcludeShapeFormulaConflictsPolicy({
+                    topLevel: autoExcludeShapeFormulaConflicts,
+                    deploymentPackage: packageForValidation
+                })
         };
     }
 

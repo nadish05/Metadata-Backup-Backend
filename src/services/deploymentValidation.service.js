@@ -2242,6 +2242,9 @@ async function validateDeployment({
             excludedComponents:
                 compatibilityPackageFilter?.excludedComponents || [],
             blockingComponents: compatibilityBlockingComponents,
+            compatibilityWarnings:
+                deploymentCompatibilityPlan?.compatibilityWarnings || [],
+            finalDeploymentPackage: generatedDeploymentPackage,
             autoExcludeShapeFormulaConflicts,
             shapeFormulaExclusionPolicy,
             checkOnlyDeployment,
@@ -2271,6 +2274,9 @@ async function validateDeployment({
         packageComponentCountAfterFilter,
         excludedComponents: compatibilityPackageFilter?.excludedComponents || [],
         blockingComponents: compatibilityBlockingComponents,
+        compatibilityWarnings:
+            deploymentCompatibilityPlan?.compatibilityWarnings || [],
+        finalDeploymentPackage: response.generatedDeploymentPackage,
         autoExcludeShapeFormulaConflicts,
         shapeFormulaExclusionPolicy,
         checkOnlyDeployment,

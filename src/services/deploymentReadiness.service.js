@@ -272,5 +272,7 @@ function planCompatibilityDeploymentReadiness({
 
 module.exports = {
     evaluateDeploymentReadiness,
-    planCompatibilityDeploymentReadiness
+    planCompatibilityDeploymentReadiness,
+    collectPackageComponents,
+    itemKey
 };

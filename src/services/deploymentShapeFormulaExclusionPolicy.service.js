@@ -9,6 +9,10 @@
 
 const deploymentCompatibilityFilterService = require('./deploymentCompatibilityFilter.service');
 const deploymentCompatibilityImpactService = require('./deploymentCompatibilityImpact.service');
+const {
+    collectPackageComponents,
+    itemKey: packageItemKey
+} = require('./deploymentReadiness.service');
 
 const RESIDUAL_DISCOVERY_RISK_NOTE =
     'Dependency-impact analysis only considers relationships captured in the deployment discovery graph. ' +
@@ -17,8 +21,36 @@ const RESIDUAL_DISCOVERY_RISK_NOTE =
 const SHAPE_DETECTION_SOURCE = 'SHAPE_INDEX';
 const EXCLUSION_SOURCE_SHAPE_POLICY = 'SHAPE_FORMULA_POLICY';
 
+/**
+ * Resolve autoExcludeShapeFormulaConflicts for validation.
+ *
+ * Contract:
+ * 1. If top-level request value is an explicit boolean, it wins.
+ * 2. Else if deploymentPackage value is an explicit boolean, use it.
+ * 3. Else default false (strings/numbers never enable the policy).
+ */
+function resolveAutoExcludeShapeFormulaConflictsPolicy({
+    topLevel = undefined,
+    deploymentPackage = null
+} = {}) {
+    if (typeof topLevel === 'boolean') {
+        return topLevel;
+    }
+
+    const packageLevel = deploymentPackage?.autoExcludeShapeFormulaConflicts;
+
+    if (typeof packageLevel === 'boolean') {
+        return packageLevel;
+    }
+
+    return false;
+}
+
+/** @deprecated Use resolveAutoExcludeShapeFormulaConflictsPolicy after request merge. */
 function parseAutoExcludeShapeFormulaConflictsPolicy(deploymentPackage) {
-    return deploymentPackage?.autoExcludeShapeFormulaConflicts === true;
+    return resolveAutoExcludeShapeFormulaConflictsPolicy({
+        deploymentPackage
+    });
 }
 
 function isEligibleShapeFormulaAutoExcludeWarning(warning) {
@@ -83,15 +115,42 @@ function isShapePolicyExclusion(excludedComponent) {
     );
 }
 
-function countPackageMembers(deploymentPackage) {
-    const metadata = Array.isArray(deploymentPackage?.metadata)
-        ? deploymentPackage.metadata.length
-        : 0;
-    const dependencies = Array.isArray(deploymentPackage?.dependencies)
-        ? deploymentPackage.dependencies.length
-        : 0;
+function countUniquePackageMembers(deploymentPackage) {
+    return collectPackageComponents(deploymentPackage).length;
+}
 
-    return metadata + dependencies;
+function collectUnresolvedShapeFormulaConflicts(
+    compatibilityWarnings,
+    deploymentPackage
+) {
+    const memberKeys = new Set(
+        collectPackageComponents(deploymentPackage).map((component) =>
+            packageItemKey(component.metadataType, component.metadataName)
+        )
+    );
+    const unresolved = [];
+
+    for (const warning of compatibilityWarnings || []) {
+        if (!isEligibleShapeFormulaAutoExcludeWarning(warning)) {
+            continue;
+        }
+
+        const key = packageItemKey(
+            warning.metadataType || 'CustomField',
+            warning.metadataName
+        );
+
+        if (key && memberKeys.has(key)) {
+            unresolved.push({
+                metadataType: warning.metadataType || 'CustomField',
+                metadataName: warning.metadataName,
+                message: warning.message || null,
+                detectionSource: warning.detectionSource || SHAPE_DETECTION_SOURCE
+            });
+        }
+    }
+
+    return unresolved;
 }
 
 function countSelectedComponents(deploymentPackage) {
@@ -158,7 +217,7 @@ function applyCompatibilityPackageFilterWithShapePolicy({
         )
     };
 
-    const packageComponentCountBeforeFilter = countPackageMembers(
+    const packageComponentCountBeforeFilter = countUniquePackageMembers(
         generatedDeploymentPackage
     );
 
@@ -234,7 +293,7 @@ function applyCompatibilityPackageFilterWithShapePolicy({
         shapeFormulaExclusionPolicy.applied = false;
     }
 
-    const packageComponentCountAfterFilter = countPackageMembers(
+    const packageComponentCountAfterFilter = countUniquePackageMembers(
         filterResult.deploymentPackage
     );
 
@@ -294,6 +353,8 @@ function buildDeploymentValidationScope({
     packageComponentCountAfterFilter,
     excludedComponents,
     blockingComponents,
+    compatibilityWarnings = [],
+    finalDeploymentPackage = null,
     autoExcludeShapeFormulaConflicts,
     shapeFormulaExclusionPolicy,
     checkOnlyDeployment,
@@ -305,6 +366,19 @@ function buildDeploymentValidationScope({
     const blocking = Array.isArray(blockingComponents)
         ? blockingComponents
         : [];
+    const policyState = shapeFormulaExclusionPolicy || {
+        enabled: false,
+        applied: false,
+        revertedDueToBlockingDependencies: false,
+        suppressedExclusions: [],
+        blockedDependents: [],
+        residualDiscoveryRiskNote: RESIDUAL_DISCOVERY_RISK_NOTE
+    };
+    const suppressedShapeExclusions = Array.isArray(
+        policyState.suppressedExclusions
+    )
+        ? policyState.suppressedExclusions
+        : [];
     const checkOnly = resolveCheckOnlyReporting(
         checkOnlyDeployment,
         compatibilityDeploymentSkipped
@@ -312,6 +386,13 @@ function buildDeploymentValidationScope({
     const shapeExcludedCount = excluded.filter((item) =>
         isShapePolicyExclusion(item)
     ).length;
+    const unresolvedShapeFormulaConflicts = collectUnresolvedShapeFormulaConflicts(
+        compatibilityWarnings,
+        finalDeploymentPackage || deploymentPackage
+    );
+    const hasUnresolvedShapeFormulaConflicts =
+        unresolvedShapeFormulaConflicts.length > 0;
+    const selectedCount = countSelectedComponents(deploymentPackage);
 
     const validatesReducedPackageOnly =
         excluded.length > 0 &&
@@ -319,34 +400,46 @@ function buildDeploymentValidationScope({
         packageComponentCountAfterFilter < packageComponentCountBeforeFilter;
 
     const validatesAllSelectedComponents =
-        excluded.length === 0 && checkOnly.checkOnlyExecuted === true;
+        excluded.length === 0 &&
+        !hasUnresolvedShapeFormulaConflicts &&
+        checkOnly.checkOnlyExecuted === true;
+
+    const allSelectedComponentsValidated =
+        checkOnly.checkOnlyExecuted === true &&
+        checkOnly.checkOnlySuccess === true &&
+        excluded.length === 0 &&
+        !hasUnresolvedShapeFormulaConflicts;
 
     return {
         autoExcludeShapeFormulaConflicts:
             autoExcludeShapeFormulaConflicts === true,
-        selectedComponentCount: countSelectedComponents(deploymentPackage),
+        selectedComponentCount: selectedCount,
+        selectedComponentCountAvailable: selectedCount != null,
+        selectedComponentCountSemantics:
+            'Count of deduplicated deploymentPackage.selectedMetadata entries; null when selectedMetadata is not an array.',
         packageComponentCountBeforeFilter,
         packageComponentCountAfterFilter,
+        packageComponentCountSemantics:
+            'Unique package members (metadata ∪ dependencies) using readiness itemKey deduplication.',
         excludedComponentCount: excluded.length,
         shapeExcludedComponentCount: shapeExcludedCount,
+        suppressedShapeExclusionCount: suppressedShapeExclusions.length,
         blockingComponentCount: blocking.length,
+        unresolvedShapeFormulaConflictCount:
+            unresolvedShapeFormulaConflicts.length,
+        hasUnresolvedShapeFormulaConflicts,
+        unresolvedShapeFormulaConflicts,
         ...checkOnly,
         validatesReducedPackageOnly,
-        validatesAllSelectedComponents:
-            validatesAllSelectedComponents && !validatesReducedPackageOnly,
-        allSelectedComponentsValidated:
-            checkOnly.checkOnlyExecuted === true &&
-            excluded.length === 0 &&
-            checkOnly.checkOnlySuccess === true,
-        shapeFormulaExclusionPolicy:
-            shapeFormulaExclusionPolicy || {
-                enabled: false,
-                applied: false,
-                revertedDueToBlockingDependencies: false,
-                suppressedExclusions: [],
-                blockedDependents: [],
-                residualDiscoveryRiskNote: RESIDUAL_DISCOVERY_RISK_NOTE
-            },
+        validatesReducedPackageSemantics:
+            'Check-only executed against a smaller unique package member set after final exclusions.',
+        validatesAllSelectedComponents,
+        validatesAllSelectedComponentsSemantics:
+            'True only when check-only ran, no final exclusions, and no unresolved shape-index formula conflicts remain in the final package.',
+        allSelectedComponentsValidated,
+        allSelectedComponentsValidatedSemantics:
+            'True only when check-only succeeded and every selected component was in scope without final exclusions or unresolved shape formula conflicts.',
+        shapeFormulaExclusionPolicy: policyState,
         residualDiscoveryRiskNote: RESIDUAL_DISCOVERY_RISK_NOTE
     };
 }
@@ -355,11 +448,13 @@ module.exports = {
     RESIDUAL_DISCOVERY_RISK_NOTE,
     SHAPE_DETECTION_SOURCE,
     EXCLUSION_SOURCE_SHAPE_POLICY,
+    resolveAutoExcludeShapeFormulaConflictsPolicy,
     parseAutoExcludeShapeFormulaConflictsPolicy,
     isEligibleShapeFormulaAutoExcludeWarning,
     augmentCompatibilityWarningsForShapePolicy,
     applyCompatibilityPackageFilterWithShapePolicy,
     buildDeploymentValidationScope,
     isShapePolicyExclusion,
-    countPackageMembers
+    countUniquePackageMembers,
+    collectUnresolvedShapeFormulaConflicts
 };

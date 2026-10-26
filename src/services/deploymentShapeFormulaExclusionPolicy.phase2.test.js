@@ -3,12 +3,15 @@
 const assert = require('assert');
 
 const {
+    resolveAutoExcludeShapeFormulaConflictsPolicy,
     parseAutoExcludeShapeFormulaConflictsPolicy,
     isEligibleShapeFormulaAutoExcludeWarning,
     applyCompatibilityPackageFilterWithShapePolicy,
     buildDeploymentValidationScope,
+    countUniquePackageMembers,
     RESIDUAL_DISCOVERY_RISK_NOTE
 } = require('./deploymentShapeFormulaExclusionPolicy.service');
+const packageXmlService = require('./packageXml.service');
 const {
     analyzeDeploymentCompatibilityPlan
 } = require('./deploymentCompatibility.service');
@@ -576,6 +579,310 @@ async function main() {
 
         assert.strictEqual(result.excludedComponents.length, 0);
         assert.strictEqual(result.deploymentPackage.metadata.length, 1);
+    });
+
+    await runTest('H1. Top-level false overrides package true', () => {
+        assert.strictEqual(
+            resolveAutoExcludeShapeFormulaConflictsPolicy({
+                topLevel: false,
+                deploymentPackage: { autoExcludeShapeFormulaConflicts: true }
+            }),
+            false
+        );
+    });
+
+    await runTest('H2. Package true when top-level absent', () => {
+        assert.strictEqual(
+            resolveAutoExcludeShapeFormulaConflictsPolicy({
+                deploymentPackage: { autoExcludeShapeFormulaConflicts: true }
+            }),
+            true
+        );
+    });
+
+    await runTest('H3. Truthy strings and numbers do not enable policy', () => {
+        assert.strictEqual(
+            resolveAutoExcludeShapeFormulaConflictsPolicy({
+                topLevel: 'true',
+                deploymentPackage: { autoExcludeShapeFormulaConflicts: 'true' }
+            }),
+            false
+        );
+        assert.strictEqual(
+            resolveAutoExcludeShapeFormulaConflictsPolicy({
+                topLevel: 1,
+                deploymentPackage: { autoExcludeShapeFormulaConflicts: 1 }
+            }),
+            false
+        );
+    });
+
+    await runTest('H5. Legacy exclusion remains after shape revert', async () => {
+        const legacy = 'Obj__c.Legacy__c';
+        const shapeField = 'Obj__c.Shape__c';
+        const packageObj = {
+            metadata: [
+                { metadataType: 'Flow', metadataName: 'Some_Flow' },
+                { metadataType: 'CustomField', metadataName: legacy },
+                { metadataType: 'CustomField', metadataName: shapeField }
+            ],
+            dependencies: []
+        };
+        const shapePlan = await analyzeDeploymentCompatibilityPlan({
+            generatedDeploymentPackage: packageObj,
+            sourceShapeIndex: new Map([
+                [
+                    `CustomField:${shapeField}`,
+                    {
+                        metadataName: shapeField,
+                        attributes: {
+                            type: 'time',
+                            mdapiType: 'Time',
+                            calculated: false
+                        }
+                    }
+                ]
+            ]),
+            destinationShapeIndex: destinationShapeIndex({
+                [shapeField]: { type: 'time', calculated: true }
+            })
+        });
+        const plan = {
+            ...shapePlan,
+            compatibilityWarnings: [
+                ...shapePlan.compatibilityWarnings,
+                {
+                    metadataType: 'CustomField',
+                    metadataName: legacy,
+                    category: 'FORMULA_TYPE_CHANGE',
+                    message: 'Cannot update a field to a Formula from something else'
+                }
+            ]
+        };
+
+        const blockedWithFlow = applyCompatibilityPackageFilterWithShapePolicy({
+            generatedDeploymentPackage: packageObj,
+            deploymentCompatibilityPlan: plan,
+            autoExcludeShapeFormulaConflicts: true,
+            discoveredReferences: [
+                {
+                    metadataType: 'CustomField',
+                    name: shapeField,
+                    sourceMetadata: 'Some_Flow'
+                }
+            ]
+        });
+
+        assert.strictEqual(
+            blockedWithFlow.shapeFormulaExclusionPolicy
+                .revertedDueToBlockingDependencies,
+            true
+        );
+        assert.strictEqual(blockedWithFlow.excludedComponents.length, 1);
+        assert.strictEqual(
+            blockedWithFlow.excludedComponents[0].metadataName,
+            legacy
+        );
+        assert.ok(
+            blockedWithFlow.deploymentPackage.metadata.some(
+                (item) => item.metadataName === shapeField
+            )
+        );
+    });
+
+    await runTest(
+        'H6. Legacy blocker after reversion still blocks readiness when applicable',
+        async () => {
+            const legacy = 'Obj__c.Legacy__c';
+            const packageObj = buildPackage([legacy]);
+            const plan = {
+                compatibilityWarnings: [
+                    {
+                        metadataType: 'CustomField',
+                        metadataName: legacy,
+                        category: 'FORMULA_TYPE_CHANGE',
+                        message: 'Legacy incompatible'
+                    }
+                ]
+            };
+            const filtered = applyCompatibilityPackageFilterWithShapePolicy({
+                generatedDeploymentPackage: packageObj,
+                deploymentCompatibilityPlan: plan,
+                autoExcludeShapeFormulaConflicts: false
+            });
+            const impact = require('./deploymentCompatibilityImpact.service').analyze(
+                {
+                    filteredDeploymentPackage: {
+                        metadata: [
+                            {
+                                metadataType: 'Flow',
+                                metadataName: 'Needs_Legacy'
+                            }
+                        ],
+                        dependencies: []
+                    },
+                    excludedComponents: filtered.excludedComponents,
+                    discoveredReferences: [
+                        {
+                            metadataType: 'CustomField',
+                            name: legacy,
+                            sourceMetadata: 'Needs_Legacy'
+                        }
+                    ]
+                }
+            );
+            const readiness =
+                deploymentReadinessService.planCompatibilityDeploymentReadiness({
+                    filteredDeploymentPackage: {
+                        metadata: [
+                            {
+                                metadataType: 'Flow',
+                                metadataName: 'Needs_Legacy'
+                            }
+                        ],
+                        dependencies: []
+                    },
+                    excludedComponents: filtered.excludedComponents,
+                    blockingComponents: impact.blockingComponents
+                });
+            assert.strictEqual(readiness.readyForDeployment, false);
+        }
+    );
+
+    await runTest('H7. Suppressed exclusions separate from final blockers', async () => {
+        const conflict = 'Session__c.Status__c';
+        const packageWithFlow = {
+            metadata: [
+                { metadataType: 'Flow', metadataName: 'Get_Sessions' },
+                { metadataType: 'CustomField', metadataName: conflict }
+            ],
+            dependencies: []
+        };
+        const plan = await analyzeDeploymentCompatibilityPlan({
+            generatedDeploymentPackage: packageWithFlow,
+            sourceShapeIndex: sourceShape(conflict, {
+                type: 'picklist',
+                mdapiType: 'Picklist',
+                calculated: false
+            }),
+            destinationShapeIndex: destinationShapeIndex({
+                [conflict]: { type: 'string', calculated: true }
+            })
+        });
+        const result = applyCompatibilityPackageFilterWithShapePolicy({
+            generatedDeploymentPackage: packageWithFlow,
+            deploymentCompatibilityPlan: plan,
+            autoExcludeShapeFormulaConflicts: true,
+            discoveredReferences: [
+                {
+                    metadataType: 'CustomField',
+                    name: conflict,
+                    sourceMetadata: 'Get_Sessions'
+                }
+            ]
+        });
+
+        assert.ok(result.shapeFormulaExclusionPolicy.suppressedExclusions.length);
+        assert.strictEqual(result.excludedComponents.length, 0);
+        assert.ok(result.shapeFormulaExclusionPolicy.blockedDependents.length);
+    });
+
+    await runTest(
+        'H8. allSelectedComponentsValidated false when unresolved shape conflict remains',
+        async () => {
+            const conflict = 'Obj__c.Conflict__c';
+            const packageObj = buildPackage([conflict]);
+            const plan = await analyzeDeploymentCompatibilityPlan({
+                generatedDeploymentPackage: packageObj,
+                sourceShapeIndex: sourceShape(conflict, {
+                    type: 'time',
+                    mdapiType: 'Time',
+                    calculated: false
+                }),
+                destinationShapeIndex: destinationShapeIndex({
+                    [conflict]: { type: 'time', calculated: true }
+                })
+            });
+            const scope = buildDeploymentValidationScope({
+                deploymentPackage: {
+                    selectedMetadata: [
+                        {
+                            metadataType: 'CustomField',
+                            metadataName: conflict
+                        }
+                    ]
+                },
+                packageComponentCountBeforeFilter: 1,
+                packageComponentCountAfterFilter: 1,
+                excludedComponents: [],
+                blockingComponents: [],
+                compatibilityWarnings: plan.compatibilityWarnings,
+                finalDeploymentPackage: packageObj,
+                autoExcludeShapeFormulaConflicts: true,
+                shapeFormulaExclusionPolicy: {
+                    revertedDueToBlockingDependencies: true,
+                    suppressedExclusions: [{ metadataName: conflict }]
+                },
+                checkOnlyDeployment: { executed: true, success: true },
+                compatibilityDeploymentSkipped: false
+            });
+
+            assert.strictEqual(scope.hasUnresolvedShapeFormulaConflicts, true);
+            assert.strictEqual(scope.allSelectedComponentsValidated, false);
+            assert.strictEqual(scope.validatesAllSelectedComponents, false);
+        }
+    );
+
+    await runTest('H9. Duplicate metadata/dependency entries counted once', () => {
+        const field = 'Obj__c.Dup__c';
+        const packageObj = {
+            metadata: [{ metadataType: 'CustomField', metadataName: field }],
+            dependencies: [{ metadataType: 'CustomField', metadataName: field }]
+        };
+
+        assert.strictEqual(countUniquePackageMembers(packageObj), 1);
+    });
+
+    await runTest('H10. selectedComponentCount null when selection missing', () => {
+        const scope = buildDeploymentValidationScope({
+            deploymentPackage: {},
+            packageComponentCountBeforeFilter: 0,
+            packageComponentCountAfterFilter: 0,
+            excludedComponents: [],
+            blockingComponents: []
+        });
+
+        assert.strictEqual(scope.selectedComponentCount, null);
+        assert.strictEqual(scope.selectedComponentCountAvailable, false);
+    });
+
+    await runTest('H11. Manifest members match final filtered package', async () => {
+        const conflict = 'Obj__c.Conflict__c';
+        const ok = 'Obj__c.Ok__c';
+        const packageObj = buildPackage([conflict, ok]);
+        const plan = await analyzeDeploymentCompatibilityPlan({
+            generatedDeploymentPackage: packageObj,
+            sourceShapeIndex: sourceShape(conflict, {
+                type: 'time',
+                mdapiType: 'Time',
+                calculated: false
+            }),
+            destinationShapeIndex: destinationShapeIndex({
+                [conflict]: { type: 'time', calculated: true },
+                [ok]: { type: 'string', calculated: false }
+            })
+        });
+        const filtered = applyCompatibilityPackageFilterWithShapePolicy({
+            generatedDeploymentPackage: packageObj,
+            deploymentCompatibilityPlan: plan,
+            autoExcludeShapeFormulaConflicts: true
+        });
+        const manifest = packageXmlService.generateManifest(
+            filtered.deploymentPackage
+        );
+
+        assert.ok(manifest.packageXml.includes(ok));
+        assert.ok(!manifest.packageXml.includes('Conflict__c'));
     });
 }
 
