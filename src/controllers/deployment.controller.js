@@ -315,6 +315,7 @@ function extractValidationRequestArgs(req) {
         instanceUrl,
         orgId,
         deploymentPackage,
+        autoExcludeShapeFormulaConflicts,
         // Optional Deployment Planner preferences (Deploy/Skip).
         deploymentSelections
     } = req.body || {};
@@ -356,10 +357,21 @@ function extractValidationRequestArgs(req) {
 
     // Attach selections when present. Existing clients that omit this
     // field keep the same package reference and behaviour.
-    const packageForValidation = attachReservedDeploymentSelections(
+    let packageForValidation = attachReservedDeploymentSelections(
         deploymentPackage,
         deploymentSelections
     );
+
+    if (
+        autoExcludeShapeFormulaConflicts === true &&
+        packageForValidation &&
+        typeof packageForValidation === 'object'
+    ) {
+        packageForValidation = {
+            ...packageForValidation,
+            autoExcludeShapeFormulaConflicts: true
+        };
+    }
 
     return {
         refreshToken,

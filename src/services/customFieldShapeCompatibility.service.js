@@ -2,8 +2,8 @@
  * CustomField source/destination shape conflict detection (Phase 1).
  *
  * Uses existing shape indexes to detect formula ↔ non-formula definition
- * conflicts before check-only deployment. Advisory only — does not mutate
- * packages or enable auto-exclusion (warnings carry autoExclude: false).
+ * conflicts before check-only deployment. Warnings carry autoExclude: false
+ * unless deploymentPackage.autoExcludeShapeFormulaConflicts is true (Phase 2).
  */
 
 'use strict';

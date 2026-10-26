@@ -83,7 +83,14 @@ function collectExclusionTargets(deploymentCompatibilityPlan) {
             metadataName,
             reason: warning?.message || `Excluded due to ${category}.`,
             category,
-            action: 'AUTO_EXCLUDED'
+            action: 'AUTO_EXCLUDED',
+            exclusionPolicy: warning?.exclusionPolicy || null,
+            exclusionSource:
+                warning?.exclusionPolicy === 'SHAPE_DESTINATION_FORMULA'
+                    ? 'SHAPE_FORMULA_POLICY'
+                    : warning?.detectionSource === 'SHAPE_INDEX'
+                      ? 'SHAPE_INDEX'
+                      : null
         });
     }
 

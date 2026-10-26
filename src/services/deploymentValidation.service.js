@@ -7,6 +7,11 @@ const deploymentReadinessAnalysisService = require('./deploymentReadinessAnalysi
 const formulaCompatibilityService = require('./formulaCompatibility.service');
 const deploymentCompatibilityPlanService = require('./deploymentCompatibility.service');
 const deploymentCompatibilityFilterService = require('./deploymentCompatibilityFilter.service');
+const {
+    parseAutoExcludeShapeFormulaConflictsPolicy,
+    applyCompatibilityPackageFilterWithShapePolicy,
+    buildDeploymentValidationScope
+} = require('./deploymentShapeFormulaExclusionPolicy.service');
 const deploymentCompatibilityImpactService = require('./deploymentCompatibilityImpact.service');
 const deploymentCompatibilityGateService = require('./deploymentCompatibilityGate.service');
 const deploymentCompatibilityAdvisorService = require('./deploymentCompatibilityAdvisor.service');
@@ -377,6 +382,9 @@ async function validateDeployment({
     // Validation consumer (metadata validation, discovery, package, etc.).
     deploymentPackage =
         prepareDeploymentPackageForValidation(deploymentPackage);
+
+    const autoExcludeShapeFormulaConflicts =
+        parseAutoExcludeShapeFormulaConflictsPolicy(deploymentPackage);
 
     // Deployment Planner selections (preferences). Applied after Dependency
     // Resolution and before Compatibility; Package Generation is unchanged.
@@ -1669,14 +1677,35 @@ async function validateDeployment({
             excludedByCategory: {}
         }
     };
+    let shapeFormulaExclusionPolicy = {
+        enabled: autoExcludeShapeFormulaConflicts,
+        applied: false,
+        revertedDueToBlockingDependencies: false,
+        suppressedExclusions: [],
+        blockedDependents: [],
+        residualDiscoveryRiskNote: null
+    };
+    let packageComponentCountBeforeFilter = 0;
+    let packageComponentCountAfterFilter = 0;
 
     try {
-        const filterResult = deploymentCompatibilityFilterService.filter({
+        const filterResult = applyCompatibilityPackageFilterWithShapePolicy({
             generatedDeploymentPackage,
-            deploymentCompatibilityPlan
+            deploymentCompatibilityPlan,
+            autoExcludeShapeFormulaConflicts,
+            resolvedDependencies: resolvedRequiredDependencies,
+            discoveredRelationships,
+            discoveredReferences,
+            dependencyExplorer
         });
 
         generatedDeploymentPackage = filterResult.deploymentPackage;
+        packageComponentCountBeforeFilter =
+            filterResult.packageComponentCountBeforeFilter;
+        packageComponentCountAfterFilter =
+            filterResult.packageComponentCountAfterFilter;
+        shapeFormulaExclusionPolicy =
+            filterResult.shapeFormulaExclusionPolicy;
         compatibilityPackageFilter = {
             excludedComponents: filterResult.excludedComponents || [],
             compatibilitySummary: filterResult.compatibilitySummary || {
@@ -1689,13 +1718,15 @@ async function validateDeployment({
         console.error('COMPATIBILITY PACKAGE FILTER ERROR');
         console.error(compatibilityFilterError);
         // Fail-open: keep unfiltered package so deployment behavior is unchanged.
+        packageComponentCountBeforeFilter =
+            (generatedDeploymentPackage?.metadata || []).length +
+            (generatedDeploymentPackage?.dependencies || []).length;
+        packageComponentCountAfterFilter = packageComponentCountBeforeFilter;
         compatibilityPackageFilter = {
             excludedComponents: [],
             compatibilitySummary: {
                 totalExcluded: 0,
-                totalRemaining:
-                    (generatedDeploymentPackage?.metadata || []).length +
-                    (generatedDeploymentPackage?.dependencies || []).length,
+                totalRemaining: packageComponentCountBeforeFilter,
                 excludedByCategory: {}
             }
         };
@@ -2202,7 +2233,20 @@ async function validateDeployment({
             ? serializeSourceCustomFieldShapeIndex(sourceShapeIndex)
             : null,
         // Additive report-only provenance. Output only — never consumed by backend.
-        deploymentPackageProvenance
+        deploymentPackageProvenance,
+        shapeFormulaExclusionPolicy,
+        deploymentValidationScope: buildDeploymentValidationScope({
+            deploymentPackage,
+            packageComponentCountBeforeFilter,
+            packageComponentCountAfterFilter,
+            excludedComponents:
+                compatibilityPackageFilter?.excludedComponents || [],
+            blockingComponents: compatibilityBlockingComponents,
+            autoExcludeShapeFormulaConflicts,
+            shapeFormulaExclusionPolicy,
+            checkOnlyDeployment,
+            compatibilityDeploymentSkipped
+        })
     };
 
     if (compatibilityDeploymentSkipped) {
@@ -2221,6 +2265,17 @@ async function validateDeployment({
 
     // Always expose check-only state (SUCCESS / FAILURE / NOT_EXECUTED).
     response.checkOnlyDeployment = checkOnlyDeployment;
+    response.deploymentValidationScope = buildDeploymentValidationScope({
+        deploymentPackage,
+        packageComponentCountBeforeFilter,
+        packageComponentCountAfterFilter,
+        excludedComponents: compatibilityPackageFilter?.excludedComponents || [],
+        blockingComponents: compatibilityBlockingComponents,
+        autoExcludeShapeFormulaConflicts,
+        shapeFormulaExclusionPolicy,
+        checkOnlyDeployment,
+        compatibilityDeploymentSkipped
+    });
 
     if (deploymentExecution) {
         response.deploymentExecution = deploymentExecution;
