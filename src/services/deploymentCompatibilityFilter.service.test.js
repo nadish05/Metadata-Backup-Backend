@@ -55,6 +55,32 @@ function planWith(warnings) {
 }
 
 async function main() {
+    await runTest(
+        'FORMULA_TYPE_CHANGE with autoExclude false does not exclude',
+        async () => {
+            const result = filter({
+                generatedDeploymentPackage: buildPackage([
+                    { metadataName: 'Booking__c.Start_Time__c' }
+                ]),
+                deploymentCompatibilityPlan: planWith([
+                    {
+                        metadataName: 'Booking__c.Start_Time__c',
+                        metadataType: 'CustomField',
+                        category: 'FORMULA_TYPE_CHANGE',
+                        autoExclude: false,
+                        message: 'Shape-detected formula conflict.'
+                    }
+                ])
+            });
+
+            assert.strictEqual(result.excludedComponents.length, 0);
+            assert.strictEqual(
+                result.deploymentPackage.metadata.length,
+                1
+            );
+        }
+    );
+
     await runTest('Formula ↔ Time (FORMULA_TYPE_CHANGE)', async () => {
         const result = filter({
             generatedDeploymentPackage: buildPackage([

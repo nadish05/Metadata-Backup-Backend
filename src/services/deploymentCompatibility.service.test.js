@@ -23,6 +23,26 @@ function runTest(name, fn) {
 }
 
 async function main() {
+    await runTest('Formula from something else (reverse direction)', async () => {
+        const reverseMessage =
+            'Cannot update a field from a Formula to something else';
+        const mappedReverse = mapExistingFindingWarnings([
+            {
+                metadataName: 'Booking__c.End_Time__c',
+                metadataType: 'CustomField',
+                message: reverseMessage
+            }
+        ]);
+
+        assert.strictEqual(mappedReverse.length, 1);
+        assert.strictEqual(
+            mappedReverse[0].category,
+            CATEGORIES.FORMULA_TYPE_CHANGE
+        );
+        assert.strictEqual(mappedReverse[0].message, reverseMessage);
+        assert.strictEqual(mappedReverse[0].autoExclude, false);
+    });
+
     await runTest('Formula type change', async () => {
         const mapped = mapExistingFindingWarnings([
             {

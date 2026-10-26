@@ -140,6 +140,27 @@ function classifyProblemText({
         });
     }
 
+    if (/cannot update a field from a formula to something else/i.test(text)) {
+        return buildFailure({
+            metadataType,
+            metadataName,
+            category: userSelected
+                ? CATEGORIES.MANUAL_ACTION
+                : CATEGORIES.SAFE_SKIP,
+            confidence: 'HIGH',
+            deterministic: true,
+            canAutoFix: false,
+            canSafeSkip: !userSelected,
+            requiresUserAction: userSelected,
+            aiExplanationUseful: true,
+            reason:
+                'Salesforce cannot replace an existing formula field with a non-formula field definition via Metadata API deploy.',
+            evidence: { problem, source: 'CLI' },
+            recommendedNextStep:
+                'Align source metadata with the destination formula field, change the destination field manually in Setup, use a new API name, or exclude the field after review.'
+        });
+    }
+
     if (
         text.includes('formul') &&
         (text.includes('type') ||

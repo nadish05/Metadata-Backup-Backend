@@ -1017,5 +1017,7 @@ module.exports = {
     unknownSide,
     buildComparison,
     buildSideFromSourceEntry,
-    buildSideFromDestinationEntry
+    buildSideFromDestinationEntry,
+    lookupSourceEntry,
+    lookupDestinationEntry
 };

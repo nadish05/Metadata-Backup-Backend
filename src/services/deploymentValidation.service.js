@@ -1627,7 +1627,9 @@ async function validateDeployment({
                     deploymentApiVersionPolicy:
                         compatibilityApiVersionPolicy,
                     readFile: packageSourceReadFile,
-                    destinationStates: destinationStatesForAnalyzer
+                    destinationStates: destinationStatesForAnalyzer,
+                    sourceShapeIndex,
+                    destinationShapeIndex
                 }
             );
     } catch (compatibilityPlanError) {

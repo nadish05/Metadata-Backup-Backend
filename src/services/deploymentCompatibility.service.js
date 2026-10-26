@@ -7,6 +7,9 @@
  */
 
 const metadataApiAdoptionTrace = require('./metadataApiAdoptionTrace.temp');
+const {
+    analyzeCustomFieldShapeCompatibilityConflicts
+} = require('./customFieldShapeCompatibility.service');
 
 const CATEGORIES = Object.freeze({
     FORMULA_TYPE_CHANGE: 'FORMULA_TYPE_CHANGE',
@@ -195,6 +198,26 @@ function mapExistingFindingWarnings(existingFindings = []) {
         const metadataType =
             finding?.metadataType || finding?.type || 'CustomField';
 
+        if (
+            /cannot update a field from a formula to something else/i.test(
+                message
+            )
+        ) {
+            warnings.push(
+                createWarning({
+                    metadataName: metadataName || 'Unknown',
+                    metadataType,
+                    category: CATEGORIES.FORMULA_TYPE_CHANGE,
+                    message,
+                    recommendation:
+                        'Destination already has a formula field with this API name. Align source metadata with the formula, change the destination field manually, use a new API name, or exclude the field after review.',
+                    autoExclude: false,
+                    detectionSource: 'PRIOR_FINDING'
+                })
+            );
+            continue;
+        }
+
         if (/cannot update.*to (a )?formula/i.test(message)) {
             warnings.push(
                 createWarning({
@@ -247,6 +270,27 @@ function mapExistingFindingWarnings(existingFindings = []) {
     }
 
     return warnings;
+}
+
+function mapCustomFieldShapeCompatibilityWarnings(shapeCompatibility) {
+    const sourceWarnings = Array.isArray(shapeCompatibility?.warnings)
+        ? shapeCompatibility.warnings
+        : [];
+
+    return sourceWarnings.map((warning) =>
+        createWarning({
+            metadataName: warning.metadataName,
+            metadataType: warning.metadataType || 'CustomField',
+            category: warning.category || CATEGORIES.FORMULA_TYPE_CHANGE,
+            severity: warning.severity || 'WARNING',
+            message: warning.message,
+            recommendation: warning.recommendation,
+            autoExclude: warning.autoExclude,
+            detectionSource: warning.detectionSource,
+            conflictFacts: warning.conflictFacts,
+            expectedSalesforceError: warning.expectedSalesforceError
+        })
+    );
 }
 
 function parseRequiredApiVersion(findings = []) {
@@ -640,7 +684,9 @@ async function analyzeDeploymentCompatibilityPlan({
     existingFindings = [],
     deploymentApiVersionPolicy = null,
     readFile = null,
-    destinationStates = null
+    destinationStates = null,
+    sourceShapeIndex = null,
+    destinationShapeIndex = null
 } = {}) {
     if (!generatedDeploymentPackage) {
         return buildEmptyResult('Generated deployment package not available.');
@@ -651,6 +697,15 @@ async function analyzeDeploymentCompatibilityPlan({
 
     warnings.push(...mapFormulaCompatibilityWarnings(formulaCompatibility));
     warnings.push(...mapExistingFindingWarnings(existingFindings));
+    warnings.push(
+        ...mapCustomFieldShapeCompatibilityWarnings(
+            analyzeCustomFieldShapeCompatibilityConflicts({
+                generatedDeploymentPackage,
+                sourceShapeIndex,
+                destinationShapeIndex
+            })
+        )
+    );
 
     // PermissionSet compatibility is fail-safe: analyzer/mapping failures must
     // never create a blocker or affect existing compatibility categories.
@@ -757,6 +812,7 @@ module.exports = {
     mapFormulaCompatibilityWarnings,
     mapPermissionSetCompatibilityWarnings,
     mapExistingFindingWarnings,
+    mapCustomFieldShapeCompatibilityWarnings,
     analyzeFlowApiCompatibility,
     extractLwcComponentNames,
     analyzeLwcAndFlexiDependencies,

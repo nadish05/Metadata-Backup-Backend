@@ -61,6 +61,10 @@ function collectExclusionTargets(deploymentCompatibilityPlan) {
             continue;
         }
 
+        if (warning?.autoExclude === false) {
+            continue;
+        }
+
         const metadataName = warning?.metadataName || null;
         const metadataType = warning?.metadataType || 'CustomField';
 
