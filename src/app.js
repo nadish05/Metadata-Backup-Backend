@@ -20,6 +20,9 @@ const githubRoutes =
 const compareRoutes =
     require('./routes/compare.routes');
 
+const orgLicenseRoutes =
+    require('./routes/orgLicense.routes');
+
 const aiRoutes =
     require('./routes/ai.routes');
 
@@ -74,6 +77,7 @@ app.use('/api/token', tokenRoutes);
 app.use('/api/metadata', metadataRoutes);
 app.use('/api/github',githubRoutes);
 app.use('/api/compare',compareRoutes);
+app.use('/api/org/licenses', orgLicenseRoutes);
 app.use('/api/ai',aiRoutes);
 app.use('/api/ai', aiAdvisorRoutes);
 app.use('/api/deployment',deploymentRoutes);
