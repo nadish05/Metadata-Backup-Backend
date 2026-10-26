@@ -57,6 +57,77 @@ function normalizeProblem(value) {
         .toLowerCase();
 }
 
+const FORMULA_TO_NON_FORMULA_CLI_PATTERN =
+    /cannot update a field from a formula to something else/i;
+
+function isCliFormulaToNonFormulaFailure(failure) {
+    const problem =
+        failure?.evidence?.problem || failure?.reason || '';
+
+    return (
+        failure?.evidence?.source === 'CLI' &&
+        FORMULA_TO_NON_FORMULA_CLI_PATTERN.test(normalizeProblem(problem))
+    );
+}
+
+function isShapeIndexFormulaDefinitionWarning(warning) {
+    if (warning?.detectionSource !== 'SHAPE_INDEX') {
+        return false;
+    }
+
+    if (String(warning?.category || '').toUpperCase() !== 'FORMULA_TYPE_CHANGE') {
+        return false;
+    }
+
+    const facts = warning?.conflictFacts;
+
+    if (
+        facts?.source?.calculated === false &&
+        facts?.destination?.calculated === true
+    ) {
+        return true;
+    }
+
+    return Boolean(warning?.expectedSalesforceError);
+}
+
+function mergeCliWithShapeCompatibilityFailure(cliFailure, warning, compatFailure) {
+    const cliProblem = cliFailure?.evidence?.problem || null;
+
+    return {
+        ...cliFailure,
+        reason:
+            warning?.message ||
+            compatFailure?.reason ||
+            cliFailure.reason,
+        evidence: {
+            ...cliFailure.evidence,
+            problem: cliProblem,
+            compatibilityExplanation:
+                warning?.message || compatFailure?.reason || null,
+            problemType:
+                warning?.category || compatFailure?.evidence?.problemType,
+            detectionSource: warning?.detectionSource || 'SHAPE_INDEX',
+            conflictFacts: warning?.conflictFacts || null,
+            compatibilitySource: 'COMPATIBILITY',
+            sources: ['CLI', 'COMPATIBILITY']
+        }
+    };
+}
+
+function findFailureIndexByKey(failures, key) {
+    if (!key) {
+        return -1;
+    }
+
+    const normalized = String(key).toLowerCase();
+
+    return failures.findIndex(
+        (failure) =>
+            failure?.key && String(failure.key).toLowerCase() === normalized
+    );
+}
+
 function isUserSelected(selectedMetadata, metadataType, metadataName) {
     if (!Array.isArray(selectedMetadata) || !metadataType || !metadataName) {
         return false;
@@ -455,6 +526,29 @@ function classifyDeploymentFailures({
     ];
 
     for (const warning of warnings) {
+        if (isShapeIndexFormulaDefinitionWarning(warning)) {
+            const compatFailure = classifyCompatibilityWarning(
+                warning,
+                selectedMetadata
+            );
+            const existingIndex = findFailureIndexByKey(
+                failures,
+                compatFailure?.key
+            );
+
+            if (
+                existingIndex >= 0 &&
+                isCliFormulaToNonFormulaFailure(failures[existingIndex])
+            ) {
+                failures[existingIndex] = mergeCliWithShapeCompatibilityFailure(
+                    failures[existingIndex],
+                    warning,
+                    compatFailure
+                );
+                continue;
+            }
+        }
+
         addFailure(classifyCompatibilityWarning(warning, selectedMetadata));
     }
 
@@ -522,5 +616,8 @@ function classifyDeploymentFailures({
 module.exports = {
     CATEGORIES,
     classifyDeploymentFailures,
-    emptyClassification
+    emptyClassification,
+    isCliFormulaToNonFormulaFailure,
+    isShapeIndexFormulaDefinitionWarning,
+    mergeCliWithShapeCompatibilityFailure
 };
