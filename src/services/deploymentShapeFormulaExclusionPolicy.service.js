@@ -306,6 +306,13 @@ function classifyShapePolicyRevertBlockers({
         let referencesOnlyExistingDestinationFormulas = true;
 
         for (const dependency of blockedBy) {
+            const dependencyType = dependency?.metadataType;
+
+            if (dependencyType !== 'CustomField') {
+                referencesOnlyExistingDestinationFormulas = false;
+                break;
+            }
+
             const fieldName = dependency?.metadataName;
 
             if (!fieldName || !shapeExcludedNames.has(fieldName)) {

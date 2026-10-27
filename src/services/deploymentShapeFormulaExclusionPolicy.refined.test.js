@@ -303,6 +303,52 @@ async function main() {
         }
     );
 
+    await runTest(
+        'C2 — Missing destinationShapeIndex reverts eligible Profile/FlexiPage blockers',
+        async () => {
+            const { packageObj, plan, endTime, status } =
+                await buildSessionIncidentPlan();
+
+            const result = applyCompatibilityPackageFilterWithShapePolicy({
+                generatedDeploymentPackage: packageObj,
+                deploymentCompatibilityPlan: plan,
+                autoExcludeShapeFormulaConflicts: true,
+                destinationShapeIndex: null,
+                discoveredReferences: [
+                    {
+                        metadataType: 'CustomField',
+                        name: endTime,
+                        sourceMetadata: 'Session_Record_Page'
+                    },
+                    {
+                        metadataType: 'CustomField',
+                        name: status,
+                        sourceMetadata: 'Session_Record_Page'
+                    }
+                ],
+                discoveredRelationships: [
+                    {
+                        metadataType: 'CustomField',
+                        name: endTime,
+                        sourceMetadata: 'Sales Manager'
+                    }
+                ]
+            });
+
+            assert.strictEqual(
+                result.shapeFormulaExclusionPolicy
+                    .revertedDueToBlockingDependencies,
+                true
+            );
+            assert.strictEqual(result.shapeFormulaExclusionPolicy.applied, false);
+            assert.strictEqual(result.excludedComponents.length, 0);
+            assert.ok(
+                result.shapeFormulaExclusionPolicy.suppressedExclusions.length >=
+                    1
+            );
+        }
+    );
+
     await runTest('D — Opt-in disabled preserves original behavior', async () => {
         const { packageObj, plan } = await buildSessionIncidentPlan();
 
@@ -372,6 +418,53 @@ async function main() {
                 true
             );
             assert.strictEqual(blocked.excludedComponents.length, 0);
+        }
+    );
+
+    await runTest(
+        'F0 — blockedBy non-CustomField metadata type cannot be suppressed',
+        () => {
+            const field = 'Session__c.Status__c';
+            const classified = classifyShapePolicyRevertBlockers({
+                blockingComponents: [
+                    {
+                        metadataType: 'FlexiPage',
+                        metadataName: 'Session_Record_Page',
+                        blockedBy: [
+                            {
+                                metadataType: 'Flow',
+                                metadataName: field
+                            }
+                        ]
+                    }
+                ],
+                shapeExcluded: [
+                    {
+                        metadataType: 'CustomField',
+                        metadataName: field
+                    }
+                ],
+                compatibilityWarnings: [
+                    {
+                        detectionSource: 'SHAPE_INDEX',
+                        metadataType: 'CustomField',
+                        metadataName: field,
+                        conflictFacts: {
+                            source: { calculated: false },
+                            destination: { calculated: true }
+                        }
+                    }
+                ],
+                destinationShapeIndex: destinationShapeIndex({
+                    [field]: { type: 'string', calculated: true }
+                })
+            });
+
+            assert.strictEqual(classified.revertBlockers.length, 1);
+            assert.strictEqual(
+                classified.suppressedExistingDestinationReferences.length,
+                0
+            );
         }
     );
 
