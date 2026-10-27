@@ -26,7 +26,12 @@ function startValidation(args) {
     const validationId = deploymentValidationStatusStore.createJob();
 
     Promise.resolve()
-        .then(() => runValidation(args))
+        .then(() =>
+            runValidation({
+                ...args,
+                validationId
+            })
+        )
         .then((result) => {
             deploymentValidationStatusStore.completeJob(validationId, result);
         })

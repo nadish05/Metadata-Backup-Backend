@@ -265,6 +265,7 @@ async function completeWithAutoValidationLoop({
         refreshToken: validationArgs.refreshToken,
         instanceUrl: validationArgs.instanceUrl,
         orgId: validationArgs.orgId,
+        validationId: validationArgs.validationId || null,
         deploymentPackage: revalidationPackage,
         autoValidationContext: {
             isRevalidation: true,

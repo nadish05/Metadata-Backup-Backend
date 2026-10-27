@@ -114,6 +114,10 @@ const {
 const {
     buildEnterpriseDeploymentReport
 } = require('./deploymentReporting/enterpriseDeploymentReport.service');
+const {
+    buildDeploymentValidationDiagnostic,
+    logDeploymentValidationDiagnostic
+} = require('./deploymentValidationDiagnostic.service');
 
 function logSection(title) {
     console.log('------------------------------------');
@@ -256,16 +260,11 @@ async function refreshAccessToken(refreshToken) {
         }
     );
 
-    // TEMPORARY DEBUG ONLY — remove after Postman testing.
     if (tokenResponse.data?.access_token && tokenResponse.data?.instance_url) {
-        console.log('======================================================');
-        console.log('DESTINATION SALESFORCE ACCESS TOKEN');
-        console.log('======================================================');
-        console.log('Access Token:');
-        console.log(tokenResponse.data.access_token);
-        console.log('Instance URL:');
-        console.log(tokenResponse.data.instance_url);
-        console.log('======================================================');
+        console.log(
+            'Destination org authentication succeeded for host:',
+            tokenResponse.data.instance_url
+        );
     }
 
     return {
@@ -365,6 +364,8 @@ async function validateDeployment({
     instanceUrl,
     orgId,
     deploymentPackage,
+    // Internal async correlation — not part of the public API contract.
+    validationId = null,
     // Internal Phase 17.4 guard — never exposed as a public API contract.
     autoValidationContext = null
 }) {
@@ -1687,6 +1688,7 @@ async function validateDeployment({
     };
     let packageComponentCountBeforeFilter = 0;
     let packageComponentCountAfterFilter = 0;
+    let compatibilityFilterError = false;
 
     try {
         const filterResult = applyCompatibilityPackageFilterWithShapePolicy({
@@ -1714,9 +1716,10 @@ async function validateDeployment({
                 excludedByCategory: {}
             }
         };
-    } catch (compatibilityFilterError) {
+    } catch (compatibilityFilterErrorCaught) {
+        compatibilityFilterError = true;
         console.error('COMPATIBILITY PACKAGE FILTER ERROR');
-        console.error(compatibilityFilterError);
+        console.error(compatibilityFilterErrorCaught);
         // Fail-open: keep unfiltered package so deployment behavior is unchanged.
         packageComponentCountBeforeFilter =
             (generatedDeploymentPackage?.metadata || []).length +
@@ -2530,7 +2533,8 @@ async function validateDeployment({
         validationArgs: {
             refreshToken,
             instanceUrl,
-            orgId
+            orgId,
+            validationId
         },
         runValidation: (args) => validateDeployment(args)
     });
@@ -2622,6 +2626,21 @@ async function validateDeployment({
                 }
             };
         }
+    }
+
+    if (!autoValidationContext?.isRevalidation) {
+        const revalidated =
+            finalResponse.autoValidationReport?.revalidated === true;
+        logDeploymentValidationDiagnostic(
+            buildDeploymentValidationDiagnostic({
+                validationId,
+                validationPass: revalidated ? 'post-revalidation' : 'primary',
+                finalResponse,
+                compatibilityFilterError: revalidated
+                    ? null
+                    : compatibilityFilterError
+            })
+        );
     }
 
     return finalResponse;
