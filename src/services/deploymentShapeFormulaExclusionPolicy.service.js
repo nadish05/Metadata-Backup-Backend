@@ -10,9 +10,18 @@
 const deploymentCompatibilityFilterService = require('./deploymentCompatibilityFilter.service');
 const deploymentCompatibilityImpactService = require('./deploymentCompatibilityImpact.service');
 const {
+    lookupDestinationEntry
+} = require('./aiDeploymentAdvisor/aiResolutionFactPack.service');
+const {
     collectPackageComponents,
     itemKey: packageItemKey
 } = require('./deploymentReadiness.service');
+
+/** Consumers whose field references may exist only in the destination org. */
+const EXISTING_DESTINATION_FIELD_REFERENCE_CONSUMER_TYPES = Object.freeze([
+    'Profile',
+    'FlexiPage'
+]);
 
 const RESIDUAL_DISCOVERY_RISK_NOTE =
     'Dependency-impact analysis only considers relationships captured in the deployment discovery graph. ' +
@@ -190,6 +199,145 @@ function annotateShapeExclusions(excludedComponents) {
     });
 }
 
+function buildEligibleShapeWarningMap(compatibilityWarnings) {
+    const map = new Map();
+
+    for (const warning of compatibilityWarnings || []) {
+        if (!isEligibleShapeFormulaAutoExcludeWarning(warning)) {
+            continue;
+        }
+
+        map.set(warning.metadataName, warning);
+    }
+
+    return map;
+}
+
+function buildShapeExcludedNameSet(shapeExcluded) {
+    const names = new Set();
+
+    for (const component of shapeExcluded || []) {
+        if (component?.metadataName) {
+            names.add(component.metadataName);
+        }
+    }
+
+    return names;
+}
+
+/**
+ * True when destination shape index confirms the field exists as a formula.
+ * Requires queried + found and calculated === true on destination attributes.
+ */
+function isConfirmedExistingDestinationFormulaField(
+    destinationShapeIndex,
+    metadataName,
+    eligibleShapeWarnings
+) {
+    if (!eligibleShapeWarnings.has(metadataName)) {
+        return false;
+    }
+
+    const entry = lookupDestinationEntry(destinationShapeIndex, metadataName);
+
+    if (!entry || entry.queried !== true || entry.found !== true) {
+        return false;
+    }
+
+    const attributes = entry.attributes;
+
+    if (!attributes || typeof attributes !== 'object') {
+        return false;
+    }
+
+    return attributes.calculated === true;
+}
+
+/**
+ * Policy-only: split impact blockers into those that should revert shape
+ * exclusions vs Profile/FlexiPage references to confirmed destination formulas.
+ *
+ * Does not modify global impact analysis output.
+ */
+function classifyShapePolicyRevertBlockers({
+    blockingComponents = [],
+    shapeExcluded = [],
+    compatibilityWarnings = [],
+    destinationShapeIndex = null
+} = {}) {
+    const eligibleShapeWarnings = buildEligibleShapeWarningMap(
+        compatibilityWarnings
+    );
+    const shapeExcludedNames = buildShapeExcludedNameSet(shapeExcluded);
+
+    if (!blockingComponents.length || !shapeExcludedNames.size) {
+        return {
+            revertBlockers: blockingComponents,
+            suppressedExistingDestinationReferences: []
+        };
+    }
+
+    if (!destinationShapeIndex) {
+        return {
+            revertBlockers: blockingComponents,
+            suppressedExistingDestinationReferences: []
+        };
+    }
+
+    const revertBlockers = [];
+    const suppressedExistingDestinationReferences = [];
+
+    for (const blocker of blockingComponents) {
+        const consumerType = blocker?.metadataType;
+        const blockedBy = Array.isArray(blocker?.blockedBy)
+            ? blocker.blockedBy
+            : [];
+
+        if (
+            !EXISTING_DESTINATION_FIELD_REFERENCE_CONSUMER_TYPES.includes(
+                consumerType
+            ) ||
+            !blockedBy.length
+        ) {
+            revertBlockers.push(blocker);
+            continue;
+        }
+
+        let referencesOnlyExistingDestinationFormulas = true;
+
+        for (const dependency of blockedBy) {
+            const fieldName = dependency?.metadataName;
+
+            if (!fieldName || !shapeExcludedNames.has(fieldName)) {
+                referencesOnlyExistingDestinationFormulas = false;
+                break;
+            }
+
+            if (
+                !isConfirmedExistingDestinationFormulaField(
+                    destinationShapeIndex,
+                    fieldName,
+                    eligibleShapeWarnings
+                )
+            ) {
+                referencesOnlyExistingDestinationFormulas = false;
+                break;
+            }
+        }
+
+        if (referencesOnlyExistingDestinationFormulas) {
+            suppressedExistingDestinationReferences.push(blocker);
+        } else {
+            revertBlockers.push(blocker);
+        }
+    }
+
+    return {
+        revertBlockers,
+        suppressedExistingDestinationReferences
+    };
+}
+
 /**
  * Run compatibility filter with optional shape auto-exclude and safety revert.
  */
@@ -197,6 +345,7 @@ function applyCompatibilityPackageFilterWithShapePolicy({
     generatedDeploymentPackage,
     deploymentCompatibilityPlan,
     autoExcludeShapeFormulaConflicts = false,
+    destinationShapeIndex = null,
     resolvedDependencies = [],
     discoveredRelationships = [],
     discoveredReferences = [],
@@ -244,6 +393,7 @@ function applyCompatibilityPackageFilterWithShapePolicy({
         revertedDueToBlockingDependencies: false,
         suppressedExclusions: [],
         blockedDependents: [],
+        suppressedExistingDestinationReferences: [],
         residualDiscoveryRiskNote: RESIDUAL_DISCOVERY_RISK_NOTE
     };
 
@@ -258,7 +408,15 @@ function applyCompatibilityPackageFilterWithShapePolicy({
                 dependencyExplorer
             });
 
-        if ((impact.blockingComponents || []).length > 0) {
+        const { revertBlockers, suppressedExistingDestinationReferences } =
+            classifyShapePolicyRevertBlockers({
+                blockingComponents: impact.blockingComponents || [],
+                shapeExcluded,
+                compatibilityWarnings: baseWarnings,
+                destinationShapeIndex
+            });
+
+        if (revertBlockers.length > 0) {
             const legacyFilter = deploymentCompatibilityFilterService.filter({
                 generatedDeploymentPackage,
                 deploymentCompatibilityPlan
@@ -275,7 +433,8 @@ function applyCompatibilityPackageFilterWithShapePolicy({
                     reason: item.reason,
                     category: item.category
                 })),
-                blockedDependents: impact.blockingComponents
+                blockedDependents: revertBlockers,
+                suppressedExistingDestinationReferences: []
             };
         } else {
             filterResult = {
@@ -286,7 +445,8 @@ function applyCompatibilityPackageFilterWithShapePolicy({
             };
             shapeFormulaExclusionPolicy = {
                 ...shapeFormulaExclusionPolicy,
-                applied: true
+                applied: true,
+                suppressedExistingDestinationReferences
             };
         }
     } else if (policyEnabled) {
@@ -372,6 +532,7 @@ function buildDeploymentValidationScope({
         revertedDueToBlockingDependencies: false,
         suppressedExclusions: [],
         blockedDependents: [],
+        suppressedExistingDestinationReferences: [],
         residualDiscoveryRiskNote: RESIDUAL_DISCOVERY_RISK_NOTE
     };
     const suppressedShapeExclusions = Array.isArray(
@@ -456,5 +617,7 @@ module.exports = {
     buildDeploymentValidationScope,
     isShapePolicyExclusion,
     countUniquePackageMembers,
-    collectUnresolvedShapeFormulaConflicts
+    collectUnresolvedShapeFormulaConflicts,
+    classifyShapePolicyRevertBlockers,
+    isConfirmedExistingDestinationFormulaField
 };

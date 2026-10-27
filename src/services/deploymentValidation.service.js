@@ -1695,6 +1695,7 @@ async function validateDeployment({
             generatedDeploymentPackage,
             deploymentCompatibilityPlan,
             autoExcludeShapeFormulaConflicts,
+            destinationShapeIndex,
             resolvedDependencies: resolvedRequiredDependencies,
             discoveredRelationships,
             discoveredReferences,
