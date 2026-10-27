@@ -10,7 +10,8 @@ const deploymentCompatibilityFilterService = require('./deploymentCompatibilityF
 const {
     parseAutoExcludeShapeFormulaConflictsPolicy,
     applyCompatibilityPackageFilterWithShapePolicy,
-    buildDeploymentValidationScope
+    buildDeploymentValidationScope,
+    resolveReadinessBlockingComponents
 } = require('./deploymentShapeFormulaExclusionPolicy.service');
 const deploymentCompatibilityImpactService = require('./deploymentCompatibilityImpact.service');
 const deploymentCompatibilityGateService = require('./deploymentCompatibilityGate.service');
@@ -1787,6 +1788,30 @@ async function validateDeployment({
             compatibilityBlockingComponents
         );
 
+    const { readinessBlockingComponents, suppressedForReadiness } =
+        resolveReadinessBlockingComponents({
+            autoExcludeShapeFormulaConflicts,
+            shapeFormulaExclusionPolicy,
+            compatibilityBlockingComponents,
+            excludedComponents:
+                compatibilityPackageFilter?.excludedComponents || [],
+            compatibilityWarnings:
+                deploymentCompatibilityPlan?.compatibilityWarnings || [],
+            destinationShapeIndex
+        });
+
+    const readinessBlockingSummary =
+        deploymentCompatibilityPlanService.buildBlockingSummary(
+            readinessBlockingComponents
+        );
+
+    if (suppressedForReadiness.length > 0) {
+        shapeFormulaExclusionPolicy = {
+            ...shapeFormulaExclusionPolicy,
+            suppressedForReadiness
+        };
+    }
+
     // Phase 11.3 — Compatibility Deployment Readiness Planner (report-only).
     // Does not cancel deployment or mutate package / workspace / CLI.
     const compatibilityDeploymentReadiness =
@@ -1794,10 +1819,10 @@ async function validateDeployment({
             filteredDeploymentPackage: generatedDeploymentPackage,
             excludedComponents:
                 compatibilityPackageFilter?.excludedComponents || [],
-            blockingComponents: compatibilityBlockingComponents,
+            blockingComponents: readinessBlockingComponents,
             compatibilitySummary:
                 compatibilityPackageFilter?.compatibilitySummary || null,
-            blockingSummary: compatibilityBlockingSummary,
+            blockingSummary: readinessBlockingSummary,
             totalWarnings: Array.isArray(
                 deploymentCompatibilityPlan?.compatibilityWarnings
             )
@@ -2206,6 +2231,8 @@ async function validateDeployment({
         deploymentCompatibilityImpact,
         blockingComponents: compatibilityBlockingComponents,
         blockingSummary: compatibilityBlockingSummary,
+        readinessBlockingComponents,
+        readinessBlockingSummary,
         deploymentCompatibilityAdvisor,
         deploymentPreview,
         permissionSetCompatibility,
@@ -2245,7 +2272,7 @@ async function validateDeployment({
             packageComponentCountAfterFilter,
             excludedComponents:
                 compatibilityPackageFilter?.excludedComponents || [],
-            blockingComponents: compatibilityBlockingComponents,
+            blockingComponents: readinessBlockingComponents,
             compatibilityWarnings:
                 deploymentCompatibilityPlan?.compatibilityWarnings || [],
             finalDeploymentPackage: generatedDeploymentPackage,
@@ -2265,7 +2292,7 @@ async function validateDeployment({
                     compatibilityPackageFilter?.compatibilitySummary || null,
                 excludedComponents:
                     compatibilityPackageFilter?.excludedComponents || [],
-                blockingComponents: compatibilityBlockingComponents
+                blockingComponents: readinessBlockingComponents
             })
         );
     }
@@ -2277,7 +2304,7 @@ async function validateDeployment({
         packageComponentCountBeforeFilter,
         packageComponentCountAfterFilter,
         excludedComponents: compatibilityPackageFilter?.excludedComponents || [],
-        blockingComponents: compatibilityBlockingComponents,
+        blockingComponents: readinessBlockingComponents,
         compatibilityWarnings:
             deploymentCompatibilityPlan?.compatibilityWarnings || [],
         finalDeploymentPackage: response.generatedDeploymentPackage,

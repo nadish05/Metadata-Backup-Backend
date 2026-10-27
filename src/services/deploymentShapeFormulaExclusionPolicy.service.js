@@ -346,6 +346,50 @@ function classifyShapePolicyRevertBlockers({
 }
 
 /**
+ * Split merged impact blockers into full report vs effective readiness gate input.
+ * Only active when opt-in shape exclusions were applied (not reverted).
+ */
+function resolveReadinessBlockingComponents({
+    autoExcludeShapeFormulaConflicts = false,
+    shapeFormulaExclusionPolicy = null,
+    compatibilityBlockingComponents = [],
+    excludedComponents = [],
+    compatibilityWarnings = [],
+    destinationShapeIndex = null
+} = {}) {
+    const fullBlockingComponents = Array.isArray(compatibilityBlockingComponents)
+        ? compatibilityBlockingComponents
+        : [];
+
+    const policyApplied = shapeFormulaExclusionPolicy?.applied === true;
+    const policyEnabled = autoExcludeShapeFormulaConflicts === true;
+
+    if (!policyEnabled || !policyApplied) {
+        return {
+            readinessBlockingComponents: fullBlockingComponents,
+            suppressedForReadiness: []
+        };
+    }
+
+    const shapeExcluded = (excludedComponents || []).filter((item) =>
+        isShapePolicyExclusion(item)
+    );
+
+    const { revertBlockers, suppressedExistingDestinationReferences } =
+        classifyShapePolicyRevertBlockers({
+            blockingComponents: fullBlockingComponents,
+            shapeExcluded,
+            compatibilityWarnings,
+            destinationShapeIndex
+        });
+
+    return {
+        readinessBlockingComponents: revertBlockers,
+        suppressedForReadiness: suppressedExistingDestinationReferences
+    };
+}
+
+/**
  * Run compatibility filter with optional shape auto-exclude and safety revert.
  */
 function applyCompatibilityPackageFilterWithShapePolicy({
@@ -626,5 +670,6 @@ module.exports = {
     countUniquePackageMembers,
     collectUnresolvedShapeFormulaConflicts,
     classifyShapePolicyRevertBlockers,
-    isConfirmedExistingDestinationFormulaField
+    isConfirmedExistingDestinationFormulaField,
+    resolveReadinessBlockingComponents
 };
