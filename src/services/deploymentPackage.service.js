@@ -2,6 +2,11 @@ const {
     enrichFlowMetadataItem,
     getFlowMetadataUniquenessKey
 } = require('./flowMetadata/flowMemberIdentity.service');
+const { normalizeDeployableMetadata } = require('./deployableMetadataNormalizer.service');
+const {
+    METADATA_ORIGINS,
+    resolveMetadataOrigin
+} = require('./dependencyResolution/metadataGraphOrigin.model');
 
 function normalizeMetadataItem(item) {
     if (!item || typeof item !== 'object') {
@@ -250,6 +255,104 @@ function evaluateProfileOnlyMinimalPackageEligibility(selectedMetadata) {
     return { eligible: true, reason: null };
 }
 
+function cloneSelectionItem(item) {
+    if (!item || typeof item !== 'object') {
+        return null;
+    }
+
+    return { ...item };
+}
+
+/**
+ * Resolve the explicit primary user selection used for Profile-only minimal packaging.
+ * Does not mutate discovery/resolution inventories.
+ *
+ * Precedence:
+ * 1. deploymentPackage.explicitPrimarySelectedMetadata when provided (client intent).
+ * 2. Items marked PRIMARY_SELECTION when the plan also contains other graph origins.
+ * 3. Full normalized selectedMetadata snapshot (legacy eligibility semantics).
+ */
+function resolveExplicitPrimarySelectedMetadata(
+    deploymentPackage,
+    normalizedSelectedMetadata
+) {
+    const clientExplicit = deploymentPackage?.explicitPrimarySelectedMetadata;
+
+    if (Array.isArray(clientExplicit) && clientExplicit.length > 0) {
+        return normalizeDeployableMetadata(clientExplicit);
+    }
+
+    const items = Array.isArray(normalizedSelectedMetadata)
+        ? normalizedSelectedMetadata
+        : [];
+
+    const hasNonPrimaryOrigin = items.some((item) => {
+        const origin = item?.origin;
+
+        return (
+            origin &&
+            Object.values(METADATA_ORIGINS).includes(origin) &&
+            resolveMetadataOrigin(item) !== METADATA_ORIGINS.PRIMARY_SELECTION
+        );
+    });
+
+    if (hasNonPrimaryOrigin) {
+        const primaryItems = items.filter(
+            (item) =>
+                resolveMetadataOrigin(item) ===
+                METADATA_ORIGINS.PRIMARY_SELECTION
+        );
+
+        if (primaryItems.length > 0) {
+            return primaryItems.map(cloneSelectionItem).filter(Boolean);
+        }
+    }
+
+    return items.map(cloneSelectionItem).filter(Boolean);
+}
+
+function buildExplicitPrimaryProfileKeys(explicitPrimarySelectedMetadata) {
+    const keys = new Set();
+
+    for (const item of explicitPrimarySelectedMetadata || []) {
+        const metadataType = item.metadataType || item.type || null;
+        const metadataName = item.metadataName || item.name || null;
+
+        if (
+            metadataType === 'Profile' &&
+            typeof metadataName === 'string' &&
+            metadataName.trim()
+        ) {
+            keys.add(`Profile:${metadataName.trim()}`);
+        }
+    }
+
+    return keys;
+}
+
+function buildProfileOnlyMinimalMetadata(
+    selectedMetadata,
+    explicitPrimarySelectedMetadata
+) {
+    const allowedKeys = buildExplicitPrimaryProfileKeys(
+        explicitPrimarySelectedMetadata
+    );
+
+    return normalizeMetadata(selectedMetadata).filter((item) => {
+        if (item.metadataType !== 'Profile') {
+            return false;
+        }
+
+        if (item.selected === false) {
+            return false;
+        }
+
+        const key = getMetadataUniquenessKey(item);
+
+        return key && allowedKeys.has(key);
+    });
+}
+
 function shouldAutoIncludeDependency(dependency) {
     // Action-aware path: only DEPLOY decisions are auto-included.
     // REFERENCE / SKIP / BLOCK / MERGE are never included.
@@ -295,11 +398,16 @@ function composeMetadataWithRequiredDependencies(
     const selected = normalizeMetadata(selectedMetadata);
 
     if (options.profileOnlyMinimalPackage === true) {
+        const explicitPrimary =
+            options.explicitPrimarySelectedMetadata ?? selectedMetadata;
         const eligibility =
-            evaluateProfileOnlyMinimalPackageEligibility(selectedMetadata);
+            evaluateProfileOnlyMinimalPackageEligibility(explicitPrimary);
 
         if (eligibility.eligible) {
-            return selected;
+            return buildProfileOnlyMinimalMetadata(
+                selectedMetadata,
+                explicitPrimary
+            );
         }
     }
 
@@ -398,10 +506,19 @@ function generateDeploymentPackage(deploymentPackage) {
     const profileOnlyMinimalPackage =
         deploymentPackage.profileOnlyMinimalPackage === true;
 
+    const explicitPrimarySelectedMetadata = Array.isArray(
+        deploymentPackage.explicitPrimarySelectedMetadata
+    )
+        ? deploymentPackage.explicitPrimarySelectedMetadata
+        : deploymentPackage.selectedMetadata;
+
     const metadata = composeMetadataWithRequiredDependencies(
         deploymentPackage.selectedMetadata,
         deploymentPackage.requiredDependencies,
-        { profileOnlyMinimalPackage }
+        {
+            profileOnlyMinimalPackage,
+            explicitPrimarySelectedMetadata
+        }
     );
     const dependencies = normalizeDependencies(
         deploymentPackage.requiredDependencies
@@ -427,5 +544,7 @@ module.exports = {
     getMetadataUniquenessKey,
     composeMetadataWithRequiredDependencies,
     resolveProfileOnlyMinimalPackagePolicy,
-    evaluateProfileOnlyMinimalPackageEligibility
+    evaluateProfileOnlyMinimalPackageEligibility,
+    resolveExplicitPrimarySelectedMetadata,
+    buildProfileOnlyMinimalMetadata
 };

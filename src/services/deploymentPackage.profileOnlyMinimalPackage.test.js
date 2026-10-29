@@ -7,9 +7,12 @@ const path = require('path');
 const {
     generateDeploymentPackage,
     resolveProfileOnlyMinimalPackagePolicy,
-    evaluateProfileOnlyMinimalPackageEligibility
+    evaluateProfileOnlyMinimalPackageEligibility,
+    resolveExplicitPrimarySelectedMetadata
 } = require('./deploymentPackage.service');
 const { generateManifest } = require('./packageXml.service');
+const { METADATA_ORIGINS } = require('./dependencyResolution/metadataGraphOrigin.model');
+const { normalizeDeployableMetadata } = require('./deployableMetadataNormalizer.service');
 
 function runTest(name, fn) {
     try {
@@ -389,4 +392,161 @@ runTest('eligibility helper rejects non-Profile types', () => {
         ]).eligible,
         false
     );
+});
+
+runTest('416-style plan: PRIMARY Profile + dependency origins yields Profile-only minimal manifest', () => {
+    const expandedPlan = [
+        {
+            metadataType: 'Profile',
+            metadataName: 'Sales Manager',
+            origin: METADATA_ORIGINS.PRIMARY_SELECTION
+        },
+        {
+            metadataType: 'ApexClass',
+            metadataName: 'MyController',
+            origin: METADATA_ORIGINS.DIRECT_DEPENDENCY
+        },
+        {
+            metadataType: 'CustomField',
+            metadataName: 'Account.Industry',
+            origin: METADATA_ORIGINS.RELATIONSHIP_TARGET
+        }
+    ];
+
+    const explicitPrimary = resolveExplicitPrimarySelectedMetadata(
+        {},
+        normalizeDeployableMetadata(expandedPlan)
+    );
+
+    assert.strictEqual(explicitPrimary.length, 1);
+    assert.strictEqual(explicitPrimary[0].metadataName, 'Sales Manager');
+
+    const pkg = generateDeploymentPackage({
+        profileOnlyMinimalPackage: true,
+        explicitPrimarySelectedMetadata: explicitPrimary,
+        selectedMetadata: expandedPlan,
+        requiredDependencies: sampleDeps
+    });
+
+    assert.strictEqual(pkg.metadata.length, 1);
+    assert.strictEqual(pkg.metadata[0].metadataName, 'Sales Manager');
+    assert.strictEqual(pkg.dependencies.length, sampleDeps.length);
+
+    const manifest = generateManifest(pkg);
+    assert.ok(manifest.packageXml.includes('<members>Sales Manager</members>'));
+    assert.ok(!manifest.packageXml.includes('MyController'));
+    assert.strictEqual(manifest.summary.members, 1);
+});
+
+runTest('explicit client primary selection overrides bloated selectedMetadata', () => {
+    const explicitPrimary = [
+        { metadataType: 'Profile', metadataName: 'Sales Manager' }
+    ];
+
+    const pkg = generateDeploymentPackage({
+        profileOnlyMinimalPackage: true,
+        explicitPrimarySelectedMetadata: explicitPrimary,
+        selectedMetadata: [
+            { metadataType: 'Profile', metadataName: 'Sales Manager' },
+            { metadataType: 'ApexClass', metadataName: 'Foo' },
+            { metadataType: 'CustomField', metadataName: 'Account.Industry' }
+        ],
+        requiredDependencies: sampleDeps
+    });
+
+    assert.strictEqual(pkg.metadata.length, 1);
+    assert.strictEqual(pkg.metadata[0].metadataType, 'Profile');
+});
+
+runTest('mixed explicit primary retains legacy metadata composition', () => {
+    const explicitPrimary = [
+        { metadataType: 'Profile', metadataName: 'Sales Manager' },
+        { metadataType: 'ApexClass', metadataName: 'Foo' }
+    ];
+
+    const legacy = generateDeploymentPackage({
+        selectedMetadata: explicitPrimary,
+        requiredDependencies: sampleDeps
+    });
+
+    const withFlag = generateDeploymentPackage({
+        profileOnlyMinimalPackage: true,
+        explicitPrimarySelectedMetadata: explicitPrimary,
+        selectedMetadata: explicitPrimary,
+        requiredDependencies: sampleDeps
+    });
+
+    assert.deepStrictEqual(
+        withFlag.metadata.map((m) => `${m.metadataType}:${m.metadataName}`),
+        legacy.metadata.map((m) => `${m.metadataType}:${m.metadataName}`)
+    );
+});
+
+runTest('revalidation retains explicit primary and does not widen minimal manifest', () => {
+    const {
+        buildRevalidationPackage
+    } = require('./deploymentFailureClassification/deploymentAutoValidation.service');
+
+    const explicitPrimary = [
+        { metadataType: 'Profile', metadataName: 'Sales Manager' }
+    ];
+
+    const regenerated = generateDeploymentPackage({
+        profileOnlyMinimalPackage: true,
+        explicitPrimarySelectedMetadata: explicitPrimary,
+        selectedMetadata: explicitPrimary,
+        requiredDependencies: sampleDeps
+    });
+
+    const revalidationPackage = buildRevalidationPackage(
+        {
+            profileOnlyMinimalPackage: true,
+            explicitPrimarySelectedMetadata: explicitPrimary
+        },
+        { generatedDeploymentPackage: regenerated }
+    );
+
+    assert.strictEqual(
+        revalidationPackage.explicitPrimarySelectedMetadata.length,
+        1
+    );
+
+    const secondPass = generateDeploymentPackage({
+        ...revalidationPackage,
+        requiredDependencies: sampleDeps
+    });
+
+    assert.strictEqual(secondPass.metadata.length, 1);
+    assert.strictEqual(secondPass.metadata[0].metadataName, 'Sales Manager');
+});
+
+runTest('all PRIMARY_SELECTION origins without client explicit remains legacy when mixed types selected', () => {
+    const mixedPrimaryOrigins = [
+        {
+            metadataType: 'Profile',
+            metadataName: 'Sales Manager',
+            origin: METADATA_ORIGINS.PRIMARY_SELECTION
+        },
+        {
+            metadataType: 'ApexClass',
+            metadataName: 'Foo',
+            origin: METADATA_ORIGINS.PRIMARY_SELECTION
+        }
+    ];
+
+    const explicitPrimary = resolveExplicitPrimarySelectedMetadata(
+        {},
+        normalizeDeployableMetadata(mixedPrimaryOrigins)
+    );
+
+    assert.strictEqual(explicitPrimary.length, 2);
+
+    const pkg = generateDeploymentPackage({
+        profileOnlyMinimalPackage: true,
+        explicitPrimarySelectedMetadata: explicitPrimary,
+        selectedMetadata: mixedPrimaryOrigins,
+        requiredDependencies: sampleDeps
+    });
+
+    assert.ok(pkg.metadata.length > 1);
 });

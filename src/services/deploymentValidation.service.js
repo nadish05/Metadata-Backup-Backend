@@ -164,9 +164,16 @@ function prepareDeploymentPackageForValidation(deploymentPackage) {
         deploymentPackage.selectedMetadata
     );
 
+    const explicitPrimarySelectedMetadata =
+        deploymentPackageService.resolveExplicitPrimarySelectedMetadata(
+            deploymentPackage,
+            normalizedSelectedMetadata
+        );
+
     return {
         ...deploymentPackage,
-        selectedMetadata: normalizedSelectedMetadata
+        selectedMetadata: normalizedSelectedMetadata,
+        explicitPrimarySelectedMetadata
     };
 }
 

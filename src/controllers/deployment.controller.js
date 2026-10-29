@@ -323,6 +323,7 @@ function extractValidationRequestArgs(req) {
         deploymentPackage,
         autoExcludeShapeFormulaConflicts,
         profileOnlyMinimalPackage,
+        explicitPrimarySelectedMetadata,
         // Optional Deployment Planner preferences (Deploy/Skip).
         deploymentSelections
     } = req.body || {};
@@ -370,7 +371,7 @@ function extractValidationRequestArgs(req) {
     );
 
     if (packageForValidation && typeof packageForValidation === 'object') {
-        packageForValidation = {
+        const packageWithOptions = {
             ...packageForValidation,
             autoExcludeShapeFormulaConflicts:
                 resolveAutoExcludeShapeFormulaConflictsPolicy({
@@ -384,6 +385,16 @@ function extractValidationRequestArgs(req) {
                 }
             )
         };
+
+        if (
+            Array.isArray(explicitPrimarySelectedMetadata) &&
+            explicitPrimarySelectedMetadata.length > 0
+        ) {
+            packageWithOptions.explicitPrimarySelectedMetadata =
+                explicitPrimarySelectedMetadata;
+        }
+
+        packageForValidation = packageWithOptions;
     }
 
     return {
