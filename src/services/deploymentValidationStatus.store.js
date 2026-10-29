@@ -15,6 +15,13 @@ const STATUS = {
     FAILED: 'FAILED'
 };
 
+const BOUND_DEPLOY_CLAIM_STATE = Object.freeze({
+    IN_PROGRESS: 'IN_PROGRESS',
+    CONSUMED: 'CONSUMED',
+    DEPLOY_FAILED: 'DEPLOY_FAILED',
+    UNCERTAIN: 'UNCERTAIN'
+});
+
 /** Completed/failed jobs older than this are eligible for cleanup. */
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -68,7 +75,8 @@ function createJob() {
         result: null,
         error: null,
         createdAt: nowIso(),
-        completedAt: null
+        completedAt: null,
+        boundDeployClaim: null
     };
 
     jobStore.set(validationId, job);
@@ -97,6 +105,9 @@ function completeJob(validationId, result) {
     job.result = result;
     job.error = null;
     job.completedAt = nowIso();
+    if (job.boundDeployClaim === undefined) {
+        job.boundDeployClaim = null;
+    }
 
     return job;
 }
@@ -117,7 +128,6 @@ function failJob(validationId, error) {
 
     job.status = STATUS.FAILED;
     job.error = message;
-    // Preserve a result object only when the rejection already carried one.
     if (
         error &&
         typeof error === 'object' &&
@@ -132,9 +142,181 @@ function failJob(validationId, error) {
 }
 
 /**
- * Build the HTTP status payload for a validation job.
- * @returns {{ found: false } | { found: true, body: object }}
+ * Synchronous compare-and-set claim for bound deploy (single Node process).
+ * @returns {{ acquired: boolean, code?: string, message?: string, claim?: object }}
  */
+function tryAcquireBoundDeployClaim(validationId, { historyId = null } = {}) {
+    if (!validationId || typeof validationId !== 'string') {
+        return {
+            acquired: false,
+            code: 'BOUND_VALIDATION_ID_REQUIRED',
+            message: 'boundValidationId is required.'
+        };
+    }
+
+    purgeExpiredJobs();
+
+    const job = jobStore.get(validationId.trim());
+
+    if (!job || job.status !== STATUS.COMPLETED) {
+        return {
+            acquired: false,
+            code: 'BOUND_VALIDATION_NOT_FOUND',
+            message:
+                'Validation reference is unknown or has expired. Re-run check-only validation.'
+        };
+    }
+
+    const existing = job.boundDeployClaim;
+
+    if (existing?.state === BOUND_DEPLOY_CLAIM_STATE.IN_PROGRESS) {
+        return {
+            acquired: false,
+            code: 'BOUND_DEPLOY_IN_PROGRESS',
+            message:
+                'A validation-bound deployment is already in progress for this validation.'
+        };
+    }
+
+    if (existing?.state === BOUND_DEPLOY_CLAIM_STATE.CONSUMED) {
+        return {
+            acquired: false,
+            code: 'BOUND_DEPLOY_CONSUMED',
+            message:
+                'This validated artifact has already been deployed and cannot be reused.'
+        };
+    }
+
+    if (existing?.state === BOUND_DEPLOY_CLAIM_STATE.UNCERTAIN) {
+        return {
+            acquired: false,
+            code: 'BOUND_DEPLOY_UNCERTAIN',
+            message:
+                'Previous bound deployment outcome is uncertain. Explicit reconciliation is required before retry.'
+        };
+    }
+
+    if (
+        existing?.state &&
+        existing.state !== BOUND_DEPLOY_CLAIM_STATE.DEPLOY_FAILED
+    ) {
+        return {
+            acquired: false,
+            code: 'BOUND_DEPLOY_NOT_AVAILABLE',
+            message: 'Validated artifact is not available for bound deployment.'
+        };
+    }
+
+    const claim = {
+        state: BOUND_DEPLOY_CLAIM_STATE.IN_PROGRESS,
+        startedAt: nowIso(),
+        historyId: historyId || null,
+        leaseId: `bound_${crypto.randomUUID()}`
+    };
+
+    job.boundDeployClaim = claim;
+
+    return { acquired: true, claim };
+}
+
+function finalizeBoundDeployClaim(validationId, outcome, details = {}) {
+    const job = jobStore.get(validationId?.trim?.() || '');
+
+    if (!job) {
+        return null;
+    }
+
+    const previous = job.boundDeployClaim || {};
+    const nextState =
+        outcome === BOUND_DEPLOY_CLAIM_STATE.CONSUMED
+            ? BOUND_DEPLOY_CLAIM_STATE.CONSUMED
+            : outcome === BOUND_DEPLOY_CLAIM_STATE.UNCERTAIN
+              ? BOUND_DEPLOY_CLAIM_STATE.UNCERTAIN
+              : outcome === BOUND_DEPLOY_CLAIM_STATE.DEPLOY_FAILED
+                ? BOUND_DEPLOY_CLAIM_STATE.DEPLOY_FAILED
+                : null;
+
+    if (!nextState) {
+        return null;
+    }
+
+    job.boundDeployClaim = {
+        ...previous,
+        state: nextState,
+        finishedAt: nowIso(),
+        ...details
+    };
+
+    return job.boundDeployClaim;
+}
+
+function releaseBoundDeployClaimInProgress(validationId) {
+    const job = jobStore.get(validationId?.trim?.() || '');
+
+    if (!job?.boundDeployClaim) {
+        return null;
+    }
+
+    if (job.boundDeployClaim.state !== BOUND_DEPLOY_CLAIM_STATE.IN_PROGRESS) {
+        return job.boundDeployClaim;
+    }
+
+    job.boundDeployClaim = {
+        state: BOUND_DEPLOY_CLAIM_STATE.DEPLOY_FAILED,
+        finishedAt: nowIso(),
+        releasedWithoutDeploy: true
+    };
+
+    return job.boundDeployClaim;
+}
+
+/**
+ * Explicit reconciliation after UNCERTAIN (ops / support). Does not auto-run on retry.
+ */
+function reconcileBoundDeployClaim(validationId, resolution) {
+    const job = jobStore.get(validationId?.trim?.() || '');
+
+    if (!job?.boundDeployClaim) {
+        return {
+            ok: false,
+            message: 'No bound deployment claim exists for this validation.'
+        };
+    }
+
+    if (job.boundDeployClaim.state !== BOUND_DEPLOY_CLAIM_STATE.UNCERTAIN) {
+        return {
+            ok: false,
+            message: 'Reconciliation is only allowed after an uncertain bound deployment outcome.'
+        };
+    }
+
+    if (resolution === 'MARK_CONSUMED') {
+        job.boundDeployClaim = {
+            ...job.boundDeployClaim,
+            state: BOUND_DEPLOY_CLAIM_STATE.CONSUMED,
+            reconciledAt: nowIso(),
+            reconciliation: 'MARK_CONSUMED'
+        };
+        return { ok: true, claim: job.boundDeployClaim };
+    }
+
+    if (resolution === 'MARK_DEPLOY_FAILED') {
+        job.boundDeployClaim = {
+            ...job.boundDeployClaim,
+            state: BOUND_DEPLOY_CLAIM_STATE.DEPLOY_FAILED,
+            reconciledAt: nowIso(),
+            reconciliation: 'MARK_DEPLOY_FAILED'
+        };
+        return { ok: true, claim: job.boundDeployClaim };
+    }
+
+    return {
+        ok: false,
+        message:
+            'Unsupported reconciliation resolution. Use MARK_CONSUMED or MARK_DEPLOY_FAILED.'
+    };
+}
+
 function buildStatusResponse(validationId) {
     const job = getJob(validationId);
 
@@ -160,12 +342,12 @@ function buildStatusResponse(validationId) {
                 success: true,
                 status: STATUS.COMPLETED,
                 validationId: job.validationId,
-                result: job.result
+                result: job.result,
+                boundDeployClaim: job.boundDeployClaim || null
             }
         };
     }
 
-    // FAILED
     const body = {
         success: true,
         status: STATUS.FAILED,
@@ -184,7 +366,6 @@ function getJobCount() {
     return jobStore.size;
 }
 
-/** Test / ops helper — clears all jobs. */
 function clearAllJobs() {
     jobStore.clear();
 }
@@ -205,12 +386,17 @@ function resetTtlForTests() {
 
 module.exports = {
     STATUS,
+    BOUND_DEPLOY_CLAIM_STATE,
     DEFAULT_TTL_MS,
     DEFAULT_MAX_AGE_MS,
     createJob,
     getJob,
     completeJob,
     failJob,
+    tryAcquireBoundDeployClaim,
+    finalizeBoundDeployClaim,
+    releaseBoundDeployClaimInProgress,
+    reconcileBoundDeployClaim,
     buildStatusResponse,
     getJobCount,
     clearAllJobs,

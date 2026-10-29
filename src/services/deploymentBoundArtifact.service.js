@@ -5,9 +5,14 @@ const fs = require('fs');
 const path = require('path');
 const util = require('util');
 
+const { getMetadataTypeRule } = require('../config/metadataTypes');
+const { orgIdsMatch } = require('./deploymentOrgLock/destinationOrgIdentity.service');
+
 const readdir = util.promisify(fs.readdir);
 const readFile = util.promisify(fs.readFile);
 const stat = util.promisify(fs.stat);
+const lstat = util.promisify(fs.lstat);
+const realpath = util.promisify(fs.realpath);
 
 const ARTIFACT_SCHEMA_VERSION = 1;
 
@@ -18,13 +23,15 @@ const ARTIFACT_SCHEMA_VERSION = 1;
  * - autoExcludeShapeFormulaConflicts (boolean|null)
  * - destinationOrgId (string|null)
  * - deploymentApiVersion (from manifest summary/policy)
- * - packageXmlSha256 (normalized LF, trimmed)
+ * - canonicalWorkspaceRoot (realpath)
+ * - packageXmlSha256 (normalized LF, trimmed on-disk package.xml only for bound verify)
  * - deployableFiles: sorted relative paths under workspace with sha256 per file
  *   (excludes .sf/, .sfdx/, sfdx-project.json — CLI/bootstrap noise)
  */
 
 const EXCLUDED_RELATIVE_PREFIXES = ['.sf/', '.sfdx/'];
 const EXCLUDED_RELATIVE_FILES = new Set(['sfdx-project.json']);
+const PACKAGE_XML_RELATIVE = 'package.xml';
 
 function sha256Buffer(buffer) {
     return crypto.createHash('sha256').update(buffer).digest('hex');
@@ -42,8 +49,43 @@ function normalizePackageXml(xml) {
     return xml.replace(/\r\n/g, '\n').trim();
 }
 
-async function listDeployableWorkspaceFiles(workspacePath) {
+function isPathInsideRoot(resolvedPath, rootPath) {
+    const normalizedRoot = path.resolve(rootPath);
+    const normalizedTarget = path.resolve(resolvedPath);
+    const relative = path.relative(normalizedRoot, normalizedTarget);
+
+    return (
+        relative !== '..' &&
+        !relative.startsWith(`..${path.sep}`) &&
+        relative !== ''
+            ? true
+            : normalizedTarget === normalizedRoot
+    );
+}
+
+async function resolveCanonicalWorkspaceRoot(workspacePath) {
+    if (!workspacePath) {
+        return null;
+    }
+
+    try {
+        const resolved = await realpath(path.resolve(workspacePath));
+        const workspaceStat = await stat(resolved);
+
+        if (!workspaceStat.isDirectory()) {
+            return null;
+        }
+
+        return resolved;
+    } catch (error) {
+        return null;
+    }
+}
+
+async function listDeployableWorkspaceFiles(workspacePath, options = {}) {
+    const { rejectSymlinks = false, canonicalRoot = null } = options;
     const files = [];
+    const root = canonicalRoot || path.resolve(workspacePath);
 
     async function walk(relativeDir) {
         const absoluteDir = relativeDir
@@ -56,6 +98,18 @@ async function listDeployableWorkspaceFiles(workspacePath) {
                 ? `${relativeDir}/${entry.name}`.replace(/\\/g, '/')
                 : entry.name;
 
+            const absolutePath = path.join(workspacePath, relativePath);
+
+            if (rejectSymlinks) {
+                const entryStat = await lstat(absolutePath);
+
+                if (entryStat.isSymbolicLink()) {
+                    throw new Error(
+                        `Symlinks are not permitted in the deployment workspace: ${relativePath}`
+                    );
+                }
+            }
+
             if (entry.isDirectory()) {
                 if (
                     relativePath === '.sf' ||
@@ -64,6 +118,15 @@ async function listDeployableWorkspaceFiles(workspacePath) {
                     relativePath.startsWith('.sfdx/')
                 ) {
                     continue;
+                }
+
+                if (rejectSymlinks) {
+                    const resolvedDir = await realpath(absolutePath);
+                    if (!isPathInsideRoot(resolvedDir, root)) {
+                        throw new Error(
+                            `Workspace path escapes approved root: ${relativePath}`
+                        );
+                    }
                 }
 
                 await walk(relativePath);
@@ -86,6 +149,15 @@ async function listDeployableWorkspaceFiles(workspacePath) {
                 continue;
             }
 
+            if (rejectSymlinks) {
+                const resolvedFile = await realpath(absolutePath);
+                if (!isPathInsideRoot(resolvedFile, root)) {
+                    throw new Error(
+                        `Deployable file resolves outside workspace root: ${relativePath}`
+                    );
+                }
+            }
+
             files.push(relativePath);
         }
     }
@@ -95,29 +167,168 @@ async function listDeployableWorkspaceFiles(workspacePath) {
     return files;
 }
 
+function extractManifestMembersByType(packageXml) {
+    const membersByType = new Map();
+    const normalized = normalizePackageXml(packageXml);
+    const typeBlocks = normalized.match(/<types>[\s\S]*?<\/types>/gi) || [];
+
+    for (const block of typeBlocks) {
+        const nameMatch = block.match(/<name>\s*([^<]+?)\s*<\/name>/i);
+        const metadataType = nameMatch?.[1]?.trim();
+
+        if (!metadataType) {
+            continue;
+        }
+
+        const members = [...block.matchAll(/<members>\s*([^<]*?)\s*<\/members>/gi)]
+            .map((match) => match[1]?.trim())
+            .filter(Boolean);
+
+        if (!membersByType.has(metadataType)) {
+            membersByType.set(metadataType, new Set());
+        }
+
+        for (const member of members) {
+            membersByType.get(metadataType).add(member);
+        }
+    }
+
+    return membersByType;
+}
+
+function resolveExpectedMetadataRelativePath(metadataType, metadataName) {
+    const rule = getMetadataTypeRule(metadataType);
+
+    if (!rule || !metadataName) {
+        return null;
+    }
+
+    const folder = rule.folder || `${metadataType.charAt(0).toLowerCase()}${metadataType.slice(1)}s`;
+    const extension = rule.extension;
+
+    if (!extension) {
+        return null;
+    }
+
+    if (metadataType === 'CustomObject') {
+        return `objects/${metadataName}/${metadataName}${extension}`;
+    }
+
+    return `${folder}/${metadataName}${extension}`;
+}
+
+function verifyGeneratedPackageMatchesManifest(manifestPackageXml, generatedPackage) {
+    const manifestMembers = extractManifestMembersByType(manifestPackageXml);
+    const metadata = generatedPackage?.metadata;
+
+    if (!Array.isArray(metadata) || metadata.length === 0) {
+        return { ok: false, reason: 'Generated deployment package metadata is missing.' };
+    }
+
+    for (const item of metadata) {
+        const metadataType = item?.metadataType;
+        const metadataName = item?.metadataName;
+
+        if (!metadataType || !metadataName) {
+            return {
+                ok: false,
+                reason: 'Generated deployment package metadata entry is incomplete.'
+            };
+        }
+
+        const typeMembers = manifestMembers.get(metadataType);
+
+        if (!typeMembers || !typeMembers.has(metadataName)) {
+            return {
+                ok: false,
+                reason: `Manifest is missing package member ${metadataType}:${metadataName}.`
+            };
+        }
+    }
+
+    for (const [metadataType, memberSet] of manifestMembers.entries()) {
+        for (const memberName of memberSet) {
+            const stillSelected = metadata.some(
+                (item) =>
+                    item?.metadataType === metadataType &&
+                    item?.metadataName === memberName
+            );
+
+            if (!stillSelected) {
+                return {
+                    ok: false,
+                    reason: `Manifest member ${metadataType}:${memberName} is not present in the generated artifact.`
+                };
+            }
+        }
+    }
+
+    return { ok: true, reason: null };
+}
+
+async function readRequiredPackageXml(workspacePath, { allowManifestFallback = false, manifestPackageXml = null } = {}) {
+    const packageXmlPath = path.join(workspacePath, PACKAGE_XML_RELATIVE);
+
+    try {
+        return {
+            ok: true,
+            content: await readFile(packageXmlPath, 'utf8'),
+            source: 'disk'
+        };
+    } catch (error) {
+        if (allowManifestFallback && typeof manifestPackageXml === 'string') {
+            return {
+                ok: true,
+                content: manifestPackageXml,
+                source: 'manifest_fallback'
+            };
+        }
+
+        return {
+            ok: false,
+            reason: 'package.xml is missing from the validated workspace.'
+        };
+    }
+}
+
 async function computeDeployableArtifactDigest({
     workspacePath,
-    packageXml,
+    manifestPackageXml = null,
     profileOnlyMinimalPackageApplied,
     autoExcludeShapeFormulaConflicts,
     destinationOrgId,
-    deploymentApiVersion
+    deploymentApiVersion,
+    canonicalWorkspaceRoot = null,
+    allowManifestFallback = false,
+    rejectSymlinks = false
 }) {
-    let packageXmlForDigest = packageXml;
+    const canonicalRoot =
+        canonicalWorkspaceRoot ||
+        (await resolveCanonicalWorkspaceRoot(workspacePath));
 
-    try {
-        const packageXmlPath = path.join(workspacePath, 'package.xml');
-        packageXmlForDigest = await readFile(packageXmlPath, 'utf8');
-    } catch (error) {
-        packageXmlForDigest = packageXml;
+    if (!canonicalRoot) {
+        throw new Error('Unable to resolve canonical workspace root.');
     }
 
-    const normalizedXml = normalizePackageXml(packageXmlForDigest);
+    const packageXmlRead = await readRequiredPackageXml(workspacePath, {
+        allowManifestFallback,
+        manifestPackageXml
+    });
+
+    if (!packageXmlRead.ok) {
+        throw new Error(packageXmlRead.reason);
+    }
+
+    const normalizedXml = normalizePackageXml(packageXmlRead.content);
     const packageXmlSha256 = sha256String(normalizedXml);
     const deployableFiles = [];
 
     for (const relativePath of await listDeployableWorkspaceFiles(
-        workspacePath
+        workspacePath,
+        {
+            rejectSymlinks,
+            canonicalRoot: canonicalRoot
+        }
     )) {
         const absolutePath = path.join(workspacePath, relativePath);
         const content = await readFile(absolutePath);
@@ -138,6 +349,7 @@ async function computeDeployableArtifactDigest({
                   : null,
         destinationOrgId: destinationOrgId || null,
         deploymentApiVersion: deploymentApiVersion || null,
+        canonicalWorkspaceRoot: canonicalRoot,
         packageXmlSha256,
         deployableFiles
     };
@@ -146,7 +358,9 @@ async function computeDeployableArtifactDigest({
         digest: sha256String(JSON.stringify(canonicalPayload)),
         packageXmlSha256,
         deployableFileCount: deployableFiles.length,
-        canonicalPayload
+        canonicalPayload,
+        packageXmlOnDisk: packageXmlRead.content,
+        canonicalWorkspaceRoot: canonicalRoot
     };
 }
 
@@ -182,10 +396,6 @@ function resolveCheckOnlySuccess(checkOnlyDeployment) {
     return status === 'SUCCESS' || status === 'SUCCEEDED';
 }
 
-/**
- * Build server-side artifact identity after a successful validation run.
- * Returns null when the run is not eligible for bound deploy reuse.
- */
 async function buildBoundDeployArtifactRecord({
     validationId = null,
     orgId = null,
@@ -228,15 +438,32 @@ async function buildBoundDeployArtifactRecord({
         generatedManifest?.deploymentApiVersionPolicy?.deploymentApiVersion ||
         null;
 
-    const digestResult = await computeDeployableArtifactDigest({
-        workspacePath: generatedWorkspace.workspacePath,
-        packageXml: generatedManifest?.packageXml,
-        profileOnlyMinimalPackageApplied: true,
-        autoExcludeShapeFormulaConflicts:
-            deploymentPackage?.autoExcludeShapeFormulaConflicts,
-        destinationOrgId: orgId ?? null,
-        deploymentApiVersion
-    });
+    let digestResult;
+
+    try {
+        digestResult = await computeDeployableArtifactDigest({
+            workspacePath: generatedWorkspace.workspacePath,
+            manifestPackageXml: generatedManifest?.packageXml,
+            profileOnlyMinimalPackageApplied: true,
+            autoExcludeShapeFormulaConflicts:
+                deploymentPackage?.autoExcludeShapeFormulaConflicts,
+            destinationOrgId: orgId ?? null,
+            deploymentApiVersion,
+            allowManifestFallback: false,
+            rejectSymlinks: true
+        });
+    } catch (error) {
+        return null;
+    }
+
+    const manifestConsistency = verifyGeneratedPackageMatchesManifest(
+        digestResult.packageXmlOnDisk,
+        generatedPackage
+    );
+
+    if (!manifestConsistency.ok) {
+        return null;
+    }
 
     return {
         schemaVersion: ARTIFACT_SCHEMA_VERSION,
@@ -250,7 +477,8 @@ async function buildBoundDeployArtifactRecord({
                   ? false
                   : null,
         validationMode: 'VALIDATE',
-        workspacePath: generatedWorkspace.workspacePath,
+        workspacePath: digestResult.canonicalWorkspaceRoot,
+        canonicalWorkspaceRoot: digestResult.canonicalWorkspaceRoot,
         artifactDigest: digestResult.digest,
         packageXmlSha256: digestResult.packageXmlSha256,
         deployableFileCount: digestResult.deployableFileCount,
@@ -259,33 +487,62 @@ async function buildBoundDeployArtifactRecord({
     };
 }
 
-async function verifyWorkspaceArtifactIntegrity(artifactRecord, manifest) {
-    if (!artifactRecord?.workspacePath || !artifactRecord?.artifactDigest) {
+async function verifyBoundDeployArtifactIntegrity({
+    artifactRecord,
+    manifest,
+    generatedDeploymentPackage,
+    strict = true
+}) {
+    if (
+        !artifactRecord?.artifactDigest ||
+        !artifactRecord?.canonicalWorkspaceRoot
+    ) {
         return { ok: false, reason: 'Artifact record is incomplete.' };
     }
 
-    try {
-        const workspaceStat = await stat(artifactRecord.workspacePath);
-        if (!workspaceStat.isDirectory()) {
-            return { ok: false, reason: 'Validated workspace is missing.' };
-        }
-    } catch (error) {
+    const workspacePath = artifactRecord.canonicalWorkspaceRoot;
+
+    const currentRoot = await resolveCanonicalWorkspaceRoot(workspacePath);
+
+    if (!currentRoot) {
         return { ok: false, reason: 'Validated workspace is missing.' };
     }
 
-    const digestResult = await computeDeployableArtifactDigest({
-        workspacePath: artifactRecord.workspacePath,
-        packageXml: manifest?.packageXml,
-        profileOnlyMinimalPackageApplied:
-            artifactRecord.profileOnlyMinimalPackageApplied === true,
-        autoExcludeShapeFormulaConflicts:
-            artifactRecord.autoExcludeShapeFormulaConflicts,
-        destinationOrgId: artifactRecord.destinationOrgId,
-        deploymentApiVersion:
-            manifest?.summary?.apiVersion ||
-            manifest?.deploymentApiVersionPolicy?.deploymentApiVersion ||
-            null
-    });
+    if (
+        path.resolve(currentRoot) !==
+        path.resolve(artifactRecord.canonicalWorkspaceRoot)
+    ) {
+        return {
+            ok: false,
+            reason: 'Validated workspace root does not match the recorded artifact.'
+        };
+    }
+
+    let digestResult;
+
+    try {
+        digestResult = await computeDeployableArtifactDigest({
+            workspacePath: currentRoot,
+            manifestPackageXml: manifest?.packageXml,
+            profileOnlyMinimalPackageApplied:
+                artifactRecord.profileOnlyMinimalPackageApplied === true,
+            autoExcludeShapeFormulaConflicts:
+                artifactRecord.autoExcludeShapeFormulaConflicts,
+            destinationOrgId: artifactRecord.destinationOrgId,
+            deploymentApiVersion:
+                manifest?.summary?.apiVersion ||
+                manifest?.deploymentApiVersionPolicy?.deploymentApiVersion ||
+                null,
+            canonicalWorkspaceRoot: currentRoot,
+            allowManifestFallback: strict ? false : true,
+            rejectSymlinks: strict
+        });
+    } catch (error) {
+        return {
+            ok: false,
+            reason: error.message || 'Artifact integrity verification failed.'
+        };
+    }
 
     if (digestResult.digest !== artifactRecord.artifactDigest) {
         return {
@@ -295,28 +552,95 @@ async function verifyWorkspaceArtifactIntegrity(artifactRecord, manifest) {
         };
     }
 
-    return { ok: true, reason: null };
+    const manifestConsistency = verifyGeneratedPackageMatchesManifest(
+        digestResult.packageXmlOnDisk,
+        generatedDeploymentPackage
+    );
+
+    if (!manifestConsistency.ok) {
+        return manifestConsistency;
+    }
+
+    for (const item of generatedDeploymentPackage?.metadata || []) {
+        const relativePath = resolveExpectedMetadataRelativePath(
+            item.metadataType,
+            item.metadataName
+        );
+
+        if (!relativePath) {
+            return {
+                ok: false,
+                reason: `Unable to resolve deployable path for ${item.metadataType}:${item.metadataName}.`
+            };
+        }
+
+        const absolutePath = path.join(currentRoot, relativePath);
+
+        try {
+            const fileStat = await lstat(absolutePath);
+
+            if (fileStat.isSymbolicLink()) {
+                return {
+                    ok: false,
+                    reason: `Deployable file must not be a symlink: ${relativePath}`
+                };
+            }
+
+            if (!fileStat.isFile()) {
+                return {
+                    ok: false,
+                    reason: `Required deployable file is missing: ${relativePath}`
+                };
+            }
+
+            const resolvedFile = await realpath(absolutePath);
+
+            if (!isPathInsideRoot(resolvedFile, currentRoot)) {
+                return {
+                    ok: false,
+                    reason: `Deployable file resolves outside workspace: ${relativePath}`
+                };
+            }
+        } catch (error) {
+            return {
+                ok: false,
+                reason: `Required deployable file is missing: ${relativePath}`
+            };
+        }
+    }
+
+    return {
+        ok: true,
+        reason: null,
+        canonicalWorkspaceRoot: currentRoot,
+        packageXmlOnDisk: digestResult.packageXmlOnDisk
+    };
 }
 
-function verifyDestinationOrgIdentity(artifactRecord, orgId) {
+function verifyArtifactDestinationOrgIdentity(artifactRecord, verifiedOrgId) {
     const expected = artifactRecord?.destinationOrgId ?? null;
-    const actual = orgId ?? null;
 
-    if (!expected || !actual) {
+    if (!expected || !verifiedOrgId) {
         return {
             ok: false,
             reason: 'Destination org identity is missing for bound deployment.'
         };
     }
 
-    if (String(expected) !== String(actual)) {
+    if (!orgIdsMatch(expected, verifiedOrgId)) {
         return {
             ok: false,
-            reason: 'Destination org does not match the validated artifact.'
+            reason:
+                'Authenticated destination org does not match the validated artifact.'
         };
     }
 
     return { ok: true, reason: null };
+}
+
+/** @deprecated Use verifyArtifactDestinationOrgIdentity with verified org from OAuth. */
+function verifyDestinationOrgIdentity(artifactRecord, orgId) {
+    return verifyArtifactDestinationOrgIdentity(artifactRecord, orgId);
 }
 
 module.exports = {
@@ -325,7 +649,11 @@ module.exports = {
     listDeployableWorkspaceFiles,
     computeDeployableArtifactDigest,
     buildBoundDeployArtifactRecord,
-    verifyWorkspaceArtifactIntegrity,
+    verifyBoundDeployArtifactIntegrity,
+    verifyWorkspaceArtifactIntegrity: verifyBoundDeployArtifactIntegrity,
+    verifyArtifactDestinationOrgIdentity,
     verifyDestinationOrgIdentity,
+    verifyGeneratedPackageMatchesManifest,
+    resolveCanonicalWorkspaceRoot,
     wasProfileOnlyMinimalPackageApplied
 };

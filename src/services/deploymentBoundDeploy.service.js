@@ -4,10 +4,14 @@ const deploymentValidationStatusStore = require('./deploymentValidationStatus.st
 const deploymentCheckOnlyGateService = require('./deploymentCheckOnlyGate.service');
 const deploymentExecutionService = require('./deploymentExecution.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
-const deploymentValidationService = require('./deploymentValidation.service');
+const destinationSnapshotCaptureService = require('./deploymentSnapshot/destinationSnapshotCapture.service');
 const {
-    verifyWorkspaceArtifactIntegrity,
-    verifyDestinationOrgIdentity
+    resolveVerifiedDestinationOrgId
+} = require('./deploymentOrgLock/destinationOrgIdentity.service');
+const { OrgLockIdentityError } = require('./deploymentOrgLock/deploymentOrgLock.errors');
+const {
+    verifyBoundDeployArtifactIntegrity,
+    verifyArtifactDestinationOrgIdentity
 } = require('./deploymentBoundArtifact.service');
 
 function logSection(title) {
@@ -38,10 +42,25 @@ function buildBlockedResponse(code, message, details = {}) {
     };
 }
 
-/**
- * Resolve and verify a prior validation job for bound deploy reuse.
- * @returns {{ ok: true, job: object, result: object, artifact: object } | { ok: false, response: object }}
- */
+function metadataToSelectedMetadata(metadata) {
+    if (!Array.isArray(metadata)) {
+        return [];
+    }
+
+    return metadata
+        .map((item) => {
+            if (!item?.metadataType || !item?.metadataName) {
+                return null;
+            }
+
+            return {
+                metadataType: item.metadataType,
+                metadataName: item.metadataName
+            };
+        })
+        .filter(Boolean);
+}
+
 function resolveBoundValidationJob(boundValidationId) {
     if (!boundValidationId || typeof boundValidationId !== 'string') {
         return {
@@ -127,11 +146,7 @@ function resolveBoundValidationJob(boundValidationId) {
     };
 }
 
-async function verifyBoundDeployPreconditions({
-    artifact,
-    result,
-    orgId
-}) {
+async function verifyBoundDeployPreconditions({ artifact, result }) {
     if (artifact.profileOnlyMinimalPackageApplied !== true) {
         return buildBlockedResponse(
             'BOUND_PROFILE_ONLY_REQUIRED',
@@ -164,19 +179,12 @@ async function verifyBoundDeployPreconditions({
         );
     }
 
-    const destinationCheck = verifyDestinationOrgIdentity(artifact, orgId);
-
-    if (!destinationCheck.ok) {
-        return buildBlockedResponse(
-            'BOUND_DESTINATION_ORG_MISMATCH',
-            destinationCheck.reason
-        );
-    }
-
-    const integrity = await verifyWorkspaceArtifactIntegrity(
-        artifact,
-        result.generatedManifest
-    );
+    const integrity = await verifyBoundDeployArtifactIntegrity({
+        artifactRecord: artifact,
+        manifest: result.generatedManifest,
+        generatedDeploymentPackage: result.generatedDeploymentPackage,
+        strict: true
+    });
 
     if (!integrity.ok) {
         return buildBlockedResponse(
@@ -188,19 +196,77 @@ async function verifyBoundDeployPreconditions({
     return null;
 }
 
+function classifyDeploymentOutcome(deploymentExecution, error) {
+    if (error) {
+        return deploymentValidationStatusStore.BOUND_DEPLOY_CLAIM_STATE.UNCERTAIN;
+    }
+
+    if (deploymentExecution?.success === true) {
+        return deploymentValidationStatusStore.BOUND_DEPLOY_CLAIM_STATE.CONSUMED;
+    }
+
+    if (
+        deploymentExecution &&
+        (deploymentExecution.success === false ||
+            deploymentExecution.status === 'BLOCKED' ||
+            deploymentExecution.status === 'FAILED')
+    ) {
+        return deploymentValidationStatusStore.BOUND_DEPLOY_CLAIM_STATE.DEPLOY_FAILED;
+    }
+
+    return deploymentValidationStatusStore.BOUND_DEPLOY_CLAIM_STATE.UNCERTAIN;
+}
+
 let runDeploymentExecution =
     deploymentExecutionService.runDeploymentExecution.bind(
         deploymentExecutionService
     );
-let validateDestinationConnectivity =
-    deploymentValidationService.validateDestinationConnectivity.bind(
-        deploymentValidationService
+let runDeployAfterOptionalSnapshot =
+    destinationSnapshotCaptureService.runDeployAfterOptionalSnapshot.bind(
+        destinationSnapshotCaptureService
     );
+let resolveVerifiedOrgId = resolveVerifiedDestinationOrgId;
 
-/**
- * Deploy using the exact workspace/manifest from a prior successful
- * Profile-only check-only validation. Does not regenerate the package.
- */
+async function verifyBoundDestinationIdentity({ refreshToken, instanceUrl, artifact }) {
+    try {
+        const verifiedOrgId = await resolveVerifiedOrgId({
+            refreshToken,
+            instanceUrl,
+            requestedOrgId: null
+        });
+
+        const destinationCheck = verifyArtifactDestinationOrgIdentity(
+            artifact,
+            verifiedOrgId
+        );
+
+        if (!destinationCheck.ok) {
+            return {
+                ok: false,
+                response: buildBlockedResponse(
+                    'BOUND_DESTINATION_ORG_MISMATCH',
+                    destinationCheck.reason
+                )
+            };
+        }
+
+        return { ok: true, verifiedOrgId };
+    } catch (error) {
+        const message =
+            error instanceof OrgLockIdentityError
+                ? error.message
+                : 'Destination org identity verification failed.';
+
+        return {
+            ok: false,
+            response: buildBlockedResponse(
+                'BOUND_DESTINATION_IDENTITY_FAILED',
+                message
+            )
+        };
+    }
+}
+
 async function deployBoundValidationArtifact({
     boundValidationId,
     refreshToken,
@@ -219,79 +285,203 @@ async function deployBoundValidationArtifact({
 
     const preconditionError = await verifyBoundDeployPreconditions({
         artifact,
-        result,
-        orgId
+        result
     });
 
     if (preconditionError) {
         return preconditionError;
     }
 
-    const connectivityResult = await validateDestinationConnectivity({
-        refreshToken,
-        instanceUrl,
-        orgId
-    });
-
-    if (
-        connectivityResult?.deploymentValidation?.destinationConnected !== true
-    ) {
-        return {
-            ...connectivityResult,
-            boundDeploy: {
-                status: 'BLOCKED',
-                code: 'BOUND_DESTINATION_CONNECTIVITY_FAILED',
-                message:
-                    connectivityResult?.deploymentValidation?.message ||
-                    'Unable to authenticate with destination org.'
-            }
-        };
+    if (!refreshToken || !instanceUrl) {
+        return buildBlockedResponse(
+            'BOUND_DESTINATION_CREDENTIALS_REQUIRED',
+            'refreshToken and instanceUrl are required for bound deployment.'
+        );
     }
-
-    const generatedWorkspace = {
-        ...result.generatedWorkspace,
-        workspacePath: artifact.workspacePath
-    };
-    const generatedManifest = result.generatedManifest;
-    const deploymentReadiness = result.deploymentReadiness;
-    const checkOnlyDeployment = result.checkOnlyDeployment;
-    const deploymentApiVersion =
-        generatedManifest?.summary?.apiVersion ||
-        generatedManifest?.deploymentApiVersionPolicy?.deploymentApiVersion ||
-        null;
 
     const historyId = runHistorySafely(() =>
         deploymentHistoryService.createHistory({
             deploymentPackage: result.generatedDeploymentPackage,
-            deploymentReadiness,
+            deploymentReadiness: result.deploymentReadiness,
             metadataValidation: result.metadataValidation,
             dependencyValidation: result.dependencyValidation,
             deploymentSelections: result.deploymentSelections || []
         })
     );
 
-    runHistorySafely(() =>
-        deploymentHistoryService.updateHistory(historyId, {
-            stage: deploymentHistoryService.STAGES.WORKSPACE_BUILT,
-            metadataSummary: result.generatedDeploymentPackage?.summary
-        })
+    const claimResult = deploymentValidationStatusStore.tryAcquireBoundDeployClaim(
+        boundValidationId,
+        { historyId }
     );
 
-    const deploymentExecution = await runDeploymentExecution({
-        generatedWorkspace,
-        generatedManifest,
-        deploymentReadiness,
-        priorCheckOnlyDeployment: checkOnlyDeployment,
-        refreshToken,
-        instanceUrl,
-        deploymentApiVersion
-    });
+    if (!claimResult.acquired) {
+        return buildBlockedResponse(
+            claimResult.code || 'BOUND_DEPLOY_NOT_AVAILABLE',
+            claimResult.message || 'Validated artifact is not available for bound deployment.'
+        );
+    }
+
+    let deploymentExecution;
+    let deployCapturedSnapshot = null;
+    let verifiedOrgId = null;
+
+    try {
+        const identity = await verifyBoundDestinationIdentity({
+            refreshToken,
+            instanceUrl,
+            artifact
+        });
+
+        if (!identity.ok) {
+            deploymentValidationStatusStore.releaseBoundDeployClaimInProgress(
+                boundValidationId
+            );
+            return identity.response;
+        }
+
+        verifiedOrgId = identity.verifiedOrgId;
+
+        const preExecuteIntegrity = await verifyBoundDeployArtifactIntegrity({
+            artifactRecord: artifact,
+            manifest: result.generatedManifest,
+            generatedDeploymentPackage: result.generatedDeploymentPackage,
+            strict: true
+        });
+
+        if (!preExecuteIntegrity.ok) {
+            deploymentValidationStatusStore.releaseBoundDeployClaimInProgress(
+                boundValidationId
+            );
+            return buildBlockedResponse(
+                'BOUND_ARTIFACT_INTEGRITY_FAILED',
+                preExecuteIntegrity.reason
+            );
+        }
+
+        const generatedWorkspace = {
+            ...result.generatedWorkspace,
+            workspacePath: preExecuteIntegrity.canonicalWorkspaceRoot
+        };
+        const generatedManifest = {
+            ...result.generatedManifest,
+            packageXml: preExecuteIntegrity.packageXmlOnDisk
+        };
+        const deploymentReadiness = result.deploymentReadiness;
+        const checkOnlyDeployment = result.checkOnlyDeployment;
+        const deploymentApiVersion =
+            generatedManifest?.summary?.apiVersion ||
+            generatedManifest?.deploymentApiVersionPolicy?.deploymentApiVersion ||
+            null;
+
+        runHistorySafely(() =>
+            deploymentHistoryService.updateHistory(historyId, {
+                stage: deploymentHistoryService.STAGES.WORKSPACE_BUILT,
+                metadataSummary: result.generatedDeploymentPackage?.summary
+            })
+        );
+
+        const snapshotGate = await runDeployAfterOptionalSnapshot({
+            shouldDeploy: true,
+            captureArgs: {
+                destinationOrgId: verifiedOrgId,
+                sourceOrgId: result.sourceOrgId ?? null,
+                historyId,
+                sourceBranch: result.sourceBranch ?? null,
+                destinationBranch: result.destinationBranch ?? null,
+                generatedDeploymentPackage: result.generatedDeploymentPackage,
+                selectedMetadata: metadataToSelectedMetadata(
+                    result.generatedDeploymentPackage?.metadata
+                ),
+                generatedWorkspace,
+                refreshToken,
+                instanceUrl,
+                deploymentApiVersion,
+                sourceMetadataApiVersion: result.sourceMetadataApiVersion ?? null
+            },
+            runDeploymentExecution: async () => {
+                const immediateIntegrity =
+                    await verifyBoundDeployArtifactIntegrity({
+                        artifactRecord: artifact,
+                        manifest: generatedManifest,
+                        generatedDeploymentPackage:
+                            result.generatedDeploymentPackage,
+                        strict: true
+                    });
+
+                if (!immediateIntegrity.ok) {
+                    return {
+                        success: false,
+                        status: 'BLOCKED',
+                        message: immediateIntegrity.reason,
+                        mode: 'execution',
+                        executionMode: 'deploy'
+                    };
+                }
+
+                return runDeploymentExecution({
+                    generatedWorkspace: {
+                        ...generatedWorkspace,
+                        workspacePath: immediateIntegrity.canonicalWorkspaceRoot
+                    },
+                    generatedManifest: {
+                        ...generatedManifest,
+                        packageXml: immediateIntegrity.packageXmlOnDisk
+                    },
+                    deploymentReadiness,
+                    priorCheckOnlyDeployment: checkOnlyDeployment,
+                    refreshToken,
+                    instanceUrl,
+                    deploymentApiVersion
+                });
+            },
+            afterLockedExecution: async ({ snapshot }) => {
+                if (snapshot?.snapshotId) {
+                    runHistorySafely(() =>
+                        deploymentHistoryService.updateHistory(historyId, {
+                            snapshotId: snapshot.snapshotId
+                        })
+                    );
+                }
+            }
+        });
+
+        deploymentExecution = snapshotGate.deploymentExecution;
+        deployCapturedSnapshot = snapshotGate.snapshot || null;
+
+        const claimOutcome = classifyDeploymentOutcome(deploymentExecution);
+
+        deploymentValidationStatusStore.finalizeBoundDeployClaim(
+            boundValidationId,
+            claimOutcome,
+            {
+                historyId,
+                salesforceDeploymentId: deploymentExecution?.deploymentId || null
+            }
+        );
+    } catch (error) {
+        console.error('BOUND DEPLOY EXECUTION ERROR');
+        console.error(error);
+
+        deploymentValidationStatusStore.finalizeBoundDeployClaim(
+            boundValidationId,
+            deploymentValidationStatusStore.BOUND_DEPLOY_CLAIM_STATE.UNCERTAIN,
+            {
+                historyId,
+                errorMessage: error.message || 'Bound deployment failed with uncertain outcome.'
+            }
+        );
+
+        return buildBlockedResponse(
+            'BOUND_DEPLOY_UNCERTAIN',
+            'Bound deployment ended with an uncertain outcome. Explicit reconciliation is required before retry.',
+            { historyId }
+        );
+    }
 
     runHistorySafely(() =>
         deploymentHistoryService.updateHistory(historyId, {
             stage: deploymentHistoryService.STAGES.DEPLOYMENT_EXECUTED,
-            deploymentSummary:
-                deploymentExecution?.deploymentSummary || null,
+            deploymentSummary: deploymentExecution?.deploymentSummary || null,
             deploymentId: deploymentExecution?.deploymentId || null,
             errors:
                 deploymentExecution?.success === false &&
@@ -304,14 +494,20 @@ async function deployBoundValidationArtifact({
     const deploymentHistory = runHistorySafely(() =>
         deploymentHistoryService.completeHistory(historyId, {
             deploymentMode: 'DEPLOY',
-            deploymentReadiness,
-            generatedWorkspace,
+            deploymentReadiness: result.deploymentReadiness,
+            generatedWorkspace: {
+                ...result.generatedWorkspace,
+                workspacePath: artifact.canonicalWorkspaceRoot
+            },
             deploymentResult: deploymentExecution,
-            destinationOrgId: orgId ?? null,
+            destinationOrgId: verifiedOrgId ?? null,
             sourceOrgId: result.sourceOrgId ?? null,
             deploymentPlanId: result.deploymentPlanId ?? null,
             metadataComparisonId: result.metadataComparisonId ?? null,
-            boundValidationId: artifact.validationId
+            snapshotId:
+                deploymentHistoryService.getHistory(historyId)?.snapshotId ??
+                deployCapturedSnapshot?.snapshotId ??
+                null
         })
     );
 
@@ -320,6 +516,35 @@ async function deployBoundValidationArtifact({
             ? 'Validation-Bound Deployment Completed'
             : 'Validation-Bound Deployment Failed'
     );
+
+    const blockedExecution =
+        deploymentExecution?.success !== true &&
+        deploymentExecution?.status === 'BLOCKED';
+
+    if (blockedExecution) {
+        return {
+            success: false,
+            boundDeploy: {
+                status: 'BLOCKED',
+                code: 'BOUND_DEPLOY_FAILED',
+                validationId: artifact.validationId,
+                artifactDigest: artifact.artifactDigest,
+                packageRegenerated: false,
+                message: deploymentExecution?.message || 'Bound deployment was blocked.'
+            },
+            boundValidationId: artifact.validationId,
+            deploymentExecution,
+            checkOnlyDeployment: result.checkOnlyDeployment,
+            deploymentReadiness: result.deploymentReadiness,
+            generatedWorkspace: {
+                ...result.generatedWorkspace,
+                workspacePath: artifact.canonicalWorkspaceRoot
+            },
+            generatedManifest: result.generatedManifest,
+            generatedDeploymentPackage: result.generatedDeploymentPackage,
+            deploymentHistory
+        };
+    }
 
     return {
         success: deploymentExecution?.success === true,
@@ -334,10 +559,13 @@ async function deployBoundValidationArtifact({
         },
         boundValidationId: artifact.validationId,
         deploymentExecution,
-        checkOnlyDeployment,
-        deploymentReadiness,
-        generatedWorkspace,
-        generatedManifest,
+        checkOnlyDeployment: result.checkOnlyDeployment,
+        deploymentReadiness: result.deploymentReadiness,
+        generatedWorkspace: {
+            ...result.generatedWorkspace,
+            workspacePath: artifact.canonicalWorkspaceRoot
+        },
+        generatedManifest: result.generatedManifest,
         generatedDeploymentPackage: result.generatedDeploymentPackage,
         deploymentHistory
     };
@@ -357,28 +585,44 @@ function resetRunDeploymentExecutionForTests() {
         );
 }
 
-function setValidateDestinationConnectivityForTests(fn) {
+function setRunDeployAfterOptionalSnapshotForTests(fn) {
     if (typeof fn !== 'function') {
         throw new Error(
-            'setValidateDestinationConnectivityForTests requires a function'
+            'setRunDeployAfterOptionalSnapshotForTests requires a function'
         );
     }
-    validateDestinationConnectivity = fn;
+    runDeployAfterOptionalSnapshot = fn;
 }
 
-function resetValidateDestinationConnectivityForTests() {
-    validateDestinationConnectivity =
-        deploymentValidationService.validateDestinationConnectivity.bind(
-            deploymentValidationService
+function resetRunDeployAfterOptionalSnapshotForTests() {
+    runDeployAfterOptionalSnapshot =
+        destinationSnapshotCaptureService.runDeployAfterOptionalSnapshot.bind(
+            destinationSnapshotCaptureService
         );
+}
+
+function setResolveVerifiedDestinationOrgIdForTests(fn) {
+    if (typeof fn !== 'function') {
+        throw new Error(
+            'setResolveVerifiedDestinationOrgIdForTests requires a function'
+        );
+    }
+    resolveVerifiedOrgId = fn;
+}
+
+function resetResolveVerifiedDestinationOrgIdForTests() {
+    resolveVerifiedOrgId = resolveVerifiedDestinationOrgId;
 }
 
 module.exports = {
     resolveBoundValidationJob,
     verifyBoundDeployPreconditions,
     deployBoundValidationArtifact,
+    verifyBoundDestinationIdentity,
     setRunDeploymentExecutionForTests,
     resetRunDeploymentExecutionForTests,
-    setValidateDestinationConnectivityForTests,
-    resetValidateDestinationConnectivityForTests
+    setRunDeployAfterOptionalSnapshotForTests,
+    resetRunDeployAfterOptionalSnapshotForTests,
+    setResolveVerifiedDestinationOrgIdForTests,
+    resetResolveVerifiedDestinationOrgIdForTests
 };

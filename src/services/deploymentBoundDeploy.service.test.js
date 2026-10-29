@@ -140,14 +140,40 @@ async function seedCompletedValidationJob({
     };
 }
 
-function stubConnectivitySuccess() {
-    boundDeployService.setValidateDestinationConnectivityForTests(async () => ({
-        success: true,
-        deploymentValidation: {
-            destinationConnected: true,
-            status: 'CONNECTED'
+function stubVerifiedOrg(orgId = '00DORG123') {
+    boundDeployService.setResolveVerifiedDestinationOrgIdForTests(async () => orgId);
+}
+
+function stubSnapshotPassthrough() {
+    boundDeployService.setRunDeployAfterOptionalSnapshotForTests(
+        async ({ runDeploymentExecution, afterLockedExecution }) => {
+            const deploymentExecution = await runDeploymentExecution();
+
+            if (typeof afterLockedExecution === 'function') {
+                await afterLockedExecution({
+                    snapshot: null,
+                    deploymentExecution
+                });
+            }
+
+            return {
+                deploymentExecution,
+                snapshot: null,
+                snapshotBlocked: false
+            };
         }
-    }));
+    );
+}
+
+function resetBoundDeployTestDoubles() {
+    boundDeployService.resetRunDeploymentExecutionForTests();
+    boundDeployService.resetRunDeployAfterOptionalSnapshotForTests();
+    boundDeployService.resetResolveVerifiedDestinationOrgIdForTests();
+}
+
+function setupBoundDeploySuccessStubs(orgId = '00DORG123') {
+    stubVerifiedOrg(orgId);
+    stubSnapshotPassthrough();
 }
 
 async function cleanupWorkspace(workspacePath) {
@@ -163,7 +189,7 @@ async function main() {
     await runTest(
         'successful bound deploy reuses validated workspace and manifest',
         async () => {
-            stubConnectivitySuccess();
+            setupBoundDeploySuccessStubs();
             const seeded = await seedCompletedValidationJob();
             let captured = null;
 
@@ -187,8 +213,8 @@ async function main() {
             assert.strictEqual(response.success, true);
             assert.strictEqual(response.boundDeploy.packageRegenerated, false);
             assert.strictEqual(
-                captured.generatedWorkspace.workspacePath,
-                seeded.workspacePath
+                path.resolve(captured.generatedWorkspace.workspacePath),
+                path.resolve(seeded.artifact.canonicalWorkspaceRoot)
             );
             assert.strictEqual(
                 captured.generatedManifest.packageXml,
@@ -199,8 +225,10 @@ async function main() {
                 '0AfCHECKONLY'
             );
 
-            boundDeployService.resetRunDeploymentExecutionForTests();
-            boundDeployService.resetValidateDestinationConnectivityForTests();
+            const job = statusStore.getJob(seeded.validationId);
+            assert.strictEqual(job.boundDeployClaim.state, 'CONSUMED');
+
+            resetBoundDeployTestDoubles();
             await cleanupWorkspace(seeded.workspacePath);
         }
     );
@@ -208,7 +236,7 @@ async function main() {
     await runTest(
         'bound deploy does not invoke deployment package generation',
         async () => {
-            stubConnectivitySuccess();
+            setupBoundDeploySuccessStubs();
             const seeded = await seedCompletedValidationJob();
             let generateCalled = false;
             const originalGenerate =
@@ -234,8 +262,7 @@ async function main() {
             assert.strictEqual(generateCalled, false);
 
             deploymentPackageService.generateDeploymentPackage = originalGenerate;
-            boundDeployService.resetRunDeploymentExecutionForTests();
-            boundDeployService.resetValidateDestinationConnectivityForTests();
+            resetBoundDeployTestDoubles();
             await cleanupWorkspace(seeded.workspacePath);
         }
     );
@@ -272,15 +299,15 @@ async function main() {
         await cleanupWorkspace(seeded.workspacePath);
     });
 
-    await runTest('destination org mismatch is rejected', async () => {
-        stubConnectivitySuccess();
+    await runTest('verified destination org mismatch is rejected', async () => {
+        setupBoundDeploySuccessStubs('00DOTHER');
         const seeded = await seedCompletedValidationJob({ orgId: '00DORG123' });
 
         const response = await boundDeployService.deployBoundValidationArtifact({
             boundValidationId: seeded.validationId,
             refreshToken: 'rt',
             instanceUrl: 'https://example.my.salesforce.com',
-            orgId: '00DOTHER'
+            orgId: '00DORG123'
         });
 
         assert.strictEqual(
@@ -288,12 +315,36 @@ async function main() {
             'BOUND_DESTINATION_ORG_MISMATCH'
         );
 
-        boundDeployService.resetValidateDestinationConnectivityForTests();
+        resetBoundDeployTestDoubles();
+        await cleanupWorkspace(seeded.workspacePath);
+    });
+
+    await runTest('destination identity verification failure is rejected', async () => {
+        const { OrgLockIdentityError } = require('./deploymentOrgLock/deploymentOrgLock.errors');
+        setupBoundDeploySuccessStubs();
+        boundDeployService.setResolveVerifiedDestinationOrgIdForTests(async () => {
+            throw new OrgLockIdentityError('identity lookup failed');
+        });
+        const seeded = await seedCompletedValidationJob();
+
+        const response = await boundDeployService.deployBoundValidationArtifact({
+            boundValidationId: seeded.validationId,
+            refreshToken: 'rt',
+            instanceUrl: 'https://example.my.salesforce.com',
+            orgId: '00DORG123'
+        });
+
+        assert.strictEqual(
+            response.boundDeploy.code,
+            'BOUND_DESTINATION_IDENTITY_FAILED'
+        );
+
+        resetBoundDeployTestDoubles();
         await cleanupWorkspace(seeded.workspacePath);
     });
 
     await runTest('modified manifest rejects bound deploy', async () => {
-        stubConnectivitySuccess();
+        setupBoundDeploySuccessStubs();
         const seeded = await seedCompletedValidationJob();
 
         await writeFile(
@@ -314,12 +365,12 @@ async function main() {
             'BOUND_ARTIFACT_INTEGRITY_FAILED'
         );
 
-        boundDeployService.resetValidateDestinationConnectivityForTests();
+        resetBoundDeployTestDoubles();
         await cleanupWorkspace(seeded.workspacePath);
     });
 
     await runTest('modified deployable file rejects bound deploy', async () => {
-        stubConnectivitySuccess();
+        setupBoundDeploySuccessStubs();
         const seeded = await seedCompletedValidationJob();
 
         await writeFile(
@@ -340,12 +391,12 @@ async function main() {
             'BOUND_ARTIFACT_INTEGRITY_FAILED'
         );
 
-        boundDeployService.resetValidateDestinationConnectivityForTests();
+        resetBoundDeployTestDoubles();
         await cleanupWorkspace(seeded.workspacePath);
     });
 
     await runTest('missing workspace rejects bound deploy', async () => {
-        stubConnectivitySuccess();
+        setupBoundDeploySuccessStubs();
         const seeded = await seedCompletedValidationJob();
         await cleanupWorkspace(seeded.workspacePath);
 
@@ -361,7 +412,187 @@ async function main() {
             'BOUND_ARTIFACT_INTEGRITY_FAILED'
         );
 
-        boundDeployService.resetValidateDestinationConnectivityForTests();
+        resetBoundDeployTestDoubles();
+    });
+
+    await runTest('concurrent bound deploy returns in progress', async () => {
+        setupBoundDeploySuccessStubs();
+        const seeded = await seedCompletedValidationJob();
+        let inFlight = 0;
+        let maxInFlight = 0;
+
+        boundDeployService.setRunDeployAfterOptionalSnapshotForTests(
+            async ({ runDeploymentExecution }) => {
+                inFlight += 1;
+                maxInFlight = Math.max(maxInFlight, inFlight);
+                await new Promise((resolve) => setTimeout(resolve, 40));
+                const deploymentExecution = await runDeploymentExecution();
+                inFlight -= 1;
+                return { deploymentExecution, snapshot: null };
+            }
+        );
+        boundDeployService.setRunDeploymentExecutionForTests(async () => ({
+            success: true,
+            deploymentId: '0AfCONCURRENT'
+        }));
+
+        const request = () =>
+            boundDeployService.deployBoundValidationArtifact({
+                boundValidationId: seeded.validationId,
+                refreshToken: 'rt',
+                instanceUrl: 'https://example.my.salesforce.com',
+                orgId: '00DORG123'
+            });
+
+        const [first, second] = await Promise.all([request(), request()]);
+        const codes = [first.boundDeploy?.code, second.boundDeploy?.code];
+
+        assert.ok(codes.includes('BOUND_DEPLOY_IN_PROGRESS'));
+        assert.ok(
+            first.success === true || second.success === true,
+            'one request should succeed'
+        );
+        assert.strictEqual(maxInFlight, 1);
+
+        resetBoundDeployTestDoubles();
+        await cleanupWorkspace(seeded.workspacePath);
+    });
+
+    await runTest('consumed artifact rejects sequential redeploy', async () => {
+        setupBoundDeploySuccessStubs();
+        const seeded = await seedCompletedValidationJob();
+        boundDeployService.setRunDeploymentExecutionForTests(async () => ({
+            success: true,
+            deploymentId: '0AfONCE'
+        }));
+
+        const first = await boundDeployService.deployBoundValidationArtifact({
+            boundValidationId: seeded.validationId,
+            refreshToken: 'rt',
+            instanceUrl: 'https://example.my.salesforce.com',
+            orgId: '00DORG123'
+        });
+        assert.strictEqual(first.success, true);
+
+        const second = await boundDeployService.deployBoundValidationArtifact({
+            boundValidationId: seeded.validationId,
+            refreshToken: 'rt',
+            instanceUrl: 'https://example.my.salesforce.com',
+            orgId: '00DORG123'
+        });
+
+        assert.strictEqual(second.boundDeploy.code, 'BOUND_DEPLOY_CONSUMED');
+
+        resetBoundDeployTestDoubles();
+        await cleanupWorkspace(seeded.workspacePath);
+    });
+
+    await runTest('confirmed deploy failure allows retry', async () => {
+        setupBoundDeploySuccessStubs();
+        const seeded = await seedCompletedValidationJob();
+        let attempts = 0;
+
+        boundDeployService.setRunDeploymentExecutionForTests(async () => {
+            attempts += 1;
+            if (attempts === 1) {
+                return {
+                    success: false,
+                    status: 'FAILED',
+                    message: 'Simulated CLI failure'
+                };
+            }
+
+            return {
+                success: true,
+                deploymentId: '0AfRETRY'
+            };
+        });
+
+        const first = await boundDeployService.deployBoundValidationArtifact({
+            boundValidationId: seeded.validationId,
+            refreshToken: 'rt',
+            instanceUrl: 'https://example.my.salesforce.com',
+            orgId: '00DORG123'
+        });
+
+        assert.strictEqual(first.success, false);
+        assert.strictEqual(
+            statusStore.getJob(seeded.validationId).boundDeployClaim.state,
+            'DEPLOY_FAILED'
+        );
+
+        const second = await boundDeployService.deployBoundValidationArtifact({
+            boundValidationId: seeded.validationId,
+            refreshToken: 'rt',
+            instanceUrl: 'https://example.my.salesforce.com',
+            orgId: '00DORG123'
+        });
+
+        assert.strictEqual(second.success, true);
+        assert.strictEqual(attempts, 2);
+
+        resetBoundDeployTestDoubles();
+        await cleanupWorkspace(seeded.workspacePath);
+    });
+
+    await runTest('uncertain outcome requires reconciliation before retry', async () => {
+        setupBoundDeploySuccessStubs();
+        const seeded = await seedCompletedValidationJob();
+
+        boundDeployService.setRunDeployAfterOptionalSnapshotForTests(async () => {
+            throw new Error('timeout after CLI dispatch');
+        });
+
+        const first = await boundDeployService.deployBoundValidationArtifact({
+            boundValidationId: seeded.validationId,
+            refreshToken: 'rt',
+            instanceUrl: 'https://example.my.salesforce.com',
+            orgId: '00DORG123'
+        });
+
+        assert.strictEqual(first.boundDeploy.code, 'BOUND_DEPLOY_UNCERTAIN');
+        assert.strictEqual(
+            statusStore.getJob(seeded.validationId).boundDeployClaim.state,
+            'UNCERTAIN'
+        );
+
+        const retry = await boundDeployService.deployBoundValidationArtifact({
+            boundValidationId: seeded.validationId,
+            refreshToken: 'rt',
+            instanceUrl: 'https://example.my.salesforce.com',
+            orgId: '00DORG123'
+        });
+
+        assert.strictEqual(retry.boundDeploy.code, 'BOUND_DEPLOY_UNCERTAIN');
+
+        statusStore.reconcileBoundDeployClaim(
+            seeded.validationId,
+            'MARK_DEPLOY_FAILED'
+        );
+
+        boundDeployService.setRunDeployAfterOptionalSnapshotForTests(
+            async ({ runDeploymentExecution }) => ({
+                deploymentExecution: await runDeploymentExecution(),
+                snapshot: null
+            })
+        );
+        boundDeployService.setRunDeploymentExecutionForTests(async () => ({
+            success: true,
+            deploymentId: '0AfAFTERRECON'
+        }));
+
+        const afterReconcile =
+            await boundDeployService.deployBoundValidationArtifact({
+                boundValidationId: seeded.validationId,
+                refreshToken: 'rt',
+                instanceUrl: 'https://example.my.salesforce.com',
+                orgId: '00DORG123'
+            });
+
+        assert.strictEqual(afterReconcile.success, true);
+
+        resetBoundDeployTestDoubles();
+        await cleanupWorkspace(seeded.workspacePath);
     });
 
     await runTest('unknown validation id is rejected', async () => {
@@ -485,7 +716,7 @@ async function main() {
 
             const digestResult = await computeDeployableArtifactDigest({
                 workspacePath,
-                packageXml,
+                manifestPackageXml: packageXml,
                 profileOnlyMinimalPackageApplied: true,
                 autoExcludeShapeFormulaConflicts: true,
                 destinationOrgId: '00DORG123',
