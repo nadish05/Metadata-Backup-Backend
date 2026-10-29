@@ -39,6 +39,11 @@ router.post(
 );
 
 router.post(
+    '/deploy/bound',
+    deploymentController.deployBoundValidation
+);
+
+router.post(
     '/rollback',
     deploymentRollbackController.rollbackDeployment
 );

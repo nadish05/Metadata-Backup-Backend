@@ -305,6 +305,7 @@ const dependencies = [
 
 const deploymentValidationService = require('../services/deploymentValidation.service');
 const deploymentValidationAsyncService = require('../services/deploymentValidationAsync.service');
+const deploymentBoundDeployService = require('../services/deploymentBoundDeploy.service');
 const {
     attachReservedDeploymentSelections
 } = require('../services/deploymentPlanner/deploymentSelections.foundation');
@@ -511,4 +512,55 @@ exports.getDeploymentValidationStatus = async (req, res) => {
 
     }
 
+};
+
+function extractBoundDeployRequestArgs(req) {
+    const { boundValidationId, refreshToken, instanceUrl, orgId } =
+        req.body || {};
+
+    return {
+        boundValidationId,
+        refreshToken,
+        instanceUrl,
+        orgId
+    };
+}
+
+/**
+ * Deploy using a prior successful Profile-only check-only validation artifact.
+ * Request contract: { boundValidationId, refreshToken, instanceUrl, orgId }
+ */
+exports.deployBoundValidation = async (req, res) => {
+    try {
+        const args = extractBoundDeployRequestArgs(req);
+
+        const result =
+            await deploymentBoundDeployService.deployBoundValidationArtifact(
+                args
+            );
+
+        if (result?.boundDeploy?.status === 'BLOCKED') {
+            return res.status(409).json(result);
+        }
+
+        if (result?.success === false) {
+            return res.status(502).json(result);
+        }
+
+        return res.json(result);
+    } catch (error) {
+        console.error('BOUND DEPLOYMENT ERROR');
+        console.error(error);
+
+        return res.status(500).json({
+            success: false,
+            boundDeploy: {
+                status: 'BLOCKED',
+                code: 'BOUND_DEPLOY_INTERNAL_ERROR',
+                message:
+                    error.message ||
+                    'Unable to execute validation-bound deployment.'
+            }
+        });
+    }
 };

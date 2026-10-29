@@ -106,6 +106,9 @@ const {
     completeWithAutoValidationLoop
 } = require('./deploymentFailureClassification/deploymentAutoValidation.service');
 const {
+    buildBoundDeployArtifactRecord
+} = require('./deploymentBoundArtifact.service');
+const {
     buildOnDemandAiResolutionStub
 } = require('./aiDeploymentAdvisor/aiDeploymentAdvisor.service');
 const {
@@ -2676,6 +2679,24 @@ async function validateDeployment({
                     : compatibilityFilterError
             })
         );
+    }
+
+    if (validationId && !autoValidationContext?.isRevalidation) {
+        try {
+            const boundDeployArtifact = await buildBoundDeployArtifactRecord({
+                validationId,
+                orgId,
+                deploymentPackage,
+                finalResponse
+            });
+
+            if (boundDeployArtifact) {
+                finalResponse.boundDeployArtifact = boundDeployArtifact;
+            }
+        } catch (error) {
+            console.error('BOUND DEPLOY ARTIFACT ERROR');
+            console.error(error);
+        }
     }
 
     return finalResponse;
