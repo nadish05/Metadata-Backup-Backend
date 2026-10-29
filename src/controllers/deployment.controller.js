@@ -311,6 +311,9 @@ const {
 const {
     resolveAutoExcludeShapeFormulaConflictsPolicy
 } = require('../services/deploymentShapeFormulaExclusionPolicy.service');
+const {
+    resolveProfileOnlyMinimalPackagePolicy
+} = require('../services/deploymentPackage.service');
 
 function extractValidationRequestArgs(req) {
     const {
@@ -319,6 +322,7 @@ function extractValidationRequestArgs(req) {
         orgId,
         deploymentPackage,
         autoExcludeShapeFormulaConflicts,
+        profileOnlyMinimalPackage,
         // Optional Deployment Planner preferences (Deploy/Skip).
         deploymentSelections
     } = req.body || {};
@@ -372,7 +376,13 @@ function extractValidationRequestArgs(req) {
                 resolveAutoExcludeShapeFormulaConflictsPolicy({
                     topLevel: autoExcludeShapeFormulaConflicts,
                     deploymentPackage: packageForValidation
-                })
+                }),
+            profileOnlyMinimalPackage: resolveProfileOnlyMinimalPackagePolicy(
+                {
+                    topLevel: profileOnlyMinimalPackage,
+                    deploymentPackage: packageForValidation
+                }
+            )
         };
     }
 

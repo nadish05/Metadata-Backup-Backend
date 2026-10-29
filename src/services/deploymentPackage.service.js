@@ -184,6 +184,72 @@ function normalizeDependencies(requiredDependencies) {
     });
 }
 
+/**
+ * Resolve profileOnlyMinimalPackage for validation.
+ *
+ * 1. If top-level request value is an explicit boolean, it wins.
+ * 2. Else if deploymentPackage value is an explicit boolean, use it.
+ * 3. Else default false (strings/numbers never enable the policy).
+ */
+function resolveProfileOnlyMinimalPackagePolicy({
+    topLevel = undefined,
+    deploymentPackage = null
+} = {}) {
+    if (typeof topLevel === 'boolean') {
+        return topLevel;
+    }
+
+    const packageLevel = deploymentPackage?.profileOnlyMinimalPackage;
+
+    if (typeof packageLevel === 'boolean') {
+        return packageLevel;
+    }
+
+    return false;
+}
+
+/**
+ * Profile-only minimal package is allowed only when every user-selected row
+ * is an unambiguous Profile member (type + name). Does not inspect dependencies.
+ */
+function evaluateProfileOnlyMinimalPackageEligibility(selectedMetadata) {
+    if (!Array.isArray(selectedMetadata) || selectedMetadata.length === 0) {
+        return { eligible: false, reason: 'empty_selection' };
+    }
+
+    const keys = new Set();
+
+    for (const item of selectedMetadata) {
+        if (!item || typeof item !== 'object') {
+            return { eligible: false, reason: 'invalid_selection_item' };
+        }
+
+        const metadataType = item.metadataType || item.type || null;
+        const metadataName = item.metadataName || item.name || null;
+
+        if (metadataType !== 'Profile') {
+            return { eligible: false, reason: 'mixed_or_non_profile_selection' };
+        }
+
+        if (
+            typeof metadataName !== 'string' ||
+            !metadataName.trim()
+        ) {
+            return { eligible: false, reason: 'profile_missing_name' };
+        }
+
+        const key = `Profile:${metadataName.trim()}`;
+
+        if (keys.has(key)) {
+            return { eligible: false, reason: 'duplicate_profile_selection' };
+        }
+
+        keys.add(key);
+    }
+
+    return { eligible: true, reason: null };
+}
+
 function shouldAutoIncludeDependency(dependency) {
     // Action-aware path: only DEPLOY decisions are auto-included.
     // REFERENCE / SKIP / BLOCK / MERGE are never included.
@@ -223,9 +289,20 @@ function dependencyToMetadataItem(dependency) {
 
 function composeMetadataWithRequiredDependencies(
     selectedMetadata,
-    requiredDependencies
+    requiredDependencies,
+    options = {}
 ) {
     const selected = normalizeMetadata(selectedMetadata);
+
+    if (options.profileOnlyMinimalPackage === true) {
+        const eligibility =
+            evaluateProfileOnlyMinimalPackageEligibility(selectedMetadata);
+
+        if (eligibility.eligible) {
+            return selected;
+        }
+    }
+
     const metadataMap = new Map();
     const composed = [];
 
@@ -318,9 +395,13 @@ function generateDeploymentPackage(deploymentPackage) {
         };
     }
 
+    const profileOnlyMinimalPackage =
+        deploymentPackage.profileOnlyMinimalPackage === true;
+
     const metadata = composeMetadataWithRequiredDependencies(
         deploymentPackage.selectedMetadata,
-        deploymentPackage.requiredDependencies
+        deploymentPackage.requiredDependencies,
+        { profileOnlyMinimalPackage }
     );
     const dependencies = normalizeDependencies(
         deploymentPackage.requiredDependencies
@@ -344,5 +425,7 @@ module.exports = {
     normalizeMetadataItem,
     normalizeMetadata,
     getMetadataUniquenessKey,
-    composeMetadataWithRequiredDependencies
+    composeMetadataWithRequiredDependencies,
+    resolveProfileOnlyMinimalPackagePolicy,
+    evaluateProfileOnlyMinimalPackageEligibility
 };
