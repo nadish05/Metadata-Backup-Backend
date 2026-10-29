@@ -298,9 +298,7 @@ function resolveExplicitPrimarySelectedMetadata(
 
     if (hasNonPrimaryOrigin) {
         const primaryItems = items.filter(
-            (item) =>
-                resolveMetadataOrigin(item) ===
-                METADATA_ORIGINS.PRIMARY_SELECTION
+            (item) => item?.origin === METADATA_ORIGINS.PRIMARY_SELECTION
         );
 
         if (primaryItems.length > 0) {

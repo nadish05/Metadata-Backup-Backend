@@ -394,6 +394,62 @@ runTest('eligibility helper rejects non-Profile types', () => {
     );
 });
 
+runTest('origin-derived primary: explicit PRIMARY Profile and explicit non-primary Apex', () => {
+    const plan = normalizeDeployableMetadata([
+        {
+            metadataType: 'Profile',
+            metadataName: 'Sales Manager',
+            origin: METADATA_ORIGINS.PRIMARY_SELECTION
+        },
+        {
+            metadataType: 'ApexClass',
+            metadataName: 'MyController',
+            origin: METADATA_ORIGINS.DIRECT_DEPENDENCY
+        }
+    ]);
+
+    const explicitPrimary = resolveExplicitPrimarySelectedMetadata({}, plan);
+
+    assert.strictEqual(explicitPrimary.length, 1);
+    assert.strictEqual(explicitPrimary[0].metadataName, 'Sales Manager');
+});
+
+runTest('origin-derived primary excludes untagged Apex when a non-primary origin exists', () => {
+    const plan = normalizeDeployableMetadata([
+        {
+            metadataType: 'Profile',
+            metadataName: 'Sales Manager',
+            origin: METADATA_ORIGINS.PRIMARY_SELECTION
+        },
+        {
+            metadataType: 'CustomField',
+            metadataName: 'Account.Industry',
+            origin: METADATA_ORIGINS.RELATIONSHIP_TARGET
+        },
+        {
+            metadataType: 'ApexClass',
+            metadataName: 'UntaggedApex'
+        }
+    ]);
+
+    const explicitPrimary = resolveExplicitPrimarySelectedMetadata({}, plan);
+
+    assert.strictEqual(explicitPrimary.length, 1);
+    assert.strictEqual(explicitPrimary[0].metadataName, 'Sales Manager');
+
+    const pkg = generateDeploymentPackage({
+        profileOnlyMinimalPackage: true,
+        explicitPrimarySelectedMetadata: explicitPrimary,
+        selectedMetadata: plan,
+        requiredDependencies: sampleDeps
+    });
+
+    assert.strictEqual(pkg.metadata.length, 1);
+    assert.ok(
+        !pkg.metadata.some((m) => m.metadataName === 'UntaggedApex')
+    );
+});
+
 runTest('416-style plan: PRIMARY Profile + dependency origins yields Profile-only minimal manifest', () => {
     const expandedPlan = [
         {
@@ -518,6 +574,34 @@ runTest('revalidation retains explicit primary and does not widen minimal manife
 
     assert.strictEqual(secondPass.metadata.length, 1);
     assert.strictEqual(secondPass.metadata[0].metadataName, 'Sales Manager');
+});
+
+runTest('missing origins without client explicit preserves legacy package composition', () => {
+    const plan = normalizeDeployableMetadata([
+        { metadataType: 'Profile', metadataName: 'Sales Manager' },
+        { metadataType: 'ApexClass', metadataName: 'Foo' }
+    ]);
+
+    const explicitPrimary = resolveExplicitPrimarySelectedMetadata({}, plan);
+
+    assert.strictEqual(explicitPrimary.length, 2);
+
+    const legacy = generateDeploymentPackage({
+        selectedMetadata: plan,
+        requiredDependencies: sampleDeps
+    });
+
+    const withFlag = generateDeploymentPackage({
+        profileOnlyMinimalPackage: true,
+        explicitPrimarySelectedMetadata: explicitPrimary,
+        selectedMetadata: plan,
+        requiredDependencies: sampleDeps
+    });
+
+    assert.deepStrictEqual(
+        withFlag.metadata.map((m) => `${m.metadataType}:${m.metadataName}`),
+        legacy.metadata.map((m) => `${m.metadataType}:${m.metadataName}`)
+    );
 });
 
 runTest('all PRIMARY_SELECTION origins without client explicit remains legacy when mixed types selected', () => {
