@@ -23,8 +23,12 @@ const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const statusStore = require('./deploymentValidationStatus.store');
 const boundDeployService = require('./deploymentBoundDeploy.service');
 const {
-    buildBoundDeployArtifactRecord
+    buildBoundDeployArtifactRecord,
+    verifyBoundDeployArtifactIntegrity
 } = require('./deploymentBoundArtifact.service');
+const {
+    buildSfdxProjectDefinition
+} = require('./sfdxProject.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -47,6 +51,10 @@ const connectivityPass = {
 };
 
 function patchConnectivity() {
+    return patchConnectivityWithDestinationVersions(['67.0']);
+}
+
+function patchConnectivityWithDestinationVersions(versions) {
     const originalPost = axios.post;
     const originalGet = axios.get;
 
@@ -56,11 +64,88 @@ function patchConnectivity() {
             instance_url: 'https://test.example.my.salesforce.com'
         }
     });
-    axios.get = async () => ({ status: 200 });
+    axios.get = async (url) => {
+        const target = String(url);
+
+        if (target.includes('/services/data/')) {
+            if (!versions || versions === 'empty') {
+                return { status: 200, data: [] };
+            }
+
+            return {
+                status: 200,
+                data: versions.map((version) => ({ version }))
+            };
+        }
+
+        return { status: 200 };
+    };
 
     return () => {
         axios.post = originalPost;
         axios.get = originalGet;
+    };
+}
+
+function profileXmlContent({ viewAllFields = false } = {}) {
+    const viewAllFieldsXml = viewAllFields
+        ? '\n        <viewAllFields>true</viewAllFields>'
+        : '';
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <objectPermissions>
+        <object>Account</object>${viewAllFieldsXml}
+    </objectPermissions>
+</Profile>`;
+}
+
+function installRepositoryReaderMock({
+    sourceMetadataApiVersion = null,
+    profileXml = null
+} = {}) {
+    const originalReader =
+        deploymentWorkspaceService.createRepositoryFileReader;
+
+    deploymentWorkspaceService.createRepositoryFileReader = async () =>
+        async (relativePath) => {
+            const normalized = String(relativePath).replace(/\\/g, '/');
+
+            if (
+                normalized.includes('.metadata-backup/retrieval-metadata.json')
+            ) {
+                if (!sourceMetadataApiVersion) {
+                    throw new Error('Snapshot metadata unavailable.');
+                }
+
+                return JSON.stringify({
+                    sourceMetadataApiVersion
+                });
+            }
+
+            if (profileXml && normalized.toLowerCase().includes('profile')) {
+                return profileXml;
+            }
+
+            throw new Error(`Unexpected repository read: ${relativePath}`);
+        };
+
+    return () => {
+        deploymentWorkspaceService.createRepositoryFileReader = originalReader;
+    };
+}
+
+function buildGeneratedProfilePackage({ viewAllFields = false, profileName = 'Admin' } = {}) {
+    return {
+        metadata: [
+            {
+                metadataType: 'Profile',
+                metadataName: profileName,
+                content: profileXmlContent({ viewAllFields })
+            }
+        ],
+        dependencies: [],
+        profileOnlyMinimalPackage: true
     };
 }
 
@@ -531,6 +616,480 @@ async function main() {
             await rm(workspaceRoot, { recursive: true, force: true });
         }
     });
+
+    await runTest(
+        'Profile with viewAllFields resolves API 63+ when destination is 67',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: true })
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = require('./deploymentValidation.service');
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: baseDeploymentPackage({
+                                profileOnlyMinimalPackage: true
+                            }),
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: true
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, false);
+                assert.ok(
+                    Number(result.deploymentApiVersion.split('.')[0]) >= 63
+                );
+                assert.ok(
+                    Number(result.deploymentApiVersion.split('.')[0]) <= 67
+                );
+            } finally {
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'Profile with viewAllFields resolves API 63 when destination is 63',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['63.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '63.0',
+                profileXml: profileXmlContent({ viewAllFields: true })
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = require('./deploymentValidation.service');
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: baseDeploymentPackage({
+                                profileOnlyMinimalPackage: true
+                            }),
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: true
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, false);
+                assert.strictEqual(result.deploymentApiVersion, '63.0');
+            } finally {
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'Profile with viewAllFields blocks before CLI when destination is 62',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['62.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: true })
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = require('./deploymentValidation.service');
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: baseDeploymentPackage({
+                                profileOnlyMinimalPackage: true
+                            }),
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: true
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, true);
+                assert.strictEqual(
+                    result.deploymentApiVersionPolicy.compatible,
+                    false
+                );
+            } finally {
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'Profile with viewAllFields blocks when destination API is unknown',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions('empty');
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: true })
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = require('./deploymentValidation.service');
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: baseDeploymentPackage({
+                                profileOnlyMinimalPackage: true
+                            }),
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: true
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, true);
+            } finally {
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'Profile without viewAllFields does not force API 63.0',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = require('./deploymentValidation.service');
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: baseDeploymentPackage({
+                                profileOnlyMinimalPackage: true
+                            }),
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: false
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, false);
+                assert.strictEqual(
+                    result.profileMetadataCompatibility
+                        ?.structuralMinimumApiVersion,
+                    null
+                );
+                assert.ok(
+                    !(result.deploymentApiVersionPolicy?.embeddedApiVersions || [])
+                        .length
+                );
+                assert.notStrictEqual(result.deploymentApiVersion, '63.0');
+            } finally {
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'source snapshot 61 with viewAllFields does not proceed at API 61.0',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '61.0',
+                profileXml: profileXmlContent({ viewAllFields: true })
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = require('./deploymentValidation.service');
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: baseDeploymentPackage({
+                                profileOnlyMinimalPackage: true
+                            }),
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: true
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, false);
+                assert.notStrictEqual(result.deploymentApiVersion, '61.0');
+                assert.ok(
+                    Number(result.deploymentApiVersion.split('.')[0]) >= 63
+                );
+            } finally {
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'missing source snapshot still negotiates without forcing wrong org discovery',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: null,
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = require('./deploymentValidation.service');
+                const pkg = baseDeploymentPackage({
+                    profileOnlyMinimalPackage: true
+                });
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: pkg,
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: false
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, false);
+                assert.strictEqual(pkg.sourceApiVersion, null);
+            } finally {
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'API version block skips Salesforce CLI execution',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['62.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: true })
+            });
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let checkOnlyInvoked = false;
+
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyInvoked = true;
+                return { success: true, status: 'SUCCESS', executed: true };
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result = await validationService.validateDeployment({
+                    refreshToken: 'rt',
+                    instanceUrl: 'https://test.example.my.salesforce.com',
+                    orgId: '00DTEST',
+                    deploymentPackage: baseDeploymentPackage({
+                        profileOnlyMinimalPackage: true,
+                        selectedMetadata: [
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin',
+                                content: profileXmlContent({
+                                    viewAllFields: true
+                                })
+                            }
+                        ]
+                    })
+                });
+
+                assert.strictEqual(checkOnlyInvoked, false);
+                assert.strictEqual(result.checkOnlyDeployment.executed, false);
+                assert.strictEqual(
+                    result.deploymentReadiness.canDeploy,
+                    false
+                );
+                assert.strictEqual(
+                    result.deploymentApiVersionPolicy?.compatible,
+                    false
+                );
+                assert.strictEqual(
+                    result.profileOnlyMinimalApiVersionBlocked,
+                    true
+                );
+                assert.ok(!result.boundDeployArtifact);
+            } finally {
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'manifest and CLI API versions match resolved Profile-only deployment API',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: true })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let capturedCheckOnlyVersion = null;
+            let workspaceRootToCleanup = null;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async (
+                args
+            ) => {
+                capturedCheckOnlyVersion = args.deploymentApiVersion;
+                return {
+                    success: true,
+                    status: 'SUCCESS',
+                    executed: true
+                };
+            };
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = loadValidationServiceFresh();
+                const result = await validationService.runProfileOnlyMinimalValidation({
+                    connectivityResult: connectivityPass,
+                    deploymentPackage: baseDeploymentPackage({
+                        profileOnlyMinimalPackage: true,
+                        selectedMetadata: [
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin',
+                                content: profileXmlContent({
+                                    viewAllFields: true
+                                })
+                            }
+                        ]
+                    }),
+                    refreshToken: 'rt',
+                    instanceUrl: 'https://test.example.my.salesforce.com',
+                    orgId: '00DTEST',
+                    validationId: 'val-api-version-align'
+                });
+
+                assert.strictEqual(
+                    result.validationExecutionPath,
+                    validationService.PROFILE_ONLY_MINIMAL_EXECUTION_PATH
+                );
+                assert.ok(result.generatedManifest.summary.apiVersion);
+                assert.strictEqual(
+                    result.generatedManifest.summary.apiVersion,
+                    capturedCheckOnlyVersion
+                );
+                assert.ok(
+                    result.generatedManifest.packageXml.includes(
+                        `<version>${result.generatedManifest.summary.apiVersion}</version>`
+                    )
+                );
+                assert.strictEqual(
+                    result.deploymentApiVersionPolicy.deploymentApiVersion,
+                    result.generatedManifest.summary.apiVersion
+                );
+                assert.ok(result.boundDeployArtifact?.artifactDigest);
+                const integrity = await verifyBoundDeployArtifactIntegrity({
+                    artifactRecord: result.boundDeployArtifact,
+                    manifest: result.generatedManifest,
+                    generatedDeploymentPackage: result.generatedDeploymentPackage
+                });
+                assert.strictEqual(integrity.ok, true, integrity.reason);
+                assert.strictEqual(
+                    buildSfdxProjectDefinition(
+                        result.generatedManifest.summary.apiVersion
+                    ).sourceApiVersion,
+                    capturedCheckOnlyVersion
+                );
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
 
     await runTest(
         'bound deployment consumes the exact validated artifact',

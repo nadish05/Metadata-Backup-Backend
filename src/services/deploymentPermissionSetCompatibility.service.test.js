@@ -194,6 +194,111 @@ async function main() {
             /Malformed XML/
         );
     });
+
+    await runTest('Profile XML with viewAllFields reports structural minimum 63', async () => {
+        const {
+            analyzeProfileMetadataCompatibility,
+            inspectXmlStructure
+        } = require('./deploymentPermissionSetCompatibility.service');
+
+        const structure = inspectXmlStructure(
+            `<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <objectPermissions>
+        <object>Account</object>
+        <viewAllFields>true</viewAllFields>
+    </objectPermissions>
+</Profile>`,
+            { expectedRoot: 'Profile' }
+        );
+
+        assert.ok(structure.paths.includes('objectPermissions.viewAllFields'));
+
+        const result = await analyzeProfileMetadataCompatibility({
+            generatedDeploymentPackage: {
+                metadata: [
+                    {
+                        metadataType: 'Profile',
+                        metadataName: 'Sales Manager',
+                        content: `<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <objectPermissions>
+        <object>Account</object>
+        <viewAllFields>true</viewAllFields>
+    </objectPermissions>
+</Profile>`
+                    }
+                ]
+            },
+            deploymentApiVersionPolicy: POLICY_61
+        });
+
+        assert.strictEqual(result.structuralMinimumApiVersion, '63.0');
+        assert.strictEqual(
+            result.profiles[0].unsupportedProperties[0],
+            'objectPermissions.viewAllFields'
+        );
+    });
+
+    await runTest('Profile XML resolves from conventional repository paths', async () => {
+        const { analyzeProfileMetadataCompatibility } = require(
+            './deploymentPermissionSetCompatibility.service'
+        );
+
+        const result = await analyzeProfileMetadataCompatibility({
+            generatedDeploymentPackage: {
+                metadata: [
+                    {
+                        metadataType: 'Profile',
+                        metadataName: 'Admin'
+                    }
+                ]
+            },
+            readFile: async (relativePath) => {
+                if (
+                    String(relativePath).includes(
+                        'profiles/Admin.profile-meta.xml'
+                    )
+                ) {
+                    return `<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <objectPermissions>
+        <object>Account</object>
+        <viewAllFields>true</viewAllFields>
+    </objectPermissions>
+</Profile>`;
+                }
+
+                throw new Error(`Unexpected path: ${relativePath}`);
+            }
+        });
+
+        assert.strictEqual(result.structuralMinimumApiVersion, '63.0');
+    });
+
+    await runTest('Profile XML without viewAllFields has no structural minimum', async () => {
+        const { analyzeProfileMetadataCompatibility } = require(
+            './deploymentPermissionSetCompatibility.service'
+        );
+
+        const result = await analyzeProfileMetadataCompatibility({
+            generatedDeploymentPackage: {
+                metadata: [
+                    {
+                        metadataType: 'Profile',
+                        metadataName: 'Admin',
+                        content: `<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <objectPermissions>
+        <object>Account</object>
+        <allowRead>true</allowRead>
+    </objectPermissions>
+</Profile>`
+                    }
+                ]
+            },
+            deploymentApiVersionPolicy: POLICY_61
+        });
+
+        assert.strictEqual(result.structuralMinimumApiVersion, null);
+        assert.deepStrictEqual(result.profiles[0].unsupportedProperties, []);
+    });
 }
 
 main();

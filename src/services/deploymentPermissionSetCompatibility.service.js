@@ -123,11 +123,12 @@ function stripXmlName(name) {
  * Parse element paths with a small strict tokenizer. Values and attributes are
  * intentionally ignored; compatibility depends on element names and nesting.
  */
-function inspectXmlStructure(xml) {
+function inspectXmlStructure(xml, options = {}) {
+    const expectedRoot = options.expectedRoot || 'PermissionSet';
     const source = String(xml || '');
 
     if (!source.trim()) {
-        throw new Error('PermissionSet XML is empty.');
+        throw new Error(`${expectedRoot} XML is empty.`);
     }
 
     const sanitized = source
@@ -189,9 +190,9 @@ function inspectXmlStructure(xml) {
         );
     }
 
-    if (root !== 'PermissionSet') {
+    if (root !== expectedRoot) {
         throw new Error(
-            `Malformed PermissionSet XML: expected PermissionSet root, found ${root || 'none'}.`
+            `Malformed ${expectedRoot} XML: expected ${expectedRoot} root, found ${root || 'none'}.`
         );
     }
 
@@ -199,6 +200,196 @@ function inspectXmlStructure(xml) {
         topLevelNodes: [...new Set(topLevelNodes)],
         paths: [...new Set(paths)]
     };
+}
+
+function collectProfileItems(generatedDeploymentPackage) {
+    const byName = new Map();
+    const items = generatedDeploymentPackage?.metadata || [];
+
+    for (const item of items) {
+        if (getItemType(item) !== 'Profile') {
+            continue;
+        }
+
+        const name = getItemName(item) || item?.filePath || null;
+
+        if (name && !byName.has(name)) {
+            byName.set(name, item);
+        }
+    }
+
+    return [...byName.values()];
+}
+
+function resolveStructuralMinimumApiVersionFromPaths(paths = []) {
+    let highest = null;
+
+    for (const [property, requirement] of Object.entries(
+        NESTED_PROPERTY_VERSIONS
+    )) {
+        if (!paths.includes(property) || !requirement?.min) {
+            continue;
+        }
+
+        const candidate = normalizeApiVersion(`${requirement.min}.0`);
+
+        if (!candidate) {
+            continue;
+        }
+
+        if (!highest || Number(candidate.split('.')[0]) > Number(highest.split('.')[0])) {
+            highest = candidate;
+        }
+    }
+
+    return highest;
+}
+
+async function readProfileXml(item, readFile) {
+    if (typeof item?.content === 'string') {
+        return item.content;
+    }
+
+    if (typeof readFile === 'function' && item?.filePath) {
+        return readFile(item.filePath);
+    }
+
+    if (typeof readFile === 'function' && item?.metadataName) {
+        const profileName = String(item.metadataName).trim();
+        const candidatePaths = [
+            `force-app/main/default/profiles/${profileName}.profile-meta.xml`,
+            `profiles/${profileName}.profile-meta.xml`
+        ];
+
+        for (const candidatePath of candidatePaths) {
+            try {
+                const xml = await readFile(candidatePath);
+
+                if (typeof xml === 'string' && xml.trim()) {
+                    return xml;
+                }
+            } catch (error) {
+                // Try the next conventional Profile path.
+            }
+        }
+    }
+
+    return null;
+}
+
+function emptyProfileMetadataCompatibility() {
+    return {
+        overallStatus: 'PASS',
+        structuralMinimumApiVersion: null,
+        profiles: [],
+        summary: {
+            analyzed: 0,
+            compatible: 0,
+            incompatible: 0,
+            malformed: 0,
+            requiresStructuralMinimum: false
+        }
+    };
+}
+
+async function analyzeProfileMetadataCompatibility({
+    generatedDeploymentPackage,
+    deploymentApiVersionPolicy = null,
+    readFile = null
+} = {}) {
+    const result = emptyProfileMetadataCompatibility();
+    const deploymentApiVersion = normalizeApiVersion(
+        deploymentApiVersionPolicy?.deploymentApiVersion
+    );
+    const items = collectProfileItems(generatedDeploymentPackage);
+    let structuralMinimumApiVersion = null;
+
+    for (const item of items) {
+        const profileName = getItemName(item);
+        const filePath = item?.filePath || null;
+        let structure = { topLevelNodes: [], paths: [] };
+        let malformed = false;
+        let malformedMessage = null;
+
+        try {
+            const xml = await readProfileXml(item, readFile);
+
+            if (!xml) {
+                throw new Error('Profile XML is unavailable.');
+            }
+
+            structure = inspectXmlStructure(xml, { expectedRoot: 'Profile' });
+        } catch (error) {
+            malformed = true;
+            malformedMessage = error?.message || 'Unable to parse Profile XML.';
+        }
+
+        const profileStructuralMinimum = malformed
+            ? null
+            : resolveStructuralMinimumApiVersionFromPaths(structure.paths);
+
+        if (
+            profileStructuralMinimum &&
+            (!structuralMinimumApiVersion ||
+                Number(profileStructuralMinimum.split('.')[0]) >
+                    Number(structuralMinimumApiVersion.split('.')[0]))
+        ) {
+            structuralMinimumApiVersion = profileStructuralMinimum;
+        }
+
+        const unsupportedFindings = malformed
+            ? []
+            : findUnsupportedProperties({
+                  permissionSet: profileName,
+                  structure,
+                  deploymentApiVersion
+              });
+
+        const unsupportedProperties = unsupportedFindings.map(
+            (finding) => finding.property
+        );
+
+        result.profiles.push({
+            profileName,
+            filePath,
+            malformedXml: malformed,
+            malformedMessage,
+            structuralMinimumApiVersion: profileStructuralMinimum,
+            unsupportedProperties,
+            compatibilityFindings: unsupportedFindings
+        });
+
+        result.summary.analyzed += 1;
+
+        if (malformed) {
+            result.summary.malformed += 1;
+        } else if (unsupportedProperties.length) {
+            result.summary.incompatible += 1;
+        } else {
+            result.summary.compatible += 1;
+        }
+    }
+
+    result.structuralMinimumApiVersion = structuralMinimumApiVersion;
+    result.summary.requiresStructuralMinimum = Boolean(structuralMinimumApiVersion);
+
+    if (result.summary.malformed > 0) {
+        result.overallStatus = 'WARNING';
+    } else if (result.summary.incompatible > 0) {
+        result.overallStatus = 'WARNING';
+    } else {
+        result.overallStatus = 'PASS';
+    }
+
+    return result;
+}
+
+async function analyzeProfileMetadataCompatibilitySafe(input) {
+    try {
+        return await analyzeProfileMetadataCompatibility(input);
+    } catch (error) {
+        return emptyProfileMetadataCompatibility();
+    }
 }
 
 function createUnsupportedFinding({
@@ -485,8 +676,13 @@ module.exports = {
     TOP_LEVEL_PROPERTY_VERSIONS,
     NESTED_PROPERTY_VERSIONS,
     emptyPermissionSetCompatibility,
+    emptyProfileMetadataCompatibility,
     inspectXmlStructure,
     findUnsupportedProperties,
+    collectProfileItems,
+    resolveStructuralMinimumApiVersionFromPaths,
     analyzePermissionSetCompatibility,
-    analyzePermissionSetCompatibilitySafe
+    analyzePermissionSetCompatibilitySafe,
+    analyzeProfileMetadataCompatibility,
+    analyzeProfileMetadataCompatibilitySafe
 };
