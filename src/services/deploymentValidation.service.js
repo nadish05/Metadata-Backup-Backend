@@ -180,6 +180,316 @@ function prepareDeploymentPackageForValidation(deploymentPackage) {
     };
 }
 
+const PROFILE_ONLY_MINIMAL_EXECUTION_PATH = 'PROFILE_ONLY_MINIMAL';
+
+function resolveProfileOnlyIneligibilityMessage(reason) {
+    switch (reason) {
+        case 'empty_selection':
+            return 'Profile-only minimal package requires at least one selected Profile.';
+        case 'mixed_or_non_profile_selection':
+            return 'Profile-only minimal package accepts Profile metadata only.';
+        case 'invalid_selection_item':
+            return 'Profile-only minimal selection contains an invalid item.';
+        case 'profile_missing_name':
+            return 'Each selected Profile must include a name.';
+        case 'duplicate_profile_selection':
+            return 'Duplicate Profile selections are not allowed for Profile-only minimal package.';
+        default:
+            return 'Profile-only minimal package selection is not eligible.';
+    }
+}
+
+function buildSkippedValidationSection(message) {
+    return {
+        overallStatus: 'SKIPPED',
+        message:
+            message ||
+            'Skipped for Profile-only minimal validation path.'
+    };
+}
+
+function resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment) {
+    if (!checkOnlyDeployment || typeof checkOnlyDeployment !== 'object') {
+        return false;
+    }
+
+    if (checkOnlyDeployment.success === true) {
+        return true;
+    }
+
+    const status = String(checkOnlyDeployment.status || '')
+        .trim()
+        .toUpperCase();
+
+    return status === 'SUCCESS' || status === 'SUCCEEDED';
+}
+
+function buildProfileOnlyMinimalReadiness({
+    connectivityResult,
+    generatedWorkspace,
+    checkOnlyDeployment
+}) {
+    const destinationConnected =
+        connectivityResult?.deploymentValidation?.destinationConnected === true;
+    const workspaceReady = generatedWorkspace?.status === 'READY';
+    const checkOnlySuccess =
+        resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment);
+
+    const canDeploy =
+        destinationConnected && workspaceReady && checkOnlySuccess;
+
+    let reason = null;
+
+    if (!destinationConnected) {
+        reason =
+            connectivityResult?.deploymentValidation?.message ||
+            'Destination connectivity validation blocked.';
+    } else if (!workspaceReady) {
+        reason = 'Deployment workspace is not READY.';
+    } else if (!checkOnlySuccess) {
+        reason =
+            checkOnlyDeployment?.message ||
+            checkOnlyDeployment?.failureMessage ||
+            'Salesforce check-only deployment failed.';
+    }
+
+    return {
+        canDeploy,
+        overallStatus: canDeploy ? 'READY' : 'BLOCKED',
+        reason,
+        summary: {
+            destinationConnectivity:
+                connectivityResult?.deploymentValidation?.status || 'BLOCKED',
+            metadataValidation: 'SKIPPED',
+            dependencyValidation: 'SKIPPED',
+            apiVersionPolicy: 'NOT_EVALUATED'
+        }
+    };
+}
+
+function buildProfileOnlyIneligibleResponse(connectivityResult, eligibility) {
+    const skipReason = resolveProfileOnlyIneligibilityMessage(eligibility?.reason);
+
+    return {
+        ...connectivityResult,
+        success: false,
+        validationExecutionPath: PROFILE_ONLY_MINIMAL_EXECUTION_PATH,
+        profileOnlyMinimalPackageBlocked: true,
+        profileOnlyMinimalPackageIneligibilityReason:
+            eligibility?.reason || 'ineligible',
+        metadataValidation: buildSkippedValidationSection(skipReason),
+        dependencyValidation: buildSkippedValidationSection(
+            'Profile-only minimal validation path skipped dependency validation.'
+        ),
+        deploymentReadiness: {
+            canDeploy: false,
+            overallStatus: 'BLOCKED',
+            reason: skipReason,
+            summary: {
+                destinationConnectivity:
+                    connectivityResult?.deploymentValidation?.status ||
+                    'BLOCKED',
+                metadataValidation: 'SKIPPED',
+                dependencyValidation: 'SKIPPED',
+                apiVersionPolicy: 'NOT_EVALUATED'
+            }
+        },
+        checkOnlyDeployment:
+            deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
+                skipReason
+            )
+    };
+}
+
+async function runProfileOnlyMinimalValidation({
+    connectivityResult,
+    deploymentPackage,
+    refreshToken,
+    instanceUrl,
+    orgId,
+    validationId = null,
+    autoValidationContext = null
+}) {
+    const explicitPrimarySelectedMetadata =
+        deploymentPackage.explicitPrimarySelectedMetadata ||
+        deploymentPackageService.resolveExplicitPrimarySelectedMetadata(
+            deploymentPackage,
+            deploymentPackage.selectedMetadata
+        );
+
+    const packageForGeneration = {
+        ...deploymentPackage,
+        requiredDependencies: [],
+        profileOnlyMinimalPackage: true,
+        explicitPrimarySelectedMetadata
+    };
+
+    let generatedDeploymentPackage =
+        deploymentPackageService.generateDeploymentPackage(packageForGeneration);
+
+    generatedDeploymentPackage = {
+        ...generatedDeploymentPackage,
+        dependencies: [],
+        profileOnlyMinimalPackage: true
+    };
+
+    const invalidMetadataMember = (generatedDeploymentPackage.metadata || []).find(
+        (item) =>
+            item?.metadataType !== 'Profile' ||
+            typeof item?.metadataName !== 'string' ||
+            !item.metadataName.trim()
+    );
+
+    if (invalidMetadataMember) {
+        return buildProfileOnlyIneligibleResponse(connectivityResult, {
+            reason: 'mixed_or_non_profile_selection'
+        });
+    }
+
+    if (!(generatedDeploymentPackage.metadata || []).length) {
+        return buildProfileOnlyIneligibleResponse(connectivityResult, {
+            reason: 'empty_selection'
+        });
+    }
+
+    const deploymentApiVersion = DEFAULT_API_VERSION;
+    const deploymentApiVersionPolicy = {
+        deploymentApiVersion,
+        compatible: true
+    };
+
+    const generatedManifest = packageXmlService.generateManifest(
+        generatedDeploymentPackage,
+        {
+            deploymentApiVersion,
+            deploymentApiVersionPolicy: {
+                ...deploymentApiVersionPolicy,
+                deploymentApiVersion
+            }
+        }
+    );
+
+    const generatedWorkspace =
+        await deploymentWorkspaceService.buildDeploymentWorkspace({
+            generatedDeploymentPackage,
+            generatedManifest,
+            repoUrl: deploymentPackage.repoUrl || deploymentPackage.repositoryUrl,
+            sourceBranch:
+                deploymentPackage.sourceBranch || deploymentPackage.branch,
+            skipDependencyCopy: true
+        });
+
+    const destinationConnected =
+        connectivityResult?.deploymentValidation?.destinationConnected === true;
+    const workspaceReady = generatedWorkspace?.status === 'READY';
+
+    let checkOnlyDeployment;
+
+    if (!destinationConnected) {
+        checkOnlyDeployment =
+            deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
+                connectivityResult?.deploymentValidation?.message ||
+                    'Destination connectivity validation blocked.'
+            );
+    } else if (!workspaceReady) {
+        checkOnlyDeployment =
+            deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
+                'Workspace not READY; check-only deployment skipped.'
+            );
+    } else {
+        checkOnlyDeployment =
+            deploymentCheckOnlyGateService.annotateCheckOnlyExecuted(
+                await checkOnlyDeploymentService.runCheckOnlyDeployment({
+                    generatedWorkspace,
+                    generatedManifest,
+                    refreshToken,
+                    instanceUrl,
+                    deploymentApiVersion
+                })
+            );
+    }
+
+    const deploymentReadiness = buildProfileOnlyMinimalReadiness({
+        connectivityResult,
+        generatedWorkspace,
+        checkOnlyDeployment
+    });
+
+    const response = {
+        ...connectivityResult,
+        validationExecutionPath: PROFILE_ONLY_MINIMAL_EXECUTION_PATH,
+        metadataValidation: buildSkippedValidationSection(
+            'Profile-only minimal validation path skipped application metadata validation.'
+        ),
+        dependencyValidation: buildSkippedValidationSection(
+            'Profile-only minimal validation path skipped dependency validation.'
+        ),
+        deploymentReadiness,
+        generatedDeploymentPackage,
+        generatedManifest,
+        generatedWorkspace,
+        checkOnlyDeployment,
+        relationshipDiscoverySummary: {
+            metadataScanned: 0,
+            filesScanned: 0,
+            relationshipsDiscovered: 0,
+            lookupRelationships: 0,
+            masterDetailRelationships: 0,
+            warnings: []
+        },
+        graphExpansionSummary: {
+            iterations: 0,
+            graphDepth: 0,
+            metadataNodes: 0,
+            relationships: 0,
+            newDependencies: 0,
+            warnings: []
+        },
+        referenceSummary: {
+            referencesDiscovered: 0,
+            byType: {},
+            blockingReferences: 0,
+            deployableReferences: 0,
+            warnings: []
+        },
+        dependencyResolutionSummary: {
+            analyzed: 0,
+            deploy: 0,
+            reference: 0,
+            skip: 0,
+            block: 0,
+            warnings: []
+        },
+        discoveredRelationships: [],
+        discoveredReferences: [],
+        dependencyExplorer: {
+            nodes: [],
+            edges: [],
+            warnings: []
+        }
+    };
+
+    if (validationId && !autoValidationContext?.isRevalidation) {
+        try {
+            const boundDeployArtifact = await buildBoundDeployArtifactRecord({
+                validationId,
+                orgId,
+                deploymentPackage,
+                finalResponse: response
+            });
+
+            if (boundDeployArtifact) {
+                response.boundDeployArtifact = boundDeployArtifact;
+            }
+        } catch (error) {
+            console.error('BOUND DEPLOY ARTIFACT ERROR');
+            console.error(error);
+        }
+    }
+
+    return response;
+}
+
 /**
  * Prepare analyzer-only copies enriched from Destination Inventory.
  * Does not mutate planner / resolution inventories.
@@ -394,6 +704,36 @@ async function validateDeployment({
     // Validation consumer (metadata validation, discovery, package, etc.).
     deploymentPackage =
         prepareDeploymentPackageForValidation(deploymentPackage);
+
+    if (deploymentPackage.profileOnlyMinimalPackage === true) {
+        const explicitPrimarySelectedMetadata =
+            deploymentPackage.explicitPrimarySelectedMetadata ||
+            deploymentPackageService.resolveExplicitPrimarySelectedMetadata(
+                deploymentPackage,
+                deploymentPackage.selectedMetadata
+            );
+        const eligibility =
+            deploymentPackageService.evaluateProfileOnlyMinimalPackageEligibility(
+                explicitPrimarySelectedMetadata
+            );
+
+        if (!eligibility.eligible) {
+            return buildProfileOnlyIneligibleResponse(
+                connectivityResult,
+                eligibility
+            );
+        }
+
+        return runProfileOnlyMinimalValidation({
+            connectivityResult,
+            deploymentPackage,
+            refreshToken,
+            instanceUrl,
+            orgId,
+            validationId,
+            autoValidationContext
+        });
+    }
 
     const autoExcludeShapeFormulaConflicts =
         parseAutoExcludeShapeFormulaConflictsPolicy(deploymentPackage);
@@ -2705,5 +3045,7 @@ async function validateDeployment({
 module.exports = {
     validateDestinationConnectivity,
     validateDeployment,
-    prepareDeploymentPackageForValidation
+    prepareDeploymentPackageForValidation,
+    runProfileOnlyMinimalValidation,
+    PROFILE_ONLY_MINIMAL_EXECUTION_PATH
 };

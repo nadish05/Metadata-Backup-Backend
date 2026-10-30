@@ -862,7 +862,8 @@ async function buildDeploymentWorkspace({
     generatedDeploymentPackage,
     generatedManifest,
     repoUrl,
-    sourceBranch
+    sourceBranch,
+    skipDependencyCopy = false
 }) {
     logSection('Workspace Builder Started');
 
@@ -915,14 +916,16 @@ async function buildDeploymentWorkspace({
             missingFiles
         });
 
-        dependenciesCopied = await copyDependencyItems({
-            dependencies,
-            repoPath,
-            workspacePath,
-            repoFiles,
-            workspaceStats,
-            missingFiles
-        });
+        if (!skipDependencyCopy && dependencies.length) {
+            dependenciesCopied = await copyDependencyItems({
+                dependencies,
+                repoPath,
+                workspacePath,
+                repoFiles,
+                workspaceStats,
+                missingFiles
+            });
+        }
 
         packageXmlWritten = await writePackageXml(
             workspacePath,
