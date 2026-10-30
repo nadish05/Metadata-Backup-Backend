@@ -273,6 +273,28 @@ async function main() {
         assert.strictEqual(result.structuralMinimumApiVersion, '63.0');
     });
 
+    await runTest(
+        'analyzeProfileMetadataCompatibilitySafe returns BLOCKED when analysis throws',
+        async () => {
+            const { analyzeProfileMetadataCompatibilitySafe } = require(
+                './deploymentPermissionSetCompatibility.service'
+            );
+
+            const result = await analyzeProfileMetadataCompatibilitySafe({
+                generatedDeploymentPackage: {
+                    get metadata() {
+                        throw new Error('simulated inspection throw');
+                    }
+                }
+            });
+
+            assert.strictEqual(result.overallStatus, 'BLOCKED');
+            assert.strictEqual(result.summary.analyzed, 0);
+            assert.strictEqual(result.summary.failedInspection, 1);
+            assert.ok(result.inspectionError);
+        }
+    );
+
     await runTest('Profile XML without viewAllFields has no structural minimum', async () => {
         const { analyzeProfileMetadataCompatibility } = require(
             './deploymentPermissionSetCompatibility.service'

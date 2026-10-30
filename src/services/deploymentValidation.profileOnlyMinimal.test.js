@@ -12,6 +12,7 @@ const mkdir = util.promisify(fs.mkdir);
 const writeFile = util.promisify(fs.writeFile);
 const rm = util.promisify(fs.rm);
 
+const deploymentPermissionSetCompatibilityService = require('./deploymentPermissionSetCompatibility.service');
 const relationshipDiscoveryService = require('./dependencyResolution/relationshipDiscovery.service');
 const referenceDiscoveryService = require('./dependencyResolution/referenceDiscovery.service');
 const graphExpansionService = require('./dependencyResolution/graphExpansion/graphExpansion.service');
@@ -123,7 +124,7 @@ function installRepositoryReaderMock({
                 });
             }
 
-            if (profileXml && normalized.toLowerCase().includes('profile')) {
+            if (typeof profileXml === 'string' && normalized.toLowerCase().includes('profile')) {
                 return profileXml;
             }
 
@@ -135,18 +136,97 @@ function installRepositoryReaderMock({
     };
 }
 
-function buildGeneratedProfilePackage({ viewAllFields = false, profileName = 'Admin' } = {}) {
+function buildGeneratedProfilePackage({
+    viewAllFields = false,
+    profileName = 'Admin',
+    includeContent = true,
+    content = null
+} = {}) {
+    const item = {
+        metadataType: 'Profile',
+        metadataName: profileName
+    };
+
+    if (includeContent) {
+        item.content =
+            content === null
+                ? profileXmlContent({ viewAllFields })
+                : content;
+    }
+
     return {
-        metadata: [
-            {
-                metadataType: 'Profile',
-                metadataName: profileName,
-                content: profileXmlContent({ viewAllFields })
-            }
-        ],
+        metadata: [item],
         dependencies: [],
         profileOnlyMinimalPackage: true
     };
+}
+
+function buildTwoProfileGeneratedPackage({
+    adminContent = profileXmlContent({ viewAllFields: false }),
+    standardContent = profileXmlContent({ viewAllFields: false }),
+    includeAdminContent = true,
+    includeStandardContent = true
+} = {}) {
+    const metadata = [
+        {
+            metadataType: 'Profile',
+            metadataName: 'Admin'
+        },
+        {
+            metadataType: 'Profile',
+            metadataName: 'Standard'
+        }
+    ];
+
+    if (includeAdminContent) {
+        metadata[0].content = adminContent;
+    }
+
+    if (includeStandardContent) {
+        metadata[1].content = standardContent;
+    }
+
+    return {
+        metadata,
+        dependencies: [],
+        profileOnlyMinimalPackage: true
+    };
+}
+
+async function resolveProfileOnlyApiFresh({
+    generatedDeploymentPackage,
+    deploymentPackageOverrides = {},
+    sourceMetadataApiVersion = '67.0',
+    destinationVersions = ['67.0']
+} = {}) {
+    const restoreAxios =
+        patchConnectivityWithDestinationVersions(destinationVersions);
+    const restoreReader = installRepositoryReaderMock({
+        sourceMetadataApiVersion
+    });
+
+    try {
+        delete require.cache[require.resolve('./deploymentValidation.service')];
+        const validationService = require('./deploymentValidation.service');
+        const result =
+            await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                {
+                    deploymentPackage: baseDeploymentPackage({
+                        profileOnlyMinimalPackage: true,
+                        ...deploymentPackageOverrides
+                    }),
+                    generatedDeploymentPackage,
+                    refreshToken: 'rt',
+                    instanceUrl: 'https://test.example.my.salesforce.com',
+                    connectivityResult: connectivityPass
+                }
+            );
+
+        return { result, validationService };
+    } finally {
+        restoreReader();
+        restoreAxios();
+    }
 }
 
 function installDiscoverySpies() {
@@ -421,7 +501,16 @@ async function main() {
                     orgId: '00DTEST',
                     validationId: 'val-profile-only-1',
                     deploymentPackage: baseDeploymentPackage({
-                        profileOnlyMinimalPackage: true
+                        profileOnlyMinimalPackage: true,
+                        selectedMetadata: [
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin',
+                                content: profileXmlContent({
+                                    viewAllFields: false
+                                })
+                            }
+                        ]
                     })
                 });
 
@@ -468,6 +557,7 @@ async function main() {
     await runTest(
         'checkbox ON with multiple Profiles generates exactly those Profiles',
         async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
             const validationService = loadValidationServiceFresh();
             const workspaceRoot = await createProfileWorkspaceRoot();
             const originalBuild =
@@ -496,11 +586,18 @@ async function main() {
                             selectedMetadata: [
                                 {
                                     metadataType: 'Profile',
-                                    metadataName: 'Admin'
+                                    metadataName: 'Admin',
+                                    content: profileXmlContent({
+                                        viewAllFields: false
+                                    })
                                 },
                                 {
                                     metadataType: 'Profile',
-                                    metadataName: 'Standard'
+                                    metadataName: 'Standard',
+                                    content: profileXmlContent({
+                                        viewAllFields: false,
+                                        profileName: 'Standard'
+                                    })
                                 }
                             ]
                         }),
@@ -522,6 +619,7 @@ async function main() {
                     originalBuild;
                 checkOnlyDeploymentService.runCheckOnlyDeployment =
                     originalCheckOnly;
+                restoreAxios();
                 await rm(workspaceRoot, { recursive: true, force: true });
             }
         }
@@ -594,7 +692,16 @@ async function main() {
                 await validationService.runProfileOnlyMinimalValidation({
                     connectivityResult: connectivityPass,
                     deploymentPackage: baseDeploymentPackage({
-                        profileOnlyMinimalPackage: true
+                        profileOnlyMinimalPackage: true,
+                        selectedMetadata: [
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin',
+                                content: profileXmlContent({
+                                    viewAllFields: false
+                                })
+                            }
+                        ]
                     }),
                     refreshToken: 'rt',
                     instanceUrl: 'https://test.example.my.salesforce.com',
@@ -616,6 +723,306 @@ async function main() {
             await rm(workspaceRoot, { recursive: true, force: true });
         }
     });
+
+    await runTest(
+        'Profile-only blocks when selected Profile XML is missing',
+        async () => {
+            const { result } = await resolveProfileOnlyApiFresh({
+                generatedDeploymentPackage: buildGeneratedProfilePackage({
+                    includeContent: false
+                })
+            });
+
+            assert.strictEqual(result.blocked, true);
+            assert.strictEqual(
+                result.deploymentApiVersionPolicy.compatible,
+                false
+            );
+            assert.match(result.reason, /inspection failed|not successfully inspected|unavailable/i);
+        }
+    );
+
+    await runTest(
+        'Profile-only blocks when selected Profile XML is malformed',
+        async () => {
+            const { result } = await resolveProfileOnlyApiFresh({
+                generatedDeploymentPackage: buildGeneratedProfilePackage({
+                    content:
+                        '<Profile xmlns="http://soap.sforce.com/2006/04/metadata"><label>Broken</description></Profile>'
+                })
+            });
+
+            assert.strictEqual(result.blocked, true);
+            assert.strictEqual(
+                result.deploymentApiVersionPolicy.compatible,
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'Profile-only blocks when selected Profile has unexpected XML root',
+        async () => {
+            const { result } = await resolveProfileOnlyApiFresh({
+                generatedDeploymentPackage: buildGeneratedProfilePackage({
+                    content:
+                        '<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata"><label>Wrong Root</label></PermissionSet>'
+                })
+            });
+
+            assert.strictEqual(result.blocked, true);
+            assert.strictEqual(
+                result.deploymentApiVersionPolicy.compatible,
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'Profile-only blocks when one of two Profiles is missing XML',
+        async () => {
+            const { result } = await resolveProfileOnlyApiFresh({
+                generatedDeploymentPackage: buildTwoProfileGeneratedPackage({
+                    includeStandardContent: false
+                })
+            });
+
+            assert.strictEqual(result.blocked, true);
+            assert.match(result.reason, /Standard|inspection failed|not successfully inspected/i);
+        }
+    );
+
+    await runTest(
+        'Profile-only blocks when one of two Profiles is malformed',
+        async () => {
+            const { result } = await resolveProfileOnlyApiFresh({
+                generatedDeploymentPackage: buildTwoProfileGeneratedPackage({
+                    standardContent:
+                        '<Profile xmlns="http://soap.sforce.com/2006/04/metadata"><label>x</description></Profile>'
+                })
+            });
+
+            assert.strictEqual(result.blocked, true);
+            assert.strictEqual(
+                result.deploymentApiVersionPolicy.compatible,
+                false
+            );
+        }
+    );
+
+    await runTest(
+        'Profile-only blocks when Profile analyzer throws unexpectedly',
+        async () => {
+            const originalSafe =
+                deploymentPermissionSetCompatibilityService.analyzeProfileMetadataCompatibilitySafe;
+            deploymentPermissionSetCompatibilityService.analyzeProfileMetadataCompatibilitySafe =
+                async () => ({
+                    overallStatus: 'BLOCKED',
+                    inspectionError: 'simulated analyzer failure',
+                    structuralMinimumApiVersion: null,
+                    profiles: [],
+                    summary: {
+                        analyzed: 0,
+                        compatible: 0,
+                        incompatible: 0,
+                        malformed: 0,
+                        failedInspection: 1,
+                        requiresStructuralMinimum: false
+                    }
+                });
+
+            try {
+                const { result } = await resolveProfileOnlyApiFresh({
+                    generatedDeploymentPackage: buildGeneratedProfilePackage({
+                        viewAllFields: false
+                    })
+                });
+
+                assert.strictEqual(result.blocked, true);
+                assert.strictEqual(
+                    result.profileMetadataCompatibility.overallStatus,
+                    'BLOCKED'
+                );
+                assert.strictEqual(
+                    result.deploymentApiVersionPolicy.compatible,
+                    false
+                );
+            } finally {
+                deploymentPermissionSetCompatibilityService.analyzeProfileMetadataCompatibilitySafe =
+                    originalSafe;
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only blocks when API policy resolution throws',
+        async () => {
+            const restoreAxios =
+                patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0'
+            });
+
+            delete require.cache[
+                require.resolve('./deploymentApiVersionPolicy.service')
+            ];
+            delete require.cache[
+                require.resolve('./deploymentValidation.service')
+            ];
+
+            const policyService = require('./deploymentApiVersionPolicy.service');
+            const originalPolicy =
+                policyService.resolveDeploymentApiVersionPolicyAsync;
+            policyService.resolveDeploymentApiVersionPolicyAsync = async () => {
+                throw new Error('simulated policy failure');
+            };
+
+            try {
+                const validationService = require('./deploymentValidation.service');
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: baseDeploymentPackage({
+                                profileOnlyMinimalPackage: true
+                            }),
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: false
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, true);
+                assert.strictEqual(
+                    result.deploymentApiVersionPolicy.compatible,
+                    false
+                );
+                assert.match(result.reason, /simulated policy failure/i);
+            } finally {
+                policyService.resolveDeploymentApiVersionPolicyAsync =
+                    originalPolicy;
+                restoreReader();
+                restoreAxios();
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                delete require.cache[
+                    require.resolve('./deploymentApiVersionPolicy.service')
+                ];
+            }
+        }
+    );
+
+    await runTest(
+        'Case 1 regression: source 61 destination 67 viewAllFields final API 63',
+        async () => {
+            const restoreAxios =
+                patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '61.0',
+                profileXml: profileXmlContent({ viewAllFields: true })
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = require('./deploymentValidation.service');
+                const result =
+                    await validationService.resolveProfileOnlyMinimalDeploymentApiVersion(
+                        {
+                            deploymentPackage: baseDeploymentPackage({
+                                profileOnlyMinimalPackage: true
+                            }),
+                            generatedDeploymentPackage:
+                                buildGeneratedProfilePackage({
+                                    viewAllFields: true
+                                }),
+                            refreshToken: 'rt',
+                            instanceUrl:
+                                'https://test.example.my.salesforce.com',
+                            connectivityResult: connectivityPass
+                        }
+                    );
+
+                assert.strictEqual(result.blocked, false);
+                assert.strictEqual(
+                    result.deploymentApiVersionPolicy.deploymentApiVersion,
+                    '63.0'
+                );
+                assert.strictEqual(
+                    result.deploymentApiNegotiation.sourceApiVersion,
+                    '61.0'
+                );
+                assert.strictEqual(
+                    result.deploymentApiNegotiation.negotiatedApiVersion,
+                    '61.0'
+                );
+                assert.strictEqual(
+                    result.deploymentApiNegotiation.negotiationStatus,
+                    'SUCCESS'
+                );
+                assert.strictEqual(result.deploymentApiVersion, '63.0');
+            } finally {
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'inspection block skips CLI and bound artifact',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0'
+            });
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let checkOnlyInvoked = false;
+
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyInvoked = true;
+                return { success: true, status: 'SUCCESS', executed: true };
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result = await validationService.validateDeployment({
+                    refreshToken: 'rt',
+                    instanceUrl: 'https://test.example.my.salesforce.com',
+                    orgId: '00DTEST',
+                    validationId: 'val-inspection-block',
+                    deploymentPackage: baseDeploymentPackage({
+                        profileOnlyMinimalPackage: true,
+                        selectedMetadata: [
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin'
+                            }
+                        ]
+                    })
+                });
+
+                assert.strictEqual(checkOnlyInvoked, false);
+                assert.strictEqual(result.checkOnlyDeployment.executed, false);
+                assert.strictEqual(
+                    result.profileOnlyMinimalApiVersionBlocked,
+                    true
+                );
+                assert.ok(!result.boundDeployArtifact);
+            } finally {
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+            }
+        }
+    );
 
     await runTest(
         'Profile with viewAllFields resolves API 63+ when destination is 67',

@@ -408,6 +408,83 @@ function attachSelectedProfileContentToGeneratedPackage(
     };
 }
 
+function evaluateProfileOnlyProfileInspectionCompleteness(
+    generatedDeploymentPackage,
+    profileMetadataCompatibility
+) {
+    const expectedItems =
+        deploymentPermissionSetCompatibilityService.collectProfileItems(
+            generatedDeploymentPackage
+        );
+    const expectedCount = expectedItems.length;
+
+    if (expectedCount === 0) {
+        return {
+            ok: false,
+            reason: 'No Profile metadata is available for Profile-only inspection.'
+        };
+    }
+
+    const compatibility = profileMetadataCompatibility || {};
+    const summary = compatibility.summary || {};
+    const profileResults = compatibility.profiles || [];
+
+    if (
+        compatibility.overallStatus === 'BLOCKED' ||
+        compatibility.overallStatus === 'ERROR'
+    ) {
+        return {
+            ok: false,
+            reason:
+                compatibility.inspectionError ||
+                'Profile metadata inspection failed before all selected Profiles could be analyzed.'
+        };
+    }
+
+    if (Number(summary.analyzed || 0) !== expectedCount) {
+        return {
+            ok: false,
+            reason: `Profile metadata inspection incomplete: expected ${expectedCount} Profile(s), analyzed ${summary.analyzed || 0}.`
+        };
+    }
+
+    if (Number(summary.malformed || 0) > 0) {
+        const failedNames = profileResults
+            .filter((entry) => entry?.malformedXml)
+            .map(
+                (entry) =>
+                    entry?.profileName ||
+                    entry?.malformedMessage ||
+                    'unknown Profile'
+            )
+            .join(', ');
+
+        return {
+            ok: false,
+            reason: `Profile XML inspection failed for selected Profile(s): ${failedNames || 'unknown'}.`
+        };
+    }
+
+    for (const item of expectedItems) {
+        const profileName =
+            item?.metadataName || item?.name || item?.filePath || null;
+        const inspectionResult = profileResults.find(
+            (entry) => entry?.profileName === profileName
+        );
+
+        if (!inspectionResult || inspectionResult.malformedXml) {
+            return {
+                ok: false,
+                reason: profileName
+                    ? `Profile "${profileName}" was not successfully inspected.`
+                    : 'A selected Profile was not successfully inspected.'
+            };
+        }
+    }
+
+    return { ok: true, reason: null };
+}
+
 function buildProfileEmbeddedApiVersionsForPolicy(
     generatedDeploymentPackage,
     structuralMinimumApiVersion
@@ -512,6 +589,18 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
             }
         );
 
+    const profileInspection =
+        evaluateProfileOnlyProfileInspectionCompleteness(
+            generatedDeploymentPackage,
+            profileMetadataCompatibility
+        );
+
+    if (!profileInspection.ok) {
+        return blocked(profileInspection.reason, {
+            profileMetadataCompatibility
+        });
+    }
+
     const structuralMinimumApiVersion =
         profileMetadataCompatibility?.structuralMinimumApiVersion || null;
     const embeddedApiVersions = buildProfileEmbeddedApiVersionsForPolicy(
@@ -571,20 +660,16 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
     } catch (policyError) {
         console.error('PROFILE ONLY DEPLOYMENT API VERSION POLICY ERROR');
         console.error(policyError);
-        deploymentApiVersionPolicy = {
-            deploymentApiVersion: DEFAULT_API_VERSION,
-            policy: 'HIGHEST_REQUIRED',
-            compatible: true,
-            reason: null,
-            warnings: [
-                policyError.message ||
-                    'API version policy failed; falling back to DEFAULT_API_VERSION.'
-            ],
-            highestRequiredVersion: DEFAULT_API_VERSION,
-            destinationMaxApiVersion: destinationMaxForPolicy,
-            defaultApiVersion: DEFAULT_API_VERSION,
-            embeddedApiVersions: embeddedApiVersions || []
-        };
+
+        return blocked(
+            policyError.message ||
+                'Profile-only Metadata API version policy failed.',
+            {
+                profileMetadataCompatibility,
+                destinationDiscovery,
+                embeddedApiVersions
+            }
+        );
     }
 
     const deploymentApiNegotiation =

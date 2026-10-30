@@ -384,11 +384,33 @@ async function analyzeProfileMetadataCompatibility({
     return result;
 }
 
+function profileMetadataCompatibilityInspectionError(error) {
+    const message =
+        error?.message || 'Profile metadata inspection failed unexpectedly.';
+
+    return {
+        overallStatus: 'BLOCKED',
+        inspectionError: message,
+        structuralMinimumApiVersion: null,
+        profiles: [],
+        summary: {
+            analyzed: 0,
+            compatible: 0,
+            incompatible: 0,
+            malformed: 0,
+            failedInspection: 1,
+            requiresStructuralMinimum: false
+        }
+    };
+}
+
 async function analyzeProfileMetadataCompatibilitySafe(input) {
     try {
         return await analyzeProfileMetadataCompatibility(input);
     } catch (error) {
-        return emptyProfileMetadataCompatibility();
+        console.error('PROFILE METADATA COMPATIBILITY INSPECTION ERROR');
+        console.error(error);
+        return profileMetadataCompatibilityInspectionError(error);
     }
 }
 
