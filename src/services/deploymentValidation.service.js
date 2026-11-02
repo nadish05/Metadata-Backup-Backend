@@ -29,6 +29,7 @@ const packageXmlService = require('./packageXml.service');
 const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const profileWorkspaceCanonicalContentService = require('./profileWorkspaceCanonicalContent.service');
 const profileUserPermissionSanitizationService = require('./profileUserPermissionSanitization.service');
+const profilePermissionSanitizationDiagnosticLog = require('./profilePermissionSanitizationDiagnosticLog.service');
 const fs = require('fs');
 const path = require('path');
 const util = require('util');
@@ -231,6 +232,27 @@ function resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment) {
         .toUpperCase();
 
     return status === 'SUCCESS' || status === 'SUCCEEDED';
+}
+
+function buildSanitizationFailureClassificationEntries(
+    checkOnlyDeployment,
+    selectedProfileNames
+) {
+    const componentFailures =
+        profileUserPermissionSanitizationService.extractComponentFailures(
+            checkOnlyDeployment
+        ) || [];
+
+    return componentFailures.map((failure) => ({
+        metadataType: failure?.metadataType || null,
+        metadataName: failure?.metadataName || failure?.fullName || null,
+        problem: failure?.problem || null,
+        classification:
+            profileUserPermissionSanitizationService.classifyComponentFailureForDiagnosticLog(
+                failure,
+                selectedProfileNames
+            )
+    }));
 }
 
 function buildProfileOnlyMinimalReadiness({
@@ -1143,6 +1165,13 @@ async function runProfileOnlyMinimalValidation({
     let currentGeneratedManifest = generatedManifest;
     let currentDeploymentApiNegotiation = deploymentApiNegotiation;
 
+    profilePermissionSanitizationDiagnosticLog.logValidationStarted({
+        validationId,
+        executionPath: PROFILE_ONLY_MINIMAL_EXECUTION_PATH,
+        selectedProfileNames: [...selectedProfileNames],
+        maxCheckOnlyAttempts: MAX_PROFILE_ONLY_CHECK_ONLY_ATTEMPTS
+    });
+
     while (checkOnlyAttempt < MAX_PROFILE_ONLY_CHECK_ONLY_ATTEMPTS) {
         checkOnlyAttempt += 1;
         profilePermissionSanitization.checkOnlyAttempts = checkOnlyAttempt;
@@ -1197,12 +1226,48 @@ async function runProfileOnlyMinimalValidation({
                 })
             );
 
-        if (resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment)) {
+        const componentFailuresForLog =
+            profileUserPermissionSanitizationService.extractComponentFailures(
+                checkOnlyDeployment
+            ) || [];
+        const checkOnlySuccess =
+            resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment);
+
+        profilePermissionSanitizationDiagnosticLog.logCheckOnlyAttempt({
+            validationId,
+            attempt: checkOnlyAttempt,
+            maxAttempts: MAX_PROFILE_ONLY_CHECK_ONLY_ATTEMPTS,
+            success: checkOnlySuccess,
+            componentFailureCount: componentFailuresForLog.length,
+            deploymentId: checkOnlyDeployment?.deploymentId || null
+        });
+
+        if (!checkOnlySuccess) {
+            profilePermissionSanitizationDiagnosticLog.logFailureClassification({
+                validationId,
+                attempt: checkOnlyAttempt,
+                failures: buildSanitizationFailureClassificationEntries(
+                    checkOnlyDeployment,
+                    selectedProfileNames
+                )
+            });
+        }
+
+        if (checkOnlySuccess) {
             profilePermissionSanitization.status =
                 profilePermissionSanitization.removedCount > 0
                     ? 'COMPLETED'
                     : 'SKIPPED';
             profilePermissionSanitization.overallStatus = 'PASS';
+            profilePermissionSanitizationDiagnosticLog.logRetryDecision({
+                validationId,
+                attempt: checkOnlyAttempt,
+                sanitizationAttempted:
+                    profilePermissionSanitization.removedCount > 0,
+                retryAllowed: false,
+                nextAttempt: null,
+                stopReason: 'CHECK_ONLY_SUCCEEDED'
+            });
             break;
         }
 
@@ -1212,6 +1277,15 @@ async function runProfileOnlyMinimalValidation({
             profilePermissionSanitization.errors.push(
                 'Maximum Profile-only check-only attempts were reached without success.'
             );
+            profilePermissionSanitizationDiagnosticLog.logRetryDecision({
+                validationId,
+                attempt: checkOnlyAttempt,
+                sanitizationAttempted: false,
+                retryAllowed: false,
+                nextAttempt: null,
+                stopReason:
+                    'Maximum Profile-only check-only attempts were reached without success.'
+            });
             break;
         }
 
@@ -1225,6 +1299,14 @@ async function runProfileOnlyMinimalValidation({
             profilePermissionSanitization.status = 'BLOCKED';
             profilePermissionSanitization.overallStatus = 'BLOCKED';
             profilePermissionSanitization.errors.push(confirmedFailures.reason);
+            profilePermissionSanitizationDiagnosticLog.logRetryDecision({
+                validationId,
+                attempt: checkOnlyAttempt,
+                sanitizationAttempted: false,
+                retryAllowed: false,
+                nextAttempt: null,
+                stopReason: confirmedFailures.reason
+            });
             break;
         }
 
@@ -1234,7 +1316,9 @@ async function runProfileOnlyMinimalValidation({
                     workspacePath: generatedWorkspace.workspacePath,
                     confirmedFailures: confirmedFailures.failures,
                     attempt: checkOnlyAttempt,
-                    deploymentId: checkOnlyDeployment?.deploymentId || null
+                    deploymentId: checkOnlyDeployment?.deploymentId || null,
+                    validationId,
+                    profileWorkspaceProfiles: profileWorkspaceContent.profiles
                 }
             );
 
@@ -1242,6 +1326,14 @@ async function runProfileOnlyMinimalValidation({
             profilePermissionSanitization.status = 'BLOCKED';
             profilePermissionSanitization.overallStatus = 'BLOCKED';
             profilePermissionSanitization.errors.push(sanitizeResult.reason);
+            profilePermissionSanitizationDiagnosticLog.logRetryDecision({
+                validationId,
+                attempt: checkOnlyAttempt,
+                sanitizationAttempted: true,
+                retryAllowed: false,
+                nextAttempt: null,
+                stopReason: sanitizeResult.reason
+            });
             break;
         }
 
@@ -1298,6 +1390,14 @@ async function runProfileOnlyMinimalValidation({
             profilePermissionSanitization.errors.push(
                 profileInspectionAfterSanitization.reason
             );
+            profilePermissionSanitizationDiagnosticLog.logRetryDecision({
+                validationId,
+                attempt: checkOnlyAttempt,
+                sanitizationAttempted: true,
+                retryAllowed: false,
+                nextAttempt: null,
+                stopReason: profileInspectionAfterSanitization.reason
+            });
             break;
         }
 
@@ -1321,6 +1421,16 @@ async function runProfileOnlyMinimalValidation({
                 apiResolutionAfterSanitization.reason ||
                     'Profile-only Metadata API version requirements could not be satisfied after sanitization.'
             );
+            profilePermissionSanitizationDiagnosticLog.logRetryDecision({
+                validationId,
+                attempt: checkOnlyAttempt,
+                sanitizationAttempted: true,
+                retryAllowed: false,
+                nextAttempt: null,
+                stopReason:
+                    apiResolutionAfterSanitization.reason ||
+                    'Profile-only Metadata API version requirements could not be satisfied after sanitization.'
+            });
             break;
         }
 
@@ -1347,6 +1457,20 @@ async function runProfileOnlyMinimalValidation({
             currentGeneratedManifest.packageXml,
             'utf8'
         );
+
+        profilePermissionSanitizationDiagnosticLog.logRetryDecision({
+            validationId,
+            attempt: checkOnlyAttempt,
+            sanitizationAttempted: true,
+            retryAllowed:
+                checkOnlyAttempt < MAX_PROFILE_ONLY_CHECK_ONLY_ATTEMPTS,
+            nextAttempt:
+                checkOnlyAttempt < MAX_PROFILE_ONLY_CHECK_ONLY_ATTEMPTS
+                    ? checkOnlyAttempt + 1
+                    : null,
+            continueReason:
+                'SANITIZATION_APPLIED_PROFILE_REINSPECTED_MANIFEST_UPDATED'
+        });
     }
 
     deploymentApiVersion = currentDeploymentApiVersion;
@@ -1463,6 +1587,19 @@ async function runProfileOnlyMinimalValidation({
             console.error(error);
         }
     }
+
+    profilePermissionSanitizationDiagnosticLog.logFinalResult({
+        validationId,
+        sanitizationStatus: profilePermissionSanitization.status,
+        sanitizationOverallStatus: profilePermissionSanitization.overallStatus,
+        removedCount: profilePermissionSanitization.removedCount,
+        checkOnlyAttempts: profilePermissionSanitization.checkOnlyAttempts,
+        finalCheckOnlySuccess:
+            resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment),
+        canDeploy: deploymentReadiness.canDeploy,
+        boundArtifactCreated: Boolean(response.boundDeployArtifact),
+        blockReason: deploymentReadiness.reason
+    });
 
     return response;
 }

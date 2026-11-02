@@ -12,6 +12,7 @@ const {
     resolveSafeWorkspaceAbsolutePath,
     sha256Utf8
 } = require('./profileWorkspaceCanonicalContent.service');
+const profilePermissionSanitizationDiagnosticLog = require('./profilePermissionSanitizationDiagnosticLog.service');
 
 const readFile = util.promisify(fs.readFile);
 const writeFile = util.promisify(fs.writeFile);
@@ -98,6 +99,27 @@ function isConfirmedUnknownUserPermissionFailure(failure, selectedProfileNames) 
         profileName,
         permissionName
     };
+}
+
+function classifyComponentFailureForDiagnosticLog(failure, selectedProfileNames) {
+    const confirmed = isConfirmedUnknownUserPermissionFailure(
+        failure,
+        selectedProfileNames
+    );
+
+    if (confirmed.ok) {
+        return 'CONFIRMED_UNKNOWN_USER_PERMISSION';
+    }
+
+    if (normalizeMetadataType(failure?.metadataType) !== 'profile') {
+        return 'OTHER_FAILURE';
+    }
+
+    if (!resolveFailureProfileName(failure)) {
+        return 'OTHER_FAILURE';
+    }
+
+    return 'UNRECOGNIZED_FAILURE';
 }
 
 function extractComponentFailures(checkOnlyResult) {
@@ -279,7 +301,9 @@ async function applySanitizationPlan({
     workspacePath,
     confirmedFailures,
     attempt,
-    deploymentId = null
+    deploymentId = null,
+    validationId = null,
+    profileWorkspaceProfiles = null
 }) {
     const removedPermissions = [];
     const byProfile = new Map();
@@ -303,6 +327,13 @@ async function applySanitizationPlan({
         );
         let profileXml = await readFile(absolutePath, 'utf8');
         const originalXml = profileXml;
+        const workspaceProfileRecord = (profileWorkspaceProfiles || []).find(
+            (entry) => entry.profileName === profileName
+        );
+        const originalCanonicalSha256 =
+            workspaceProfileRecord?.originalCanonicalSha256 ||
+            workspaceProfileRecord?.canonicalSha256 ||
+            sha256Utf8(originalXml);
 
         for (const permissionName of permissionNames) {
             const matchingFailure = confirmedFailures.find(
@@ -310,12 +341,53 @@ async function applySanitizationPlan({
                     entry.profileName === profileName &&
                     entry.permissionName === permissionName
             );
+            const blocks = parseProfileUserPermissionBlocks(profileXml);
+            const analysis = analyzePermissionBlockMatch(blocks, permissionName);
+
+            profilePermissionSanitizationDiagnosticLog.logSanitizationAnalysis({
+                validationId,
+                attempt,
+                profileName,
+                permissionName,
+                matchCount: analysis.matching.length,
+                enabledTrueCount: analysis.enabledTrue.length,
+                enabledFalseCount: analysis.enabledFalse.length,
+                originalEnabled:
+                    analysis.enabledTrue.length === 1 ? true : null,
+                eligible: analysis.enabledTrue.length === 1,
+                blockReason:
+                    analysis.enabledTrue.length === 1
+                        ? null
+                        : analysis.matching.length
+                          ? analysis.enabledFalse.length
+                              ? `Permission "${permissionName}" exists with enabled=false.`
+                              : `Permission "${permissionName}" is ambiguous in Profile XML.`
+                          : `Permission "${permissionName}" was not found in Profile XML.`
+            });
+
             const removal = removeSingleUserPermissionBlock(
                 profileXml,
                 permissionName
             );
 
             if (!removal.ok) {
+                profilePermissionSanitizationDiagnosticLog.logWorkspaceModification(
+                    {
+                        validationId,
+                        attempt,
+                        profileName,
+                        success: false,
+                        removedPermissionNames: removedPermissions.map(
+                            (entry) => entry.permissionName
+                        ),
+                        originalCanonicalSha256,
+                        finalWorkspaceSha256: null,
+                        readBackVerification: 'NOT_EXECUTED',
+                        workspaceIntegrityStatus: 'BLOCKED',
+                        blockReason: removal.reason
+                    }
+                );
+
                 return {
                     ok: false,
                     reason: removal.reason,
@@ -343,6 +415,19 @@ async function applySanitizationPlan({
         try {
             validateSanitizedProfileXml(profileXml);
         } catch (error) {
+            profilePermissionSanitizationDiagnosticLog.logWorkspaceModification({
+                validationId,
+                attempt,
+                profileName,
+                success: false,
+                removedPermissionNames: [],
+                originalCanonicalSha256,
+                finalWorkspaceSha256: null,
+                readBackVerification: 'NOT_EXECUTED',
+                workspaceIntegrityStatus: 'BLOCKED',
+                blockReason: error?.message || null
+            });
+
             return {
                 ok: false,
                 reason:
@@ -353,6 +438,19 @@ async function applySanitizationPlan({
         }
 
         if (profileXml === originalXml) {
+            profilePermissionSanitizationDiagnosticLog.logWorkspaceModification({
+                validationId,
+                attempt,
+                profileName,
+                success: false,
+                removedPermissionNames: [],
+                originalCanonicalSha256,
+                finalWorkspaceSha256: null,
+                readBackVerification: 'NOT_EXECUTED',
+                workspaceIntegrityStatus: 'BLOCKED',
+                blockReason: `No Profile XML changes were applied for "${profileName}".`
+            });
+
             return {
                 ok: false,
                 reason: `No Profile XML changes were applied for "${profileName}".`,
@@ -368,6 +466,21 @@ async function applySanitizationPlan({
             const writtenSha256 = sha256Utf8(profileXml);
 
             if (finalWorkspaceSha256 !== writtenSha256) {
+                profilePermissionSanitizationDiagnosticLog.logWorkspaceModification(
+                    {
+                        validationId,
+                        attempt,
+                        profileName,
+                        success: false,
+                        removedPermissionNames: [...permissionNames],
+                        originalCanonicalSha256,
+                        finalWorkspaceSha256,
+                        readBackVerification: 'HASH_MISMATCH',
+                        workspaceIntegrityStatus: 'BLOCKED',
+                        blockReason: `Sanitized Profile read-back verification failed for "${profileName}".`
+                    }
+                );
+
                 return {
                     ok: false,
                     reason: `Sanitized Profile read-back verification failed for "${profileName}".`,
@@ -384,6 +497,21 @@ async function applySanitizationPlan({
                 );
 
                 if (analysis.matching.length) {
+                    profilePermissionSanitizationDiagnosticLog.logWorkspaceModification(
+                        {
+                            validationId,
+                            attempt,
+                            profileName,
+                            success: false,
+                            removedPermissionNames: [...permissionNames],
+                            originalCanonicalSha256,
+                            finalWorkspaceSha256,
+                            readBackVerification: 'FAILED',
+                            workspaceIntegrityStatus: 'BLOCKED',
+                            blockReason: `Permission "${permissionName}" remains in Profile "${profileName}" after sanitization.`
+                        }
+                    );
+
                     return {
                         ok: false,
                         reason: `Permission "${permissionName}" remains in Profile "${profileName}" after sanitization.`,
@@ -391,7 +519,34 @@ async function applySanitizationPlan({
                     };
                 }
             }
+
+            profilePermissionSanitizationDiagnosticLog.logWorkspaceModification({
+                validationId,
+                attempt,
+                profileName,
+                success: true,
+                removedPermissionNames: [...permissionNames],
+                originalCanonicalSha256,
+                finalWorkspaceSha256,
+                readBackVerification: 'PASSED',
+                workspaceIntegrityStatus: 'VERIFIED'
+            });
         } catch (error) {
+            profilePermissionSanitizationDiagnosticLog.logWorkspaceModification({
+                validationId,
+                attempt,
+                profileName,
+                success: false,
+                removedPermissionNames: removedPermissions.map(
+                    (entry) => entry.permissionName
+                ),
+                originalCanonicalSha256,
+                finalWorkspaceSha256: null,
+                readBackVerification: 'FAILED',
+                workspaceIntegrityStatus: 'BLOCKED',
+                blockReason: error?.message || null
+            });
+
             return {
                 ok: false,
                 reason:
@@ -445,6 +600,7 @@ module.exports = {
     parseUnknownUserPermissionProblem,
     resolveFailureProfileName,
     isConfirmedUnknownUserPermissionFailure,
+    classifyComponentFailureForDiagnosticLog,
     extractComponentFailures,
     extractConfirmedUnknownUserPermissionFailures,
     parseProfileUserPermissionBlocks,
