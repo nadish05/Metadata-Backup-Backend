@@ -360,35 +360,45 @@ async function applySanitizationPlan({
             };
         }
 
-        await mkdir(path.dirname(absolutePath), { recursive: true });
-        await writeFile(absolutePath, profileXml, 'utf8');
-        const readBack = await readFile(absolutePath, 'utf8');
-        const finalWorkspaceSha256 = sha256Utf8(readBack);
-        const writtenSha256 = sha256Utf8(profileXml);
+        try {
+            await mkdir(path.dirname(absolutePath), { recursive: true });
+            await writeFile(absolutePath, profileXml, 'utf8');
+            const readBack = await readFile(absolutePath, 'utf8');
+            const finalWorkspaceSha256 = sha256Utf8(readBack);
+            const writtenSha256 = sha256Utf8(profileXml);
 
-        if (finalWorkspaceSha256 !== writtenSha256) {
-            return {
-                ok: false,
-                reason: `Sanitized Profile read-back verification failed for "${profileName}".`,
-                removedPermissions: []
-            };
-        }
-
-        const postBlocks = parseProfileUserPermissionBlocks(readBack);
-
-        for (const permissionName of permissionNames) {
-            const analysis = analyzePermissionBlockMatch(
-                postBlocks,
-                permissionName
-            );
-
-            if (analysis.matching.length) {
+            if (finalWorkspaceSha256 !== writtenSha256) {
                 return {
                     ok: false,
-                    reason: `Permission "${permissionName}" remains in Profile "${profileName}" after sanitization.`,
+                    reason: `Sanitized Profile read-back verification failed for "${profileName}".`,
                     removedPermissions: []
                 };
             }
+
+            const postBlocks = parseProfileUserPermissionBlocks(readBack);
+
+            for (const permissionName of permissionNames) {
+                const analysis = analyzePermissionBlockMatch(
+                    postBlocks,
+                    permissionName
+                );
+
+                if (analysis.matching.length) {
+                    return {
+                        ok: false,
+                        reason: `Permission "${permissionName}" remains in Profile "${profileName}" after sanitization.`,
+                        removedPermissions: []
+                    };
+                }
+            }
+        } catch (error) {
+            return {
+                ok: false,
+                reason:
+                    error?.message ||
+                    `Sanitized Profile workspace update failed for "${profileName}".`,
+                removedPermissions: []
+            };
         }
     }
 

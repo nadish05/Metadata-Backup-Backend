@@ -98,6 +98,64 @@ async function writeWorkspaceProfile(workspacePath, profileName, xml) {
     return { relativePath, absolutePath };
 }
 
+function patchNodeFsWriteFile(handler) {
+    const original = fs.writeFile.bind(fs);
+
+    fs.writeFile = function (file, data, options, callback) {
+        let encoding = options;
+        let cb = callback;
+
+        if (typeof options === 'function') {
+            cb = options;
+            encoding = 'utf8';
+        }
+
+        return handler({ file, data, encoding, cb, original });
+    };
+
+    return () => {
+        fs.writeFile = original;
+    };
+}
+
+function patchNodeFsReadFile(handler) {
+    const original = fs.readFile.bind(fs);
+
+    fs.readFile = function (file, options, callback) {
+        let opts = options;
+        let cb = callback;
+
+        if (typeof options === 'function') {
+            cb = options;
+            opts = null;
+        }
+
+        return handler({ file, opts, cb, original });
+    };
+
+    return () => {
+        fs.readFile = original;
+    };
+}
+
+function extractXmlBlock(source, tagName) {
+    const pattern = new RegExp(
+        `<${tagName}\\b[^>]*>[\\s\\S]*?<\\/${tagName}>`,
+        'i'
+    );
+    const match = String(source).match(pattern);
+
+    return match ? match[0] : null;
+}
+
+function loadSanitizationServiceFresh() {
+    delete require.cache[
+        require.resolve('./profileUserPermissionSanitization.service')
+    ];
+
+    return require('./profileUserPermissionSanitization.service');
+}
+
 async function main() {
     const selectedAdmin = new Set(['Admin']);
 
@@ -625,6 +683,305 @@ async function main() {
         assert.strictEqual(empty.status, 'NOT_EXECUTED');
         assert.strictEqual(empty.removedCount, 0);
     });
+
+    await runTest(
+        'Safety A: workspace write failure blocks sanitization plan',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-write-fail-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [{ name: 'PermA', enabled: true }]
+            });
+            let restoreWrite = () => {};
+
+            try {
+                const { absolutePath } = await writeWorkspaceProfile(
+                    workspacePath,
+                    'Admin',
+                    xml
+                );
+                restoreWrite = patchNodeFsWriteFile(
+                    ({ file, data, encoding, cb, original }) => {
+                        if (
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath) &&
+                            typeof data === 'string' &&
+                            !data.includes('PermA')
+                        ) {
+                            process.nextTick(() =>
+                                cb(new Error('Simulated workspace write failure'))
+                            );
+                            return;
+                        }
+
+                        return original(file, data, encoding, cb);
+                    }
+                );
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                const result =
+                    await freshSanitizationService.applySanitizationPlan({
+                    workspacePath,
+                    confirmedFailures: [
+                        {
+                            profileName: 'Admin',
+                            permissionName: 'PermA',
+                            sourceFailure: {
+                                problem: 'Unknown user permission: PermA'
+                            }
+                        }
+                    ],
+                    attempt: 1
+                });
+
+                assert.strictEqual(result.ok, false);
+                assert.match(
+                    result.reason,
+                    /write failure|Simulated workspace write failure/i
+                );
+                const readBack = await readFile(absolutePath, 'utf8');
+                assert.match(readBack, /PermA/);
+            } finally {
+                restoreWrite();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'Safety B: workspace read-back failure blocks verified sanitization',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-read-fail-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [{ name: 'PermA', enabled: true }]
+            });
+            let failNextSanitizedReadBack = false;
+            let restoreWrite = () => {};
+            let restoreRead = () => {};
+
+            try {
+                const { absolutePath } = await writeWorkspaceProfile(
+                    workspacePath,
+                    'Admin',
+                    xml
+                );
+                restoreWrite = patchNodeFsWriteFile(
+                    ({ file, data, encoding, cb, original }) => {
+                        if (
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath) &&
+                            typeof data === 'string' &&
+                            !data.includes('PermA')
+                        ) {
+                            failNextSanitizedReadBack = true;
+                        }
+
+                        return original(file, data, encoding, cb);
+                    }
+                );
+                restoreRead = patchNodeFsReadFile(
+                    ({ file, opts, cb, original }) => {
+                        if (
+                            failNextSanitizedReadBack &&
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath)
+                        ) {
+                            failNextSanitizedReadBack = false;
+                            process.nextTick(() =>
+                                cb(
+                                    new Error(
+                                        'Simulated workspace read-back failure'
+                                    )
+                                )
+                            );
+                            return;
+                        }
+
+                        return original(file, opts, cb);
+                    }
+                );
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                const result =
+                    await freshSanitizationService.applySanitizationPlan({
+                    workspacePath,
+                    confirmedFailures: [
+                        {
+                            profileName: 'Admin',
+                            permissionName: 'PermA',
+                            sourceFailure: {
+                                problem: 'Unknown user permission: PermA'
+                            }
+                        }
+                    ],
+                    attempt: 1
+                });
+
+                assert.strictEqual(result.ok, false);
+                assert.match(
+                    result.reason,
+                    /read-back verification failed|Simulated workspace read-back failure/i
+                );
+            } finally {
+                restoreRead();
+                restoreWrite();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'Safety C: read-back hash mismatch blocks sanitization verification',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-hash-mismatch-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [{ name: 'PermA', enabled: true }]
+            });
+            let tamperNextSanitizedReadBack = false;
+            let restoreWrite = () => {};
+            let restoreRead = () => {};
+
+            try {
+                const { absolutePath } = await writeWorkspaceProfile(
+                    workspacePath,
+                    'Admin',
+                    xml
+                );
+                restoreWrite = patchNodeFsWriteFile(
+                    ({ file, data, encoding, cb, original }) => {
+                        if (
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath) &&
+                            typeof data === 'string' &&
+                            !data.includes('PermA')
+                        ) {
+                            tamperNextSanitizedReadBack = true;
+                        }
+
+                        return original(file, data, encoding, cb);
+                    }
+                );
+                restoreRead = patchNodeFsReadFile(
+                    ({ file, opts, cb, original }) => {
+                        if (
+                            tamperNextSanitizedReadBack &&
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath)
+                        ) {
+                            tamperNextSanitizedReadBack = false;
+
+                            return original(file, opts, (error, data) => {
+                                if (error) {
+                                    cb(error);
+                                    return;
+                                }
+
+                                cb(null, `${data}\n<!-- tampered -->`);
+                            });
+                        }
+
+                        return original(file, opts, cb);
+                    }
+                );
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                const result =
+                    await freshSanitizationService.applySanitizationPlan({
+                    workspacePath,
+                    confirmedFailures: [
+                        {
+                            profileName: 'Admin',
+                            permissionName: 'PermA',
+                            sourceFailure: {
+                                problem: 'Unknown user permission: PermA'
+                            }
+                        }
+                    ],
+                    attempt: 1
+                });
+
+                assert.strictEqual(result.ok, false);
+                assert.match(
+                    result.reason,
+                    /read-back verification failed|Simulated workspace read-back failure/i
+                );
+            } finally {
+                restoreRead();
+                restoreWrite();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'Safety D: byte-level preservation of unrelated Profile XML sections',
+        async () => {
+            const unsupported = 'UnsupportedPerm_SafetyD';
+            const supportedTrue = 'SupportedPerm_SafetyD';
+            const supportedFalse = 'DisabledPerm_SafetyD';
+            const xml = profileXmlWithUserPermissions({
+                marker: 'desc-marker-safety-d-7788',
+                includeField: true,
+                permissions: [
+                    { name: unsupported, enabled: true },
+                    { name: supportedTrue, enabled: true },
+                    { name: supportedFalse, enabled: false }
+                ]
+            });
+            const descriptionBlock = extractXmlBlock(xml, 'description');
+            const objectBlock = extractXmlBlock(xml, 'objectPermissions');
+            const fieldBlock = extractXmlBlock(xml, 'fieldPermissions');
+            const supportedTrueBlock = `<userPermissions>
+        <enabled>true</enabled>
+        <name>${supportedTrue}</name>
+    </userPermissions>`;
+            const supportedFalseBlock = `<userPermissions>
+        <enabled>false</enabled>
+        <name>${supportedFalse}</name>
+    </userPermissions>`;
+
+            const removal = sanitizationService.removeSingleUserPermissionBlock(
+                xml,
+                unsupported
+            );
+
+            assert.strictEqual(removal.ok, true);
+            assert.doesNotMatch(removal.xml, new RegExp(unsupported));
+            assert.strictEqual(
+                removal.xml.includes(descriptionBlock),
+                true,
+                'description block changed'
+            );
+            assert.strictEqual(
+                removal.xml.includes(objectBlock),
+                true,
+                'objectPermissions block changed'
+            );
+            assert.strictEqual(
+                removal.xml.includes(fieldBlock),
+                true,
+                'fieldPermissions block changed'
+            );
+            assert.strictEqual(
+                removal.xml.includes(supportedTrueBlock),
+                true,
+                'supported enabled=true block changed'
+            );
+            assert.strictEqual(
+                removal.xml.includes(supportedFalseBlock),
+                true,
+                'enabled=false block changed'
+            );
+            assert.doesNotThrow(() => {
+                sanitizationService.validateSanitizedProfileXml(removal.xml);
+            });
+        }
+    );
 }
 
 main();
