@@ -236,6 +236,42 @@ function logFinalResult({
     });
 }
 
+function logProfilePermissionRemovalVerified({
+    validationId = null,
+    attempt = null,
+    profileName = null,
+    permissionName = null,
+    originalBlockFound = null,
+    originalEnabled = null,
+    matchingBlocksBefore = null,
+    matchingBlocksAfter = null,
+    removedBlockCount = null,
+    workspaceReadBack = null,
+    xmlStructureValid = null,
+    workspaceIntegrityVerified = null,
+    salesforcePermissionNameMatches = null,
+    verificationStatus = null,
+    failureReason = null
+} = {}) {
+    emitDiagnostic('PROFILE_PERMISSION_REMOVAL_VERIFIED', {
+        validationId,
+        attempt,
+        profileName,
+        permissionName,
+        originalBlockFound,
+        originalEnabled,
+        matchingBlocksBefore,
+        matchingBlocksAfter,
+        removedBlockCount,
+        workspaceReadBack,
+        xmlStructureValid,
+        workspaceIntegrityVerified,
+        salesforcePermissionNameMatches,
+        verificationStatus,
+        failureReason: failureReason || null
+    });
+}
+
 module.exports = {
     LOG_PREFIX,
     isProfilePermissionSanitizationDebugEnabled,
@@ -251,5 +287,6 @@ module.exports = {
     logSanitizationAnalysis,
     logWorkspaceModification,
     logRetryDecision,
-    logFinalResult
+    logFinalResult,
+    logProfilePermissionRemovalVerified
 };

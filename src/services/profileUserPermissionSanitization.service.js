@@ -271,6 +271,107 @@ function validateSanitizedProfileXml(profileXml) {
     inspectXmlStructure(profileXml, { expectedRoot: 'Profile' });
 }
 
+function buildProfilePermissionRemovalVerification({
+    permissionName,
+    beforeAnalysis,
+    afterAnalysis = null,
+    workspaceReadBack = false,
+    xmlStructureValid = false,
+    workspaceIntegrityVerified = false,
+    salesforcePermissionNameMatches = true
+}) {
+    const matchingBlocksBefore = beforeAnalysis.matching.length;
+    const matchingBlocksAfter =
+        afterAnalysis === null ? null : afterAnalysis.matching.length;
+    const originalBlockFound = beforeAnalysis.enabledTrue.length === 1;
+    const originalEnabled = originalBlockFound ? true : null;
+    const removedBlockCount = originalBlockFound ? 1 : 0;
+
+    const failureReasons = [];
+
+    if (!originalBlockFound) {
+        failureReasons.push(
+            `Expected exactly one enabled=true block for "${permissionName}" before removal.`
+        );
+    }
+
+    if (matchingBlocksBefore !== 1) {
+        failureReasons.push(
+            `Expected matchingBlocksBefore=1 but found ${matchingBlocksBefore}.`
+        );
+    }
+
+    if (salesforcePermissionNameMatches === false) {
+        failureReasons.push(
+            'Permission name does not match the confirmed Salesforce failure.'
+        );
+    }
+
+    if (afterAnalysis !== null && matchingBlocksAfter !== 0) {
+        failureReasons.push(
+            `Expected matchingBlocksAfter=0 but found ${matchingBlocksAfter}.`
+        );
+    }
+
+    if (!workspaceReadBack) {
+        failureReasons.push('Workspace Profile read-back did not succeed.');
+    }
+
+    if (!xmlStructureValid) {
+        failureReasons.push('Sanitized Profile XML structure validation failed.');
+    }
+
+    if (!workspaceIntegrityVerified) {
+        failureReasons.push('Workspace hash read-back verification failed.');
+    }
+
+    const verificationStatus =
+        failureReasons.length === 0 ? 'PASSED' : 'FAILED';
+
+    return {
+        permissionName,
+        originalBlockFound,
+        originalEnabled,
+        matchingBlocksBefore,
+        matchingBlocksAfter,
+        removedBlockCount,
+        workspaceReadBack,
+        xmlStructureValid,
+        workspaceIntegrityVerified,
+        salesforcePermissionNameMatches,
+        verificationStatus,
+        failureReason: failureReasons.length ? failureReasons.join(' ') : null
+    };
+}
+
+function emitProfilePermissionRemovalVerifiedDiagnostic({
+    validationId,
+    attempt,
+    profileName,
+    verification
+}) {
+    profilePermissionSanitizationDiagnosticLog.logProfilePermissionRemovalVerified(
+        {
+            validationId,
+            attempt,
+            profileName,
+            permissionName: verification.permissionName,
+            originalBlockFound: verification.originalBlockFound,
+            originalEnabled: verification.originalEnabled,
+            matchingBlocksBefore: verification.matchingBlocksBefore,
+            matchingBlocksAfter: verification.matchingBlocksAfter,
+            removedBlockCount: verification.removedBlockCount,
+            workspaceReadBack: verification.workspaceReadBack,
+            xmlStructureValid: verification.xmlStructureValid,
+            workspaceIntegrityVerified: verification.workspaceIntegrityVerified,
+            salesforcePermissionNameMatches:
+                verification.salesforcePermissionNameMatches,
+            verificationStatus: verification.verificationStatus,
+            failureReason: verification.failureReason
+        }
+    );
+}
+
 function buildSelectedProfileNameSet(generatedDeploymentPackage) {
     const names = new Set();
 
@@ -327,6 +428,20 @@ async function applySanitizationPlan({
         );
         let profileXml = await readFile(absolutePath, 'utf8');
         const originalXml = profileXml;
+        const originalDiskXml = profileXml;
+        const permissionNamesList = [...permissionNames];
+        const beforeRemovalAnalyses = new Map();
+
+        for (const permissionName of permissionNamesList) {
+            beforeRemovalAnalyses.set(
+                permissionName,
+                analyzePermissionBlockMatch(
+                    parseProfileUserPermissionBlocks(originalDiskXml),
+                    permissionName
+                )
+            );
+        }
+
         const workspaceProfileRecord = (profileWorkspaceProfiles || []).find(
             (entry) => entry.profileName === profileName
         );
@@ -387,6 +502,26 @@ async function applySanitizationPlan({
                         blockReason: removal.reason
                     }
                 );
+                emitProfilePermissionRemovalVerifiedDiagnostic({
+                    validationId,
+                    attempt,
+                    profileName,
+                    verification: buildProfilePermissionRemovalVerification({
+                        permissionName,
+                        beforeAnalysis: beforeRemovalAnalyses.get(permissionName),
+                        afterAnalysis: analyzePermissionBlockMatch(
+                            parseProfileUserPermissionBlocks(profileXml),
+                            permissionName
+                        ),
+                        workspaceReadBack: false,
+                        xmlStructureValid: false,
+                        workspaceIntegrityVerified: false,
+                        salesforcePermissionNameMatches:
+                            parseUnknownUserPermissionProblem(
+                                matchingFailure?.sourceFailure?.problem
+                            ) === permissionName
+                    })
+                });
 
                 return {
                     ok: false,
@@ -427,6 +562,31 @@ async function applySanitizationPlan({
                 workspaceIntegrityStatus: 'BLOCKED',
                 blockReason: error?.message || null
             });
+
+            for (const permissionName of permissionNamesList) {
+                const matchingFailure = confirmedFailures.find(
+                    (entry) =>
+                        entry.profileName === profileName &&
+                        entry.permissionName === permissionName
+                );
+                emitProfilePermissionRemovalVerifiedDiagnostic({
+                    validationId,
+                    attempt,
+                    profileName,
+                    verification: buildProfilePermissionRemovalVerification({
+                        permissionName,
+                        beforeAnalysis: beforeRemovalAnalyses.get(permissionName),
+                        afterAnalysis: null,
+                        workspaceReadBack: false,
+                        xmlStructureValid: false,
+                        workspaceIntegrityVerified: false,
+                        salesforcePermissionNameMatches:
+                            parseUnknownUserPermissionProblem(
+                                matchingFailure?.sourceFailure?.problem
+                            ) === permissionName
+                    })
+                });
+            }
 
             return {
                 ok: false,
@@ -481,6 +641,35 @@ async function applySanitizationPlan({
                     }
                 );
 
+                for (const permissionName of permissionNamesList) {
+                    const matchingFailure = confirmedFailures.find(
+                        (entry) =>
+                            entry.profileName === profileName &&
+                            entry.permissionName === permissionName
+                    );
+                    emitProfilePermissionRemovalVerifiedDiagnostic({
+                        validationId,
+                        attempt,
+                        profileName,
+                        verification: buildProfilePermissionRemovalVerification({
+                            permissionName,
+                            beforeAnalysis:
+                                beforeRemovalAnalyses.get(permissionName),
+                            afterAnalysis: analyzePermissionBlockMatch(
+                                parseProfileUserPermissionBlocks(readBack),
+                                permissionName
+                            ),
+                            workspaceReadBack: true,
+                            xmlStructureValid: true,
+                            workspaceIntegrityVerified: false,
+                            salesforcePermissionNameMatches:
+                                parseUnknownUserPermissionProblem(
+                                    matchingFailure?.sourceFailure?.problem
+                                ) === permissionName
+                        })
+                    });
+                }
+
                 return {
                     ok: false,
                     reason: `Sanitized Profile read-back verification failed for "${profileName}".`,
@@ -511,6 +700,29 @@ async function applySanitizationPlan({
                             blockReason: `Permission "${permissionName}" remains in Profile "${profileName}" after sanitization.`
                         }
                     );
+                    const matchingFailure = confirmedFailures.find(
+                        (entry) =>
+                            entry.profileName === profileName &&
+                            entry.permissionName === permissionName
+                    );
+                    emitProfilePermissionRemovalVerifiedDiagnostic({
+                        validationId,
+                        attempt,
+                        profileName,
+                        verification: buildProfilePermissionRemovalVerification({
+                            permissionName,
+                            beforeAnalysis:
+                                beforeRemovalAnalyses.get(permissionName),
+                            afterAnalysis: analysis,
+                            workspaceReadBack: true,
+                            xmlStructureValid: true,
+                            workspaceIntegrityVerified: true,
+                            salesforcePermissionNameMatches:
+                                parseUnknownUserPermissionProblem(
+                                    matchingFailure?.sourceFailure?.problem
+                                ) === permissionName
+                        })
+                    });
 
                     return {
                         ok: false,
@@ -518,6 +730,34 @@ async function applySanitizationPlan({
                         removedPermissions: []
                     };
                 }
+            }
+
+            for (const permissionName of permissionNamesList) {
+                const matchingFailure = confirmedFailures.find(
+                    (entry) =>
+                        entry.profileName === profileName &&
+                        entry.permissionName === permissionName
+                );
+                emitProfilePermissionRemovalVerifiedDiagnostic({
+                    validationId,
+                    attempt,
+                    profileName,
+                    verification: buildProfilePermissionRemovalVerification({
+                        permissionName,
+                        beforeAnalysis: beforeRemovalAnalyses.get(permissionName),
+                        afterAnalysis: analyzePermissionBlockMatch(
+                            postBlocks,
+                            permissionName
+                        ),
+                        workspaceReadBack: true,
+                        xmlStructureValid: true,
+                        workspaceIntegrityVerified: true,
+                        salesforcePermissionNameMatches:
+                            parseUnknownUserPermissionProblem(
+                                matchingFailure?.sourceFailure?.problem
+                            ) === permissionName
+                    })
+                });
             }
 
             profilePermissionSanitizationDiagnosticLog.logWorkspaceModification({
@@ -546,6 +786,31 @@ async function applySanitizationPlan({
                 workspaceIntegrityStatus: 'BLOCKED',
                 blockReason: error?.message || null
             });
+
+            for (const permissionName of permissionNamesList) {
+                const matchingFailure = confirmedFailures.find(
+                    (entry) =>
+                        entry.profileName === profileName &&
+                        entry.permissionName === permissionName
+                );
+                emitProfilePermissionRemovalVerifiedDiagnostic({
+                    validationId,
+                    attempt,
+                    profileName,
+                    verification: buildProfilePermissionRemovalVerification({
+                        permissionName,
+                        beforeAnalysis: beforeRemovalAnalyses.get(permissionName),
+                        afterAnalysis: null,
+                        workspaceReadBack: false,
+                        xmlStructureValid: false,
+                        workspaceIntegrityVerified: false,
+                        salesforcePermissionNameMatches:
+                            parseUnknownUserPermissionProblem(
+                                matchingFailure?.sourceFailure?.problem
+                            ) === permissionName
+                    })
+                });
+            }
 
             return {
                 ok: false,
@@ -607,6 +872,7 @@ module.exports = {
     analyzePermissionBlockMatch,
     removeSingleUserPermissionBlock,
     validateSanitizedProfileXml,
+    buildProfilePermissionRemovalVerification,
     buildSelectedProfileNameSet,
     emptyProfilePermissionSanitization,
     applySanitizationPlan,

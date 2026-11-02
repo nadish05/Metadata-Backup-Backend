@@ -316,6 +316,118 @@ async function main() {
             );
         }
     );
+
+    await runTest(
+        'PROFILE_PERMISSION_REMOVAL_VERIFIED event includes PASSED payload fields',
+        async () => {
+            diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(
+                true
+            );
+            const lines = [];
+            diagnosticLog.setProfilePermissionSanitizationLogSinkForTests((line) =>
+                lines.push(line)
+            );
+
+            try {
+                diagnosticLog.logProfilePermissionRemovalVerified({
+                    validationId: 'validation_xxx',
+                    profileName: 'Sales Manager',
+                    permissionName: 'CreateWorkBadgeDefinition',
+                    originalBlockFound: true,
+                    originalEnabled: true,
+                    matchingBlocksBefore: 1,
+                    matchingBlocksAfter: 0,
+                    removedBlockCount: 1,
+                    workspaceReadBack: true,
+                    xmlStructureValid: true,
+                    workspaceIntegrityVerified: true,
+                    verificationStatus: 'PASSED'
+                });
+
+                const record = JSON.parse(
+                    lines[0].replace(diagnosticLog.LOG_PREFIX, '').trim()
+                );
+                assert.strictEqual(
+                    record.event,
+                    'PROFILE_PERMISSION_REMOVAL_VERIFIED'
+                );
+                assert.strictEqual(record.verificationStatus, 'PASSED');
+                assert.strictEqual(record.matchingBlocksAfter, 0);
+            } finally {
+                diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
+                diagnosticLog.resetProfilePermissionSanitizationDebugForTests();
+            }
+        }
+    );
+
+    await runTest(
+        'PROFILE_PERMISSION_REMOVAL_VERIFIED FAILED event includes safe failure reason',
+        async () => {
+            diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(
+                true
+            );
+            const lines = [];
+            diagnosticLog.setProfilePermissionSanitizationLogSinkForTests((line) =>
+                lines.push(line)
+            );
+
+            try {
+                diagnosticLog.logProfilePermissionRemovalVerified({
+                    validationId: 'validation_blocked',
+                    profileName: 'Sales Manager',
+                    permissionName: 'CreateWorkBadgeDefinition',
+                    originalBlockFound: true,
+                    originalEnabled: true,
+                    matchingBlocksBefore: 1,
+                    matchingBlocksAfter: 1,
+                    removedBlockCount: 1,
+                    workspaceReadBack: true,
+                    xmlStructureValid: true,
+                    workspaceIntegrityVerified: true,
+                    verificationStatus: 'FAILED',
+                    failureReason:
+                        'Expected matchingBlocksAfter=0 but found 1.'
+                });
+
+                const record = JSON.parse(
+                    lines[0].replace(diagnosticLog.LOG_PREFIX, '').trim()
+                );
+                assert.strictEqual(record.verificationStatus, 'FAILED');
+                assert.match(record.failureReason, /matchingBlocksAfter=0/);
+            } finally {
+                diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
+                diagnosticLog.resetProfilePermissionSanitizationDebugForTests();
+            }
+        }
+    );
+
+    await runTest(
+        'PROFILE_PERMISSION_REMOVAL_VERIFIED is not emitted when debug is disabled',
+        async () => {
+            diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(
+                false
+            );
+            const lines = [];
+            diagnosticLog.setProfilePermissionSanitizationLogSinkForTests((line) =>
+                lines.push(line)
+            );
+
+            try {
+                diagnosticLog.logProfilePermissionRemovalVerified({
+                    validationId: 'validation_off',
+                    permissionName: 'CreateWorkBadgeDefinition',
+                    verificationStatus: 'PASSED'
+                });
+
+                assert.strictEqual(lines.length, 0);
+            } finally {
+                diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
+                diagnosticLog.resetProfilePermissionSanitizationDebugForTests();
+            }
+        }
+    );
 }
+
+main();
 
 main();

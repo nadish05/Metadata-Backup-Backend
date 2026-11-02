@@ -8,6 +8,7 @@ const util = require('util');
 
 const profileWorkspaceCanonicalContentService = require('./profileWorkspaceCanonicalContent.service');
 const sanitizationService = require('./profileUserPermissionSanitization.service');
+const diagnosticLog = require('./profilePermissionSanitizationDiagnosticLog.service');
 
 const writeFile = util.promisify(fs.writeFile);
 const readFile = util.promisify(fs.readFile);
@@ -980,6 +981,227 @@ async function main() {
             assert.doesNotThrow(() => {
                 sanitizationService.validateSanitizedProfileXml(removal.xml);
             });
+        }
+    );
+
+    await runTest(
+        'removal verification records enabled block before and zero blocks after',
+        async () => {
+            const permissionName = 'CreateWorkBadgeDefinition';
+            const xml = profileXmlWithUserPermissions({
+                permissions: [{ name: permissionName, enabled: true }]
+            });
+            const beforeAnalysis = sanitizationService.analyzePermissionBlockMatch(
+                sanitizationService.parseProfileUserPermissionBlocks(xml),
+                permissionName
+            );
+            const removal = sanitizationService.removeSingleUserPermissionBlock(
+                xml,
+                permissionName
+            );
+            const afterAnalysis = sanitizationService.analyzePermissionBlockMatch(
+                sanitizationService.parseProfileUserPermissionBlocks(removal.xml),
+                permissionName
+            );
+            const verification =
+                sanitizationService.buildProfilePermissionRemovalVerification({
+                    permissionName,
+                    beforeAnalysis,
+                    afterAnalysis,
+                    workspaceReadBack: true,
+                    xmlStructureValid: true,
+                    workspaceIntegrityVerified: true,
+                    salesforcePermissionNameMatches: true
+                });
+
+            assert.strictEqual(verification.verificationStatus, 'PASSED');
+            assert.strictEqual(verification.matchingBlocksBefore, 1);
+            assert.strictEqual(verification.matchingBlocksAfter, 0);
+            assert.strictEqual(verification.originalEnabled, true);
+        }
+    );
+
+    await runTest(
+        'removal verification fails when permission remains after sanitization',
+        async () => {
+            const permissionName = 'PermA';
+            const xml = profileXmlWithUserPermissions({
+                permissions: [{ name: permissionName, enabled: true }]
+            });
+            const beforeAnalysis = sanitizationService.analyzePermissionBlockMatch(
+                sanitizationService.parseProfileUserPermissionBlocks(xml),
+                permissionName
+            );
+            const verification =
+                sanitizationService.buildProfilePermissionRemovalVerification({
+                    permissionName,
+                    beforeAnalysis,
+                    afterAnalysis: beforeAnalysis,
+                    workspaceReadBack: true,
+                    xmlStructureValid: true,
+                    workspaceIntegrityVerified: true,
+                    salesforcePermissionNameMatches: true
+                });
+
+            assert.strictEqual(verification.verificationStatus, 'FAILED');
+            assert.strictEqual(verification.matchingBlocksAfter, 1);
+        }
+    );
+
+    await runTest(
+        'removal verification fails when workspace read-back or hash checks fail',
+        async () => {
+            const permissionName = 'PermA';
+            const xml = profileXmlWithUserPermissions({
+                permissions: [{ name: permissionName, enabled: true }]
+            });
+            const beforeAnalysis = sanitizationService.analyzePermissionBlockMatch(
+                sanitizationService.parseProfileUserPermissionBlocks(xml),
+                permissionName
+            );
+            const removal = sanitizationService.removeSingleUserPermissionBlock(
+                xml,
+                permissionName
+            );
+            const afterAnalysis = sanitizationService.analyzePermissionBlockMatch(
+                sanitizationService.parseProfileUserPermissionBlocks(removal.xml),
+                permissionName
+            );
+
+            const readBackFailure =
+                sanitizationService.buildProfilePermissionRemovalVerification({
+                    permissionName,
+                    beforeAnalysis,
+                    afterAnalysis: null,
+                    workspaceReadBack: false,
+                    xmlStructureValid: false,
+                    workspaceIntegrityVerified: false,
+                    salesforcePermissionNameMatches: true
+                });
+            const hashFailure =
+                sanitizationService.buildProfilePermissionRemovalVerification({
+                    permissionName,
+                    beforeAnalysis,
+                    afterAnalysis,
+                    workspaceReadBack: true,
+                    xmlStructureValid: true,
+                    workspaceIntegrityVerified: false,
+                    salesforcePermissionNameMatches: true
+                });
+
+            assert.strictEqual(readBackFailure.verificationStatus, 'FAILED');
+            assert.strictEqual(hashFailure.verificationStatus, 'FAILED');
+        }
+    );
+
+    await runTest(
+        'applySanitizationPlan emits PROFILE_PERMISSION_REMOVAL_VERIFIED when debug enabled',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-removal-verified-')
+            );
+            const permissionName = 'CreateWorkBadgeDefinition';
+            const xml = profileXmlWithUserPermissions({
+                permissions: [{ name: permissionName, enabled: true }]
+            });
+            diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(true);
+            const lines = [];
+            diagnosticLog.setProfilePermissionSanitizationLogSinkForTests((line) =>
+                lines.push(line)
+            );
+
+            try {
+                await writeWorkspaceProfile(workspacePath, 'Admin', xml);
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                await freshSanitizationService.applySanitizationPlan({
+                    workspacePath,
+                    validationId: 'val-removal-verified',
+                    confirmedFailures: [
+                        {
+                            profileName: 'Admin',
+                            permissionName,
+                            sourceFailure: {
+                                problem: `Unknown user permission: ${permissionName}`
+                            }
+                        }
+                    ],
+                    attempt: 1
+                });
+
+                const verifiedEvents = lines
+                    .map((line) =>
+                        JSON.parse(
+                            line.replace(diagnosticLog.LOG_PREFIX, '').trim()
+                        )
+                    )
+                    .filter(
+                        (record) =>
+                            record.event === 'PROFILE_PERMISSION_REMOVAL_VERIFIED'
+                    );
+
+                assert.strictEqual(verifiedEvents.length, 1);
+                assert.strictEqual(
+                    verifiedEvents[0].verificationStatus,
+                    'PASSED'
+                );
+                assert.strictEqual(
+                    verifiedEvents[0].permissionName,
+                    permissionName
+                );
+                assert.strictEqual(verifiedEvents[0].matchingBlocksBefore, 1);
+                assert.strictEqual(verifiedEvents[0].matchingBlocksAfter, 0);
+                assert.strictEqual(verifiedEvents[0].workspaceReadBack, true);
+            } finally {
+                diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
+                diagnosticLog.resetProfilePermissionSanitizationDebugForTests();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'PROFILE_PERMISSION_REMOVAL_VERIFIED is suppressed when debug logging disabled',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-removal-verified-off-')
+            );
+            const permissionName = 'CreateWorkBadgeDefinition';
+            const xml = profileXmlWithUserPermissions({
+                permissions: [{ name: permissionName, enabled: true }]
+            });
+            diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(
+                false
+            );
+            const lines = [];
+            diagnosticLog.setProfilePermissionSanitizationLogSinkForTests((line) =>
+                lines.push(line)
+            );
+
+            try {
+                await writeWorkspaceProfile(workspacePath, 'Admin', xml);
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                await freshSanitizationService.applySanitizationPlan({
+                    workspacePath,
+                    confirmedFailures: [
+                        {
+                            profileName: 'Admin',
+                            permissionName,
+                            sourceFailure: {
+                                problem: `Unknown user permission: ${permissionName}`
+                            }
+                        }
+                    ],
+                    attempt: 1
+                });
+
+                assert.strictEqual(lines.length, 0);
+            } finally {
+                diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
+                diagnosticLog.resetProfilePermissionSanitizationDebugForTests();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
         }
     );
 }
