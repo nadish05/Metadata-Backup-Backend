@@ -27,6 +27,11 @@ const deploymentPackageService = require('./deploymentPackage.service');
 const deploymentPackageProvenanceService = require('./deploymentPackageProvenance.service');
 const packageXmlService = require('./packageXml.service');
 const deploymentWorkspaceService = require('./deploymentWorkspace.service');
+const profileWorkspaceCanonicalContentService = require('./profileWorkspaceCanonicalContent.service');
+const fs = require('fs');
+const path = require('path');
+const util = require('util');
+const writeFileAsync = util.promisify(fs.writeFile);
 const checkOnlyDeploymentService = require('./checkOnlyDeployment.service');
 const deploymentCheckOnlyGateService = require('./deploymentCheckOnlyGate.service');
 const deploymentExecutionService = require('./deploymentExecution.service');
@@ -285,7 +290,8 @@ function buildProfileOnlyMinimalReadiness({
 
 function buildProfileOnlyApiVersionBlockedResponse(
     connectivityResult,
-    apiResolution
+    apiResolution,
+    profileWorkspaceContent = null
 ) {
     const reason =
         apiResolution?.deploymentApiVersionPolicy?.reason ||
@@ -321,6 +327,49 @@ function buildProfileOnlyApiVersionBlockedResponse(
         deploymentApiNegotiation: apiResolution?.deploymentApiNegotiation || null,
         profileMetadataCompatibility:
             apiResolution?.profileMetadataCompatibility || null,
+        profileWorkspaceContent,
+        checkOnlyDeployment:
+            deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
+                reason
+            )
+    };
+}
+
+function buildProfileOnlyWorkspaceContentBlockedResponse(
+    connectivityResult,
+    profileWorkspaceContent
+) {
+    const reason =
+        profileWorkspaceContent?.errors?.[0] ||
+        'Profile workspace canonical content could not be verified.';
+
+    return {
+        ...connectivityResult,
+        success: false,
+        validationExecutionPath: PROFILE_ONLY_MINIMAL_EXECUTION_PATH,
+        profileOnlyMinimalPackageBlocked: true,
+        profileOnlyMinimalWorkspaceContentBlocked: true,
+        profileWorkspaceContent,
+        metadataValidation: buildSkippedValidationSection(
+            'Profile-only minimal validation path skipped application metadata validation.'
+        ),
+        dependencyValidation: buildSkippedValidationSection(
+            'Profile-only minimal validation path skipped dependency validation.'
+        ),
+        deploymentReadiness: {
+            canDeploy: false,
+            overallStatus: 'BLOCKED',
+            reason,
+            summary: {
+                destinationConnectivity:
+                    connectivityResult?.deploymentValidation?.status ||
+                    'BLOCKED',
+                metadataValidation: 'SKIPPED',
+                dependencyValidation: 'SKIPPED',
+                apiVersionPolicy: 'NOT_EVALUATED'
+            }
+        },
+        profileMetadataCompatibility: null,
         checkOnlyDeployment:
             deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
                 reason
@@ -503,14 +552,8 @@ function buildProfileEmbeddedApiVersionsForPolicy(
         .filter((item) => item.metadataName);
 }
 
-async function resolveProfileOnlyMinimalDeploymentApiVersion({
-    deploymentPackage,
-    generatedDeploymentPackage,
-    refreshToken,
-    instanceUrl,
-    connectivityResult
-}) {
-    const blocked = (reason, extras = {}) => ({
+function buildProfileOnlyApiVersionBlockedResult(reason, extras = {}) {
+    return {
         blocked: true,
         reason,
         deploymentApiVersionPolicy: {
@@ -520,8 +563,7 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
             reason,
             warnings: [],
             highestRequiredVersion: extras.structuralMinimumApiVersion || null,
-            destinationMaxApiVersion:
-                extras.destinationMaxApiVersion ?? null,
+            destinationMaxApiVersion: extras.destinationMaxApiVersion ?? null,
             defaultApiVersion: DEFAULT_API_VERSION,
             embeddedApiVersions: extras.embeddedApiVersions || []
         },
@@ -529,8 +571,15 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
         profileMetadataCompatibility:
             extras.profileMetadataCompatibility || null,
         destinationDiscovery: extras.destinationDiscovery || null
-    });
+    };
+}
 
+async function resolveProfileOnlyDestinationAndSnapshotContext({
+    deploymentPackage,
+    refreshToken,
+    instanceUrl,
+    connectivityResult
+}) {
     let destinationDiscovery = { status: 'unknown', version: null };
 
     if (connectivityResult?.deploymentValidation?.destinationConnected) {
@@ -581,26 +630,21 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
         console.error(snapshotError);
     }
 
-    const profileMetadataCompatibility =
-        await deploymentPermissionSetCompatibilityService.analyzeProfileMetadataCompatibilitySafe(
-            {
-                generatedDeploymentPackage,
-                readFile: packageSourceReadFile
-            }
-        );
+    return {
+        destinationDiscovery,
+        packageSourceReadFile,
+        repositorySnapshotMetadata
+    };
+}
 
-    const profileInspection =
-        evaluateProfileOnlyProfileInspectionCompleteness(
-            generatedDeploymentPackage,
-            profileMetadataCompatibility
-        );
-
-    if (!profileInspection.ok) {
-        return blocked(profileInspection.reason, {
-            profileMetadataCompatibility
-        });
-    }
-
+async function completeProfileOnlyMinimalDeploymentApiVersionAfterInspection({
+    deploymentPackage,
+    generatedDeploymentPackage,
+    profileMetadataCompatibility,
+    destinationDiscovery,
+    packageSourceReadFile,
+    repositorySnapshotMetadata
+}) {
     const structuralMinimumApiVersion =
         profileMetadataCompatibility?.structuralMinimumApiVersion || null;
     const embeddedApiVersions = buildProfileEmbeddedApiVersionsForPolicy(
@@ -610,7 +654,7 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
 
     if (structuralMinimumApiVersion) {
         if (destinationDiscovery.status !== 'verified') {
-            return blocked(
+            return buildProfileOnlyApiVersionBlockedResult(
                 'Selected Profile metadata requires Metadata API 63.0 or later, but destination API support could not be verified.',
                 {
                     structuralMinimumApiVersion,
@@ -627,7 +671,7 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
                 structuralMinimumApiVersion
             ) < 0
         ) {
-            return blocked(
+            return buildProfileOnlyApiVersionBlockedResult(
                 `Selected Profile metadata requires Metadata API ${structuralMinimumApiVersion}, but destination org supports only ${destinationDiscovery.version}.`,
                 {
                     structuralMinimumApiVersion,
@@ -661,7 +705,7 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
         console.error('PROFILE ONLY DEPLOYMENT API VERSION POLICY ERROR');
         console.error(policyError);
 
-        return blocked(
+        return buildProfileOnlyApiVersionBlockedResult(
             policyError.message ||
                 'Profile-only Metadata API version policy failed.',
             {
@@ -764,6 +808,54 @@ async function resolveProfileOnlyMinimalDeploymentApiVersion({
     };
 }
 
+async function resolveProfileOnlyMinimalDeploymentApiVersion({
+    deploymentPackage,
+    generatedDeploymentPackage,
+    refreshToken,
+    instanceUrl,
+    connectivityResult
+}) {
+    const {
+        destinationDiscovery,
+        packageSourceReadFile,
+        repositorySnapshotMetadata
+    } = await resolveProfileOnlyDestinationAndSnapshotContext({
+        deploymentPackage,
+        refreshToken,
+        instanceUrl,
+        connectivityResult
+    });
+
+    const profileMetadataCompatibility =
+        await deploymentPermissionSetCompatibilityService.analyzeProfileMetadataCompatibilitySafe(
+            {
+                generatedDeploymentPackage,
+                readFile: packageSourceReadFile
+            }
+        );
+
+    const profileInspection =
+        evaluateProfileOnlyProfileInspectionCompleteness(
+            generatedDeploymentPackage,
+            profileMetadataCompatibility
+        );
+
+    if (!profileInspection.ok) {
+        return buildProfileOnlyApiVersionBlockedResult(profileInspection.reason, {
+            profileMetadataCompatibility
+        });
+    }
+
+    return completeProfileOnlyMinimalDeploymentApiVersionAfterInspection({
+        deploymentPackage,
+        generatedDeploymentPackage,
+        profileMetadataCompatibility,
+        destinationDiscovery,
+        packageSourceReadFile,
+        repositorySnapshotMetadata
+    });
+}
+
 function buildProfileOnlyIneligibleResponse(connectivityResult, eligibility) {
     const skipReason = resolveProfileOnlyIneligibilityMessage(eligibility?.reason);
 
@@ -854,18 +946,139 @@ async function runProfileOnlyMinimalValidation({
         });
     }
 
-    const apiResolution = await resolveProfileOnlyMinimalDeploymentApiVersion({
-        deploymentPackage,
+    const destinationContext =
+        await resolveProfileOnlyDestinationAndSnapshotContext({
+            deploymentPackage,
+            refreshToken,
+            instanceUrl,
+            connectivityResult
+        });
+
+    const provisionalManifest = packageXmlService.generateManifest(
         generatedDeploymentPackage,
-        refreshToken,
-        instanceUrl,
-        connectivityResult
-    });
+        {
+            deploymentApiVersion: DEFAULT_API_VERSION,
+            deploymentApiVersionPolicy: {
+                deploymentApiVersion: DEFAULT_API_VERSION,
+                policy: 'HIGHEST_REQUIRED',
+                compatible: true
+            }
+        }
+    );
+
+    const generatedWorkspace =
+        await deploymentWorkspaceService.buildDeploymentWorkspace({
+            generatedDeploymentPackage,
+            generatedManifest: provisionalManifest,
+            repoUrl: deploymentPackage.repoUrl || deploymentPackage.repositoryUrl,
+            sourceBranch:
+                deploymentPackage.sourceBranch || deploymentPackage.branch,
+            skipDependencyCopy: true
+        });
+
+    let profileWorkspaceContent = {
+        status: 'BLOCKED',
+        profiles: [],
+        errors: ['Deployment workspace is not READY.']
+    };
+
+    if (generatedWorkspace?.status === 'READY') {
+        profileWorkspaceContent =
+            await profileWorkspaceCanonicalContentService.materializeProfileOnlyWorkspaceCanonicalContent(
+                {
+                    workspacePath: generatedWorkspace.workspacePath,
+                    deploymentPackage,
+                    generatedDeploymentPackage,
+                    repoUrl:
+                        deploymentPackage.repoUrl ||
+                        deploymentPackage.repositoryUrl,
+                    sourceBranch:
+                        deploymentPackage.sourceBranch || deploymentPackage.branch
+                }
+            );
+    }
+
+    if (profileWorkspaceContent.status !== 'VERIFIED') {
+        return {
+            ...buildProfileOnlyWorkspaceContentBlockedResponse(
+                connectivityResult,
+                profileWorkspaceContent
+            ),
+            generatedDeploymentPackage
+        };
+    }
+
+    const workspaceIntegrityBeforeInspection =
+        await profileWorkspaceCanonicalContentService.verifyProfileWorkspaceContentUnchanged(
+            generatedWorkspace.workspacePath,
+            profileWorkspaceContent.profiles
+        );
+
+    if (!workspaceIntegrityBeforeInspection.ok) {
+        profileWorkspaceContent = {
+            ...profileWorkspaceContent,
+            status: 'BLOCKED',
+            errors: [
+                ...(profileWorkspaceContent.errors || []),
+                workspaceIntegrityBeforeInspection.reason
+            ]
+        };
+
+        return buildProfileOnlyWorkspaceContentBlockedResponse(
+            connectivityResult,
+            profileWorkspaceContent
+        );
+    }
+
+    const inspectionPackage =
+        profileWorkspaceCanonicalContentService.buildPackageForWorkspaceProfileInspection(
+            generatedDeploymentPackage
+        );
+    const workspaceReadFile =
+        profileWorkspaceCanonicalContentService.createWorkspaceFileReader(
+            generatedWorkspace.workspacePath
+        );
+
+    const profileMetadataCompatibility =
+        await deploymentPermissionSetCompatibilityService.analyzeProfileMetadataCompatibilitySafe(
+            {
+                generatedDeploymentPackage: inspectionPackage,
+                readFile: workspaceReadFile
+            }
+        );
+
+    const profileInspection =
+        evaluateProfileOnlyProfileInspectionCompleteness(
+            inspectionPackage,
+            profileMetadataCompatibility
+        );
+
+    if (!profileInspection.ok) {
+        return buildProfileOnlyApiVersionBlockedResponse(
+            connectivityResult,
+            buildProfileOnlyApiVersionBlockedResult(profileInspection.reason, {
+                profileMetadataCompatibility
+            }),
+            profileWorkspaceContent
+        );
+    }
+
+    const apiResolution =
+        await completeProfileOnlyMinimalDeploymentApiVersionAfterInspection({
+            deploymentPackage,
+            generatedDeploymentPackage,
+            profileMetadataCompatibility,
+            destinationDiscovery: destinationContext.destinationDiscovery,
+            packageSourceReadFile: destinationContext.packageSourceReadFile,
+            repositorySnapshotMetadata:
+                destinationContext.repositorySnapshotMetadata
+        });
 
     if (apiResolution.blocked) {
         return buildProfileOnlyApiVersionBlockedResponse(
             connectivityResult,
-            apiResolution
+            apiResolution,
+            profileWorkspaceContent
         );
     }
 
@@ -884,15 +1097,33 @@ async function runProfileOnlyMinimalValidation({
         }
     );
 
-    const generatedWorkspace =
-        await deploymentWorkspaceService.buildDeploymentWorkspace({
-            generatedDeploymentPackage,
-            generatedManifest,
-            repoUrl: deploymentPackage.repoUrl || deploymentPackage.repositoryUrl,
-            sourceBranch:
-                deploymentPackage.sourceBranch || deploymentPackage.branch,
-            skipDependencyCopy: true
-        });
+    await writeFileAsync(
+        path.join(generatedWorkspace.workspacePath, 'package.xml'),
+        generatedManifest.packageXml,
+        'utf8'
+    );
+
+    const workspaceIntegrityBeforeCheckOnly =
+        await profileWorkspaceCanonicalContentService.verifyProfileWorkspaceContentUnchanged(
+            generatedWorkspace.workspacePath,
+            profileWorkspaceContent.profiles
+        );
+
+    if (!workspaceIntegrityBeforeCheckOnly.ok) {
+        profileWorkspaceContent = {
+            ...profileWorkspaceContent,
+            status: 'BLOCKED',
+            errors: [
+                ...(profileWorkspaceContent.errors || []),
+                workspaceIntegrityBeforeCheckOnly.reason
+            ]
+        };
+
+        return buildProfileOnlyWorkspaceContentBlockedResponse(
+            connectivityResult,
+            profileWorkspaceContent
+        );
+    }
 
     const destinationConnected =
         connectivityResult?.deploymentValidation?.destinationConnected === true;
@@ -945,6 +1176,7 @@ async function runProfileOnlyMinimalValidation({
         deploymentApiNegotiation,
         profileMetadataCompatibility:
             apiResolution.profileMetadataCompatibility || null,
+        profileWorkspaceContent,
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,

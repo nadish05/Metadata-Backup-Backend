@@ -30,6 +30,7 @@ const {
 const {
     buildSfdxProjectDefinition
 } = require('./sfdxProject.service');
+const profileWorkspaceCanonicalContentService = require('./profileWorkspaceCanonicalContent.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -103,10 +104,21 @@ function profileXmlContent({ viewAllFields = false } = {}) {
 
 function installRepositoryReaderMock({
     sourceMetadataApiVersion = null,
-    profileXml = null
+    profileXml = null,
+    repositoryProfilePaths = null,
+    repositoryProfileContentByPath = null
 } = {}) {
     const originalReader =
         deploymentWorkspaceService.createRepositoryFileReader;
+    const originalList =
+        deploymentWorkspaceService.listDeploymentRepositoryRelativeFiles;
+    const defaultProfilePaths = [
+        'force-app/main/default/profiles/Admin.profile-meta.xml',
+        'force-app/main/default/profiles/Standard.profile-meta.xml'
+    ];
+
+    deploymentWorkspaceService.listDeploymentRepositoryRelativeFiles = async () =>
+        repositoryProfilePaths || defaultProfilePaths;
 
     deploymentWorkspaceService.createRepositoryFileReader = async () =>
         async (relativePath) => {
@@ -124,6 +136,16 @@ function installRepositoryReaderMock({
                 });
             }
 
+            if (
+                repositoryProfileContentByPath &&
+                Object.prototype.hasOwnProperty.call(
+                    repositoryProfileContentByPath,
+                    normalized
+                )
+            ) {
+                return repositoryProfileContentByPath[normalized];
+            }
+
             if (typeof profileXml === 'string' && normalized.toLowerCase().includes('profile')) {
                 return profileXml;
             }
@@ -133,6 +155,8 @@ function installRepositoryReaderMock({
 
     return () => {
         deploymentWorkspaceService.createRepositoryFileReader = originalReader;
+        deploymentWorkspaceService.listDeploymentRepositoryRelativeFiles =
+            originalList;
     };
 }
 
@@ -456,6 +480,9 @@ async function main() {
         'checkbox ON skips entire dependency discovery pipeline',
         async () => {
             const restoreAxios = patchConnectivity();
+            const restoreReader = installRepositoryReaderMock({
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
             const spies = installDiscoverySpies();
             const originalBuild =
                 deploymentWorkspaceService.buildDeploymentWorkspace;
@@ -543,6 +570,7 @@ async function main() {
                 checkOnlyDeploymentService.runCheckOnlyDeployment =
                     originalCheckOnly;
                 spies.restore();
+                restoreReader();
                 restoreAxios();
                 if (workspaceRootToCleanup) {
                     await rm(workspaceRootToCleanup, {
@@ -558,6 +586,14 @@ async function main() {
         'checkbox ON with multiple Profiles generates exactly those Profiles',
         async () => {
             const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false }),
+                repositoryProfilePaths: [
+                    'force-app/main/default/profiles/Admin.profile-meta.xml',
+                    'force-app/main/default/profiles/Standard.profile-meta.xml'
+                ]
+            });
             const validationService = loadValidationServiceFresh();
             const workspaceRoot = await createProfileWorkspaceRoot();
             const originalBuild =
@@ -619,6 +655,7 @@ async function main() {
                     originalBuild;
                 checkOnlyDeploymentService.runCheckOnlyDeployment =
                     originalCheckOnly;
+                restoreReader();
                 restoreAxios();
                 await rm(workspaceRoot, { recursive: true, force: true });
             }
@@ -983,7 +1020,25 @@ async function main() {
             });
             const originalCheckOnly =
                 checkOnlyDeploymentService.runCheckOnlyDeployment;
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
             let checkOnlyInvoked = false;
+            let workspaceRootToCleanup = null;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
 
             checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
                 checkOnlyInvoked = true;
@@ -1010,16 +1065,24 @@ async function main() {
 
                 assert.strictEqual(checkOnlyInvoked, false);
                 assert.strictEqual(result.checkOnlyDeployment.executed, false);
-                assert.strictEqual(
-                    result.profileOnlyMinimalApiVersionBlocked,
-                    true
+                assert.ok(
+                    result.profileOnlyMinimalWorkspaceContentBlocked === true ||
+                        result.profileOnlyMinimalApiVersionBlocked === true
                 );
                 assert.ok(!result.boundDeployArtifact);
             } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
                 checkOnlyDeploymentService.runCheckOnlyDeployment =
                     originalCheckOnly;
                 restoreReader();
                 restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
             }
         }
     );
@@ -1334,7 +1397,25 @@ async function main() {
             });
             const originalCheckOnly =
                 checkOnlyDeploymentService.runCheckOnlyDeployment;
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
             let checkOnlyInvoked = false;
+            let workspaceRootToCleanup = null;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
 
             checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
                 checkOnlyInvoked = true;
@@ -1377,10 +1458,18 @@ async function main() {
                 );
                 assert.ok(!result.boundDeployArtifact);
             } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
                 checkOnlyDeploymentService.runCheckOnlyDeployment =
                     originalCheckOnly;
                 restoreReader();
                 restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
             }
         }
     );
@@ -1594,6 +1683,234 @@ async function main() {
                 boundDeployService.resetResolveVerifiedDestinationOrgIdForTests();
                 statusStore.clearAllJobs();
                 await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only validation blocks before check-only when canonical content is missing',
+        async () => {
+            const restoreAxios = patchConnectivity();
+            const restoreReader = installRepositoryReaderMock({
+                repositoryProfilePaths: []
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let checkOnlyCalls = 0;
+            let workspaceRootToCleanup = null;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+                return {
+                    success: true,
+                    status: 'SUCCESS',
+                    executed: true
+                };
+            };
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin'
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-missing-canonical'
+                    });
+
+                assert.strictEqual(
+                    result.profileWorkspaceContent?.status,
+                    'BLOCKED'
+                );
+                assert.strictEqual(checkOnlyCalls, 0);
+                assert.strictEqual(result.boundDeployArtifact, undefined);
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only validation returns profileWorkspaceContent diagnostics when verified',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const inline = profileXmlContent({ viewAllFields: true });
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => ({
+                success: true,
+                status: 'SUCCESS',
+                executed: true
+            });
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-workspace-diagnostics'
+                    });
+
+                assert.strictEqual(
+                    result.profileWorkspaceContent.status,
+                    'VERIFIED'
+                );
+                assert.strictEqual(
+                    result.profileWorkspaceContent.profiles[0].source,
+                    'INLINE_SELECTED_CONTENT'
+                );
+                assert.strictEqual(
+                    result.profileWorkspaceContent.profiles[0].verified,
+                    true
+                );
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'checkbox OFF never invokes Profile-only canonical materialization',
+        async () => {
+            const restoreAxios = patchConnectivity();
+            const spies = installDiscoverySpies();
+            const originalMaterialize =
+                profileWorkspaceCanonicalContentService.materializeProfileOnlyWorkspaceCanonicalContent;
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalMetadataValidation =
+                metadataValidationService.validateMetadataPackage;
+            let materializeCalls = 0;
+
+            metadataValidationService.validateMetadataPackage = async () => ({
+                overallStatus: 'PASS',
+                results: []
+            });
+            deploymentWorkspaceService.buildDeploymentWorkspace = async () => ({
+                status: 'READY',
+                workspacePath: await createProfileWorkspaceRoot(),
+                dependenciesCopied: 1,
+                metadataCopied: 1
+            });
+            profileWorkspaceCanonicalContentService.materializeProfileOnlyWorkspaceCanonicalContent =
+                async (...args) => {
+                    materializeCalls += 1;
+                    return originalMaterialize(...args);
+                };
+
+            try {
+                delete require.cache[
+                    require.resolve('./deploymentValidation.service')
+                ];
+                const validationService = loadValidationServiceFresh();
+                await validationService.validateDeployment({
+                    refreshToken: 'rt',
+                    instanceUrl: 'https://test.example.my.salesforce.com',
+                    orgId: '00DTEST',
+                    deploymentPackage: baseDeploymentPackage({
+                        profileOnlyMinimalPackage: false
+                    })
+                });
+
+                assert.strictEqual(materializeCalls, 0);
+            } finally {
+                profileWorkspaceCanonicalContentService.materializeProfileOnlyWorkspaceCanonicalContent =
+                    originalMaterialize;
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                metadataValidationService.validateMetadataPackage =
+                    originalMetadataValidation;
+                spies.restore();
+                restoreAxios();
             }
         }
     );

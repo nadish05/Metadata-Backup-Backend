@@ -985,9 +985,20 @@ async function createRepositoryFileReader(repoUrl, sourceBranch) {
     };
 }
 
+async function listDeploymentRepositoryRelativeFiles(repoUrl, sourceBranch) {
+    if (!repoUrl || !sourceBranch) {
+        throw new Error('Repository URL or source branch not provided');
+    }
+
+    const repoPath = await prepareRepository(repoUrl);
+    await checkoutSourceBranch(repoPath, sourceBranch);
+    return listRepositoryFiles(repoPath);
+}
+
 module.exports = {
     buildDeploymentWorkspace,
     createRepositoryFileReader,
+    listDeploymentRepositoryRelativeFiles,
     // Exported for focused CustomMetadata path-resolution tests.
     resolveCustomMetadataPath
 };
