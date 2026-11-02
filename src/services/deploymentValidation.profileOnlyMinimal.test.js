@@ -369,15 +369,31 @@ async function createProfileWorkspaceRoot() {
 }
 
 async function createProfileWorkspaceRootAt(root) {
-    const profilesDir = path.join(root, 'profiles');
-    await mkdir(profilesDir, { recursive: true });
+    const workspaceRelativePath =
+        profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+            'Admin'
+        );
+    const adminCanonicalPath = path.join(
+        root,
+        ...workspaceRelativePath.split('/')
+    );
+    await mkdir(path.dirname(adminCanonicalPath), { recursive: true });
     await writeFile(
-        path.join(profilesDir, 'Admin.profile-meta.xml'),
+        adminCanonicalPath,
         '<?xml version="1.0" encoding="UTF-8"?>\n<Profile xmlns="http://soap.sforce.com/2006/04/metadata"/>\n',
         'utf8'
     );
+    const standardRelativePath =
+        profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+            'Standard'
+        );
+    const standardCanonicalPath = path.join(
+        root,
+        ...standardRelativePath.split('/')
+    );
+    await mkdir(path.dirname(standardCanonicalPath), { recursive: true });
     await writeFile(
-        path.join(profilesDir, 'Standard.profile-meta.xml'),
+        standardCanonicalPath,
         '<?xml version="1.0" encoding="UTF-8"?>\n<Profile xmlns="http://soap.sforce.com/2006/04/metadata"/>\n',
         'utf8'
     );
@@ -494,6 +510,7 @@ async function main() {
                 args
             ) => {
                 assert.strictEqual(args.skipDependencyCopy, true);
+                assert.strictEqual(args.skipProfileRepositoryCopy, true);
                 assert.deepStrictEqual(
                     args.generatedDeploymentPackage.dependencies,
                     []
@@ -1605,6 +1622,17 @@ async function main() {
             );
             await createProfileWorkspaceRootAt(workspacePath);
 
+            const adminRelativePath =
+                profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                    'Admin'
+                );
+            const adminXml = await fs.promises.readFile(
+                path.join(workspacePath, ...adminRelativePath.split('/')),
+                'utf8'
+            );
+            const adminSha256 =
+                profileWorkspaceCanonicalContentService.sha256Utf8(adminXml);
+
             const validationId = statusStore.createJob();
             const orgId = '00DBOUNDORG';
             const finalResponse = {
@@ -1628,6 +1656,20 @@ async function main() {
                         { metadataType: 'Profile', metadataName: 'Admin' }
                     ],
                     dependencies: []
+                },
+                profileWorkspaceContent: {
+                    status: 'VERIFIED',
+                    profiles: [
+                        {
+                            profileName: 'Admin',
+                            workspaceRelativePath: adminRelativePath,
+                            source: 'INLINE_SELECTED_CONTENT',
+                            canonicalSha256: adminSha256,
+                            workspaceSha256: adminSha256,
+                            verified: true
+                        }
+                    ],
+                    errors: []
                 }
             };
 

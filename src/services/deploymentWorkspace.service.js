@@ -631,13 +631,21 @@ async function copyMetadataItems({
     workspacePath,
     repoFiles,
     workspaceStats,
-    missingFiles
+    missingFiles,
+    skipProfileRepositoryCopy = false
 }) {
     logSection('Copying Metadata');
 
     let metadataCopied = 0;
 
     for (const item of metadata) {
+        if (
+            skipProfileRepositoryCopy &&
+            (item?.metadataType === 'Profile' || item?.type === 'Profile')
+        ) {
+            continue;
+        }
+
         const resolvedPath = resolveMetadataItemPath(item, repoFiles);
         const missingLabel = getMissingFileLabel(
             item.metadataType,
@@ -863,7 +871,8 @@ async function buildDeploymentWorkspace({
     generatedManifest,
     repoUrl,
     sourceBranch,
-    skipDependencyCopy = false
+    skipDependencyCopy = false,
+    skipProfileRepositoryCopy = false
 }) {
     logSection('Workspace Builder Started');
 
@@ -913,7 +922,8 @@ async function buildDeploymentWorkspace({
             workspacePath,
             repoFiles,
             workspaceStats,
-            missingFiles
+            missingFiles,
+            skipProfileRepositoryCopy
         });
 
         if (!skipDependencyCopy && dependencies.length) {

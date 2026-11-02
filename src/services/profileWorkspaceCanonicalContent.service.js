@@ -14,6 +14,8 @@ const {
 const mkdir = util.promisify(fs.mkdir);
 const writeFile = util.promisify(fs.writeFile);
 const readFile = util.promisify(fs.readFile);
+const readdir = util.promisify(fs.readdir);
+const unlink = util.promisify(fs.unlink);
 
 const PROFILE_FILE_SUFFIX = '.profile-meta.xml';
 
@@ -343,6 +345,154 @@ async function verifyProfileWorkspaceContentUnchanged(
     return { ok: true };
 }
 
+async function listWorkspaceRelativeFilePaths(workspaceRoot) {
+    const files = [];
+
+    async function walk(relativeDir) {
+        const absoluteDir = relativeDir
+            ? path.join(workspaceRoot, ...relativeDir.split('/'))
+            : workspaceRoot;
+        const entries = await readdir(absoluteDir, { withFileTypes: true });
+
+        for (const entry of entries) {
+            const relativePath = relativeDir
+                ? `${relativeDir}/${entry.name}`.replace(/\\/g, '/')
+                : entry.name;
+
+            if (entry.isDirectory()) {
+                await walk(relativePath);
+                continue;
+            }
+
+            if (entry.isFile()) {
+                files.push(relativePath);
+            }
+        }
+    }
+
+    await walk('');
+    return files;
+}
+
+async function removeStaleSelectedProfileWorkspaceCopies(
+    workspaceRoot,
+    verifiedProfiles
+) {
+    const selectedByName = new Map();
+
+    for (const profile of verifiedProfiles || []) {
+        if (!profile?.profileName || !profile?.workspaceRelativePath) {
+            continue;
+        }
+
+        selectedByName.set(
+            String(profile.profileName).trim(),
+            normalizeRelativePath(profile.workspaceRelativePath)
+        );
+    }
+
+    if (!selectedByName.size) {
+        return { ok: true, removedPaths: [] };
+    }
+
+    const removedPaths = [];
+    const relativeFiles = await listWorkspaceRelativeFilePaths(workspaceRoot);
+
+    for (const relativePath of relativeFiles) {
+        const normalizedPath = normalizeRelativePath(relativePath);
+
+        if (!normalizedPath.endsWith(PROFILE_FILE_SUFFIX)) {
+            continue;
+        }
+
+        const profileName = path.posix.basename(
+            normalizedPath,
+            PROFILE_FILE_SUFFIX
+        );
+        const canonicalPath = selectedByName.get(profileName);
+
+        if (!canonicalPath || normalizedPath === canonicalPath) {
+            continue;
+        }
+
+        const absolutePath = resolveSafeWorkspaceAbsolutePath(
+            workspaceRoot,
+            normalizedPath
+        );
+        await unlink(absolutePath);
+        removedPaths.push(normalizedPath);
+    }
+
+    return { ok: true, removedPaths };
+}
+
+async function verifyProfileWorkspaceContentForBoundArtifact({
+    profileWorkspaceContent,
+    generatedDeploymentPackage,
+    workspacePath
+}) {
+    if (!profileWorkspaceContent) {
+        return {
+            ok: false,
+            reason: 'Profile workspace content verification is missing.'
+        };
+    }
+
+    if (profileWorkspaceContent.status !== 'VERIFIED') {
+        return {
+            ok: false,
+            reason: 'Profile workspace canonical content is not verified.'
+        };
+    }
+
+    const expectedProfiles = collectProfileItems(generatedDeploymentPackage);
+
+    if (!expectedProfiles.length) {
+        return {
+            ok: false,
+            reason: 'No Profile metadata is available for bound artifact verification.'
+        };
+    }
+
+    const verifiedByName = new Map(
+        (profileWorkspaceContent.profiles || []).map((profile) => [
+            String(profile.profileName || '').trim(),
+            profile
+        ])
+    );
+
+    for (const item of expectedProfiles) {
+        const profileName = String(item?.metadataName || '').trim();
+        const verified = verifiedByName.get(profileName);
+        const expectedPath = resolveProfileWorkspaceRelativePath(profileName);
+
+        if (!verified || verified.verified !== true) {
+            return {
+                ok: false,
+                reason: `Profile "${profileName}" is missing verified workspace content.`
+            };
+        }
+
+        if (normalizeRelativePath(verified.workspaceRelativePath) !== expectedPath) {
+            return {
+                ok: false,
+                reason: `Profile "${profileName}" verified workspace path does not match the canonical destination.`
+            };
+        }
+    }
+
+    const integrity = await verifyProfileWorkspaceContentUnchanged(
+        workspacePath,
+        profileWorkspaceContent.profiles
+    );
+
+    if (!integrity.ok) {
+        return integrity;
+    }
+
+    return { ok: true, reason: null };
+}
+
 async function materializeProfileOnlyWorkspaceCanonicalContent({
     workspacePath,
     deploymentPackage,
@@ -491,6 +641,46 @@ async function materializeProfileOnlyWorkspaceCanonicalContent({
         };
     }
 
+    try {
+        const staleRemoval = await removeStaleSelectedProfileWorkspaceCopies(
+            workspacePath,
+            profiles
+        );
+
+        if (!staleRemoval.ok) {
+            return {
+                status: 'BLOCKED',
+                profiles,
+                errors: [
+                    staleRemoval.reason ||
+                        'Unable to remove stale Profile workspace copies.'
+                ]
+            };
+        }
+    } catch (cleanupError) {
+        return {
+            status: 'BLOCKED',
+            profiles,
+            errors: [
+                cleanupError?.message ||
+                    'Unable to remove stale Profile workspace copies.'
+            ]
+        };
+    }
+
+    const postCleanupIntegrity = await verifyProfileWorkspaceContentUnchanged(
+        workspacePath,
+        profiles
+    );
+
+    if (!postCleanupIntegrity.ok) {
+        return {
+            status: 'BLOCKED',
+            profiles,
+            errors: [postCleanupIntegrity.reason]
+        };
+    }
+
     return {
         status: 'VERIFIED',
         profiles,
@@ -511,5 +701,8 @@ module.exports = {
     resolveCanonicalProfileXmlContent,
     buildPackageForWorkspaceProfileInspection,
     verifyProfileWorkspaceContentUnchanged,
+    verifyProfileWorkspaceContentForBoundArtifact,
+    removeStaleSelectedProfileWorkspaceCopies,
+    listWorkspaceRelativeFilePaths,
     materializeProfileOnlyWorkspaceCanonicalContent
 };

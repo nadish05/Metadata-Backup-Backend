@@ -11,6 +11,7 @@ const profileWorkspaceService = require('./profileWorkspaceCanonicalContent.serv
 
 const writeFile = util.promisify(fs.writeFile);
 const readFile = util.promisify(fs.readFile);
+const mkdir = util.promisify(fs.mkdir);
 const rm = util.promisify(fs.rm);
 
 function runTest(name, fn) {
@@ -432,6 +433,77 @@ async function main() {
             await rm(workspacePath, { recursive: true, force: true });
         }
     });
+
+    await runTest(
+        'removeStaleSelectedProfileWorkspaceCopies deletes only selected stale copies',
+        async () => {
+            const workspacePath = await createWorkspaceRoot();
+            const canonicalPath =
+                profileWorkspaceService.resolveProfileWorkspaceRelativePath(
+                    'Admin'
+                );
+            const canonicalXml = profileXml({ marker: 'canonical-admin' });
+            await mkdir(
+                path.join(workspacePath, path.dirname(canonicalPath)),
+                { recursive: true }
+            );
+            await writeFile(
+                path.join(workspacePath, ...canonicalPath.split('/')),
+                canonicalXml,
+                'utf8'
+            );
+            await mkdir(path.join(workspacePath, 'profiles'), { recursive: true });
+            await writeFile(
+                path.join(workspacePath, 'profiles', 'Admin.profile-meta.xml'),
+                profileXml({ marker: 'stale-admin' }),
+                'utf8'
+            );
+            await writeFile(
+                path.join(workspacePath, 'profiles', 'Unrelated.profile-meta.xml'),
+                profileXml({ marker: 'keep-unrelated' }),
+                'utf8'
+            );
+
+            const verifiedProfiles = [
+                {
+                    profileName: 'Admin',
+                    workspaceRelativePath: canonicalPath,
+                    verified: true,
+                    canonicalSha256:
+                        profileWorkspaceService.sha256Utf8(canonicalXml),
+                    workspaceSha256:
+                        profileWorkspaceService.sha256Utf8(canonicalXml)
+                }
+            ];
+
+            const removal =
+                await profileWorkspaceService.removeStaleSelectedProfileWorkspaceCopies(
+                    workspacePath,
+                    verifiedProfiles
+                );
+
+            assert.strictEqual(removal.ok, true);
+            assert.deepStrictEqual(removal.removedPaths, [
+                'profiles/Admin.profile-meta.xml'
+            ]);
+            assert.ok(
+                fs.existsSync(
+                    path.join(workspacePath, ...canonicalPath.split('/'))
+                )
+            );
+            assert.ok(
+                fs.existsSync(
+                    path.join(
+                        workspacePath,
+                        'profiles',
+                        'Unrelated.profile-meta.xml'
+                    )
+                )
+            );
+
+            await rm(workspacePath, { recursive: true, force: true });
+        }
+    );
 }
 
 main();

@@ -14,9 +14,12 @@ const statusStore = require('./deploymentValidationStatus.store');
 const deploymentPackageService = require('./deploymentPackage.service');
 const {
     buildBoundDeployArtifactRecord,
-    computeDeployableArtifactDigest
+    computeDeployableArtifactDigest,
+    verifyBoundDeployArtifactIntegrity,
+    resolveExpectedMetadataRelativePath
 } = require('./deploymentBoundArtifact.service');
 const boundDeployService = require('./deploymentBoundDeploy.service');
+const profileWorkspaceCanonicalContentService = require('./profileWorkspaceCanonicalContent.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -30,9 +33,12 @@ function runTest(name, fn) {
 }
 
 async function createProfileWorkspace(rootDir) {
-    const profilesDir = path.join(rootDir, 'profiles');
-    await mkdir(profilesDir, { recursive: true });
-    const profilePath = path.join(profilesDir, 'Admin.profile-meta.xml');
+    const workspaceRelativePath =
+        profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+            'Admin'
+        );
+    const profilePath = path.join(rootDir, ...workspaceRelativePath.split('/'));
+    await mkdir(path.dirname(profilePath), { recursive: true });
     const profileXml =
         '<?xml version="1.0" encoding="UTF-8"?>\n<Profile xmlns="http://soap.sforce.com/2006/04/metadata">\n</Profile>\n';
     await writeFile(profilePath, profileXml, 'utf8');
@@ -41,7 +47,42 @@ async function createProfileWorkspace(rootDir) {
         '<?xml version="1.0" encoding="UTF-8"?>\n<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n  <types>\n    <members>Admin</members>\n    <name>Profile</name>\n  </types>\n  <version>62.0</version>\n</Package>\n';
     await writeFile(path.join(rootDir, 'package.xml'), packageXml, 'utf8');
 
-    return { packageXml, profilePath };
+    return { packageXml, profilePath, workspaceRelativePath, profileXml };
+}
+
+async function buildVerifiedProfileWorkspaceContent(
+    workspacePath,
+    profileNames = ['Admin']
+) {
+    const profiles = [];
+
+    for (const profileName of profileNames) {
+        const workspaceRelativePath =
+            profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                profileName
+            );
+        const profileXml = await fs.promises.readFile(
+            path.join(workspacePath, ...workspaceRelativePath.split('/')),
+            'utf8'
+        );
+        const canonicalSha256 =
+            profileWorkspaceCanonicalContentService.sha256Utf8(profileXml);
+
+        profiles.push({
+            profileName,
+            workspaceRelativePath,
+            source: 'GIT_REPOSITORY',
+            canonicalSha256,
+            workspaceSha256: canonicalSha256,
+            verified: true
+        });
+    }
+
+    return {
+        status: 'VERIFIED',
+        profiles,
+        errors: []
+    };
 }
 
 function buildEligibleValidationResult(workspacePath, packageXml, orgId) {
@@ -66,6 +107,7 @@ function buildEligibleValidationResult(workspacePath, packageXml, orgId) {
             metadata: [{ metadataType: 'Profile', metadataName: 'Admin' }],
             summary: { totalComponents: 1 }
         },
+        profileWorkspaceContent: null,
         metadataValidation: { overallStatus: 'PASSED' },
         dependencyValidation: { overallStatus: 'PASSED' }
     };
@@ -111,6 +153,14 @@ async function seedCompletedValidationJob({
 
     if (typeof mutateResult === 'function') {
         result = mutateResult(result) || result;
+    }
+
+    if (
+        profileOnlyMinimalPackage !== false &&
+        !result.profileWorkspaceContent
+    ) {
+        result.profileWorkspaceContent =
+            await buildVerifiedProfileWorkspaceContent(workspacePath);
     }
 
     const deploymentPackage = {
@@ -374,7 +424,12 @@ async function main() {
         const seeded = await seedCompletedValidationJob();
 
         await writeFile(
-            path.join(seeded.workspacePath, 'profiles', 'Admin.profile-meta.xml'),
+            path.join(
+                seeded.workspacePath,
+                profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                    'Admin'
+                )
+            ),
             '<Profile xmlns="http://soap.sforce.com/2006/04/metadata"><custom>true</custom></Profile>',
             'utf8'
         );
@@ -665,6 +720,8 @@ async function main() {
                 packageXml,
                 '00DORG123'
             );
+            initialResult.profileWorkspaceContent =
+                await buildVerifiedProfileWorkspaceContent(workspacePath);
 
             const deploymentPackage = {
                 profileOnlyMinimalPackage: true,
@@ -678,8 +735,12 @@ async function main() {
                 finalResponse: initialResult
             });
 
+            const canonicalRelativePath =
+                profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                    'Admin'
+                );
             await writeFile(
-                path.join(workspacePath, 'profiles', 'Admin.profile-meta.xml'),
+                path.join(workspacePath, ...canonicalRelativePath.split('/')),
                 '<Profile xmlns="http://soap.sforce.com/2006/04/metadata"><label>mutated</label></Profile>',
                 'utf8'
             );
@@ -689,6 +750,8 @@ async function main() {
                 packageXml,
                 '00DORG123'
             );
+            mutatedResult.profileWorkspaceContent =
+                await buildVerifiedProfileWorkspaceContent(workspacePath);
 
             const mutatedArtifact = await buildBoundDeployArtifactRecord({
                 validationId,
@@ -738,10 +801,147 @@ async function main() {
             );
             assert.ok(
                 digestResult.canonicalPayload.deployableFiles.some((file) =>
-                    file.path.includes('Admin.profile-meta.xml')
+                    file.path.includes(
+                        'force-app/main/default/profiles/Admin.profile-meta.xml'
+                    )
                 )
             );
 
+            await cleanupWorkspace(workspacePath);
+        }
+    );
+
+    await runTest(
+        'Profile expected path resolves to canonical Salesforce DX location',
+        async () => {
+            assert.strictEqual(
+                resolveExpectedMetadataRelativePath('Profile', 'Admin'),
+                profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                    'Admin'
+                )
+            );
+            assert.strictEqual(
+                resolveExpectedMetadataRelativePath(
+                    'CustomObject',
+                    'Account'
+                ),
+                'objects/Account/Account.object-meta.xml'
+            );
+        }
+    );
+
+    await runTest(
+        'stale profiles/ copy cannot satisfy bound artifact integrity',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'bound-artifact-stale-profile-')
+            );
+            const { packageXml } = await createProfileWorkspace(workspacePath);
+            await mkdir(path.join(workspacePath, 'profiles'), { recursive: true });
+            await writeFile(
+                path.join(workspacePath, 'profiles', 'Admin.profile-meta.xml'),
+                '<?xml version="1.0" encoding="UTF-8"?>\n<Profile xmlns="http://soap.sforce.com/2006/04/metadata"/>\n',
+                'utf8'
+            );
+
+            const result = buildEligibleValidationResult(
+                workspacePath,
+                packageXml,
+                '00DORG123'
+            );
+            result.profileWorkspaceContent =
+                await buildVerifiedProfileWorkspaceContent(workspacePath);
+            const artifact = await buildBoundDeployArtifactRecord({
+                validationId: statusStore.createJob(),
+                orgId: '00DORG123',
+                deploymentPackage: { profileOnlyMinimalPackage: true },
+                finalResponse: result
+            });
+
+            assert.ok(artifact);
+
+            const integrity = await verifyBoundDeployArtifactIntegrity({
+                artifactRecord: artifact,
+                manifest: result.generatedManifest,
+                generatedDeploymentPackage: result.generatedDeploymentPackage,
+                strict: true
+            });
+
+            await rm(
+                path.join(
+                    workspacePath,
+                    profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                        'Admin'
+                    )
+                ),
+                { force: true }
+            );
+
+            const staleOnlyIntegrity = await verifyBoundDeployArtifactIntegrity({
+                artifactRecord: artifact,
+                manifest: result.generatedManifest,
+                generatedDeploymentPackage: result.generatedDeploymentPackage,
+                strict: true
+            });
+
+            assert.strictEqual(staleOnlyIntegrity.ok, false);
+
+            await cleanupWorkspace(workspacePath);
+        }
+    );
+
+    await runTest(
+        'bound artifact creation rejects missing profileWorkspaceContent',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'bound-artifact-no-pwc-')
+            );
+            const { packageXml } = await createProfileWorkspace(workspacePath);
+            const result = buildEligibleValidationResult(
+                workspacePath,
+                packageXml,
+                '00DORG123'
+            );
+            result.profileWorkspaceContent = null;
+
+            const artifact = await buildBoundDeployArtifactRecord({
+                validationId: statusStore.createJob(),
+                orgId: '00DORG123',
+                deploymentPackage: { profileOnlyMinimalPackage: true },
+                finalResponse: result
+            });
+
+            assert.strictEqual(artifact, null);
+            await cleanupWorkspace(workspacePath);
+        }
+    );
+
+    await runTest(
+        'bound artifact creation rejects non-verified profileWorkspaceContent',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'bound-artifact-blocked-pwc-')
+            );
+            const { packageXml } = await createProfileWorkspace(workspacePath);
+            const result = buildEligibleValidationResult(
+                workspacePath,
+                packageXml,
+                '00DORG123'
+            );
+            result.profileWorkspaceContent = {
+                status: 'BLOCKED',
+                profiles: [],
+                errors: ['blocked']
+            };
+
+            const artifact = await buildBoundDeployArtifactRecord({
+                validationId: statusStore.createJob(),
+                orgId: '00DORG123',
+                deploymentPackage: { profileOnlyMinimalPackage: true },
+                finalResponse: result
+            });
+
+            assert.strictEqual(artifact, null);
             await cleanupWorkspace(workspacePath);
         }
     );

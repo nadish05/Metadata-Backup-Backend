@@ -7,6 +7,10 @@ const util = require('util');
 
 const { getMetadataTypeRule } = require('../config/metadataTypes');
 const { orgIdsMatch } = require('./deploymentOrgLock/destinationOrgIdentity.service');
+const {
+    resolveProfileWorkspaceRelativePath,
+    verifyProfileWorkspaceContentForBoundArtifact
+} = require('./profileWorkspaceCanonicalContent.service');
 
 const readdir = util.promisify(fs.readdir);
 const readFile = util.promisify(fs.readFile);
@@ -197,6 +201,10 @@ function extractManifestMembersByType(packageXml) {
 }
 
 function resolveExpectedMetadataRelativePath(metadataType, metadataName) {
+    if (metadataType === 'Profile') {
+        return resolveProfileWorkspaceRelativePath(metadataName);
+    }
+
     const rule = getMetadataTypeRule(metadataType);
 
     if (!rule || !metadataName) {
@@ -433,6 +441,17 @@ async function buildBoundDeployArtifactRecord({
         return null;
     }
 
+    const profileWorkspaceVerification =
+        await verifyProfileWorkspaceContentForBoundArtifact({
+            profileWorkspaceContent: finalResponse?.profileWorkspaceContent,
+            generatedDeploymentPackage: generatedPackage,
+            workspacePath: generatedWorkspace.workspacePath
+        });
+
+    if (!profileWorkspaceVerification.ok) {
+        return null;
+    }
+
     const deploymentApiVersion =
         generatedManifest?.summary?.apiVersion ||
         generatedManifest?.deploymentApiVersionPolicy?.deploymentApiVersion ||
@@ -655,5 +674,6 @@ module.exports = {
     verifyDestinationOrgIdentity,
     verifyGeneratedPackageMatchesManifest,
     resolveCanonicalWorkspaceRoot,
-    wasProfileOnlyMinimalPackageApplied
+    wasProfileOnlyMinimalPackageApplied,
+    resolveExpectedMetadataRelativePath
 };

@@ -235,7 +235,8 @@ function buildProfileOnlyMinimalReadiness({
     connectivityResult,
     generatedWorkspace,
     checkOnlyDeployment,
-    deploymentApiVersionPolicy = null
+    deploymentApiVersionPolicy = null,
+    profileWorkspaceContent = null
 }) {
     const destinationConnected =
         connectivityResult?.deploymentValidation?.destinationConnected === true;
@@ -244,12 +245,15 @@ function buildProfileOnlyMinimalReadiness({
         resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment);
     const apiPolicyBlocked =
         deploymentApiVersionPolicy?.compatible === false;
+    const profileWorkspaceVerified =
+        profileWorkspaceContent?.status === 'VERIFIED';
 
     const canDeploy =
         destinationConnected &&
         workspaceReady &&
         checkOnlySuccess &&
-        !apiPolicyBlocked;
+        !apiPolicyBlocked &&
+        profileWorkspaceVerified;
 
     let reason = null;
 
@@ -268,6 +272,10 @@ function buildProfileOnlyMinimalReadiness({
             checkOnlyDeployment?.message ||
             checkOnlyDeployment?.failureMessage ||
             'Salesforce check-only deployment failed.';
+    } else if (!profileWorkspaceVerified) {
+        reason =
+            profileWorkspaceContent?.errors?.[0] ||
+            'Profile workspace canonical content is not verified.';
     }
 
     return {
@@ -973,7 +981,8 @@ async function runProfileOnlyMinimalValidation({
             repoUrl: deploymentPackage.repoUrl || deploymentPackage.repositoryUrl,
             sourceBranch:
                 deploymentPackage.sourceBranch || deploymentPackage.branch,
-            skipDependencyCopy: true
+            skipDependencyCopy: true,
+            skipProfileRepositoryCopy: true
         });
 
     let profileWorkspaceContent = {
@@ -1159,7 +1168,8 @@ async function runProfileOnlyMinimalValidation({
         connectivityResult,
         generatedWorkspace,
         checkOnlyDeployment,
-        deploymentApiVersionPolicy
+        deploymentApiVersionPolicy,
+        profileWorkspaceContent
     });
 
     const response = {
