@@ -334,7 +334,12 @@ async function verifyProfileWorkspaceContentUnchanged(
         );
         const workspaceSha256 = sha256Utf8(readBack);
 
-        if (workspaceSha256 !== profile.canonicalSha256) {
+        const expectedHash =
+            profile.finalWorkspaceSha256 ||
+            profile.workspaceSha256 ||
+            profile.canonicalSha256;
+
+        if (workspaceSha256 !== expectedHash) {
             return {
                 ok: false,
                 reason: `Workspace Profile content changed for "${profile.profileName}" before downstream validation.`
@@ -613,8 +618,11 @@ async function materializeProfileOnlyWorkspaceCanonicalContent({
                 profileName,
                 workspaceRelativePath,
                 source: canonicalResolution.source,
-                canonicalSha256,
+                originalCanonicalSha256: canonicalSha256,
+                finalWorkspaceSha256: workspaceSha256,
+                canonicalSha256: workspaceSha256,
                 workspaceSha256,
+                sanitized: false,
                 verified: true
             });
         } catch (writeError) {

@@ -28,6 +28,7 @@ const deploymentPackageProvenanceService = require('./deploymentPackageProvenanc
 const packageXmlService = require('./packageXml.service');
 const deploymentWorkspaceService = require('./deploymentWorkspace.service');
 const profileWorkspaceCanonicalContentService = require('./profileWorkspaceCanonicalContent.service');
+const profileUserPermissionSanitizationService = require('./profileUserPermissionSanitization.service');
 const fs = require('fs');
 const path = require('path');
 const util = require('util');
@@ -188,6 +189,7 @@ function prepareDeploymentPackageForValidation(deploymentPackage) {
 }
 
 const PROFILE_ONLY_MINIMAL_EXECUTION_PATH = 'PROFILE_ONLY_MINIMAL';
+const MAX_PROFILE_ONLY_CHECK_ONLY_ATTEMPTS = 5;
 
 function resolveProfileOnlyIneligibilityMessage(reason) {
     switch (reason) {
@@ -236,7 +238,8 @@ function buildProfileOnlyMinimalReadiness({
     generatedWorkspace,
     checkOnlyDeployment,
     deploymentApiVersionPolicy = null,
-    profileWorkspaceContent = null
+    profileWorkspaceContent = null,
+    profilePermissionSanitization = null
 }) {
     const destinationConnected =
         connectivityResult?.deploymentValidation?.destinationConnected === true;
@@ -247,13 +250,17 @@ function buildProfileOnlyMinimalReadiness({
         deploymentApiVersionPolicy?.compatible === false;
     const profileWorkspaceVerified =
         profileWorkspaceContent?.status === 'VERIFIED';
+    const sanitizationBlocked =
+        profilePermissionSanitization?.overallStatus === 'BLOCKED' ||
+        profilePermissionSanitization?.status === 'BLOCKED';
 
     const canDeploy =
         destinationConnected &&
         workspaceReady &&
         checkOnlySuccess &&
         !apiPolicyBlocked &&
-        profileWorkspaceVerified;
+        profileWorkspaceVerified &&
+        !sanitizationBlocked;
 
     let reason = null;
 
@@ -276,6 +283,10 @@ function buildProfileOnlyMinimalReadiness({
         reason =
             profileWorkspaceContent?.errors?.[0] ||
             'Profile workspace canonical content is not verified.';
+    } else if (sanitizationBlocked) {
+        reason =
+            profilePermissionSanitization?.errors?.[0] ||
+            'Profile user permission sanitization blocked validation.';
     }
 
     return {
@@ -1048,7 +1059,7 @@ async function runProfileOnlyMinimalValidation({
             generatedWorkspace.workspacePath
         );
 
-    const profileMetadataCompatibility =
+    let profileMetadataCompatibility =
         await deploymentPermissionSetCompatibilityService.analyzeProfileMetadataCompatibilitySafe(
             {
                 generatedDeploymentPackage: inspectionPackage,
@@ -1072,7 +1083,7 @@ async function runProfileOnlyMinimalValidation({
         );
     }
 
-    const apiResolution =
+    let apiResolution =
         await completeProfileOnlyMinimalDeploymentApiVersionAfterInspection({
             deploymentPackage,
             generatedDeploymentPackage,
@@ -1091,14 +1102,17 @@ async function runProfileOnlyMinimalValidation({
         );
     }
 
-    const deploymentApiVersion = apiResolution.deploymentApiVersion;
-    const deploymentApiVersionPolicy = {
+    let deploymentApiVersion = apiResolution.deploymentApiVersion;
+    let deploymentApiVersionPolicy = {
         ...apiResolution.deploymentApiVersionPolicy,
         deploymentApiVersion
     };
-    const deploymentApiNegotiation = apiResolution.deploymentApiNegotiation;
+    let deploymentApiNegotiation = apiResolution.deploymentApiNegotiation;
+    profileMetadataCompatibility =
+        apiResolution.profileMetadataCompatibility ||
+        profileMetadataCompatibility;
 
-    const generatedManifest = packageXmlService.generateManifest(
+    let generatedManifest = packageXmlService.generateManifest(
         generatedDeploymentPackage,
         {
             deploymentApiVersion,
@@ -1112,64 +1126,264 @@ async function runProfileOnlyMinimalValidation({
         'utf8'
     );
 
-    const workspaceIntegrityBeforeCheckOnly =
-        await profileWorkspaceCanonicalContentService.verifyProfileWorkspaceContentUnchanged(
-            generatedWorkspace.workspacePath,
-            profileWorkspaceContent.profiles
-        );
-
-    if (!workspaceIntegrityBeforeCheckOnly.ok) {
-        profileWorkspaceContent = {
-            ...profileWorkspaceContent,
-            status: 'BLOCKED',
-            errors: [
-                ...(profileWorkspaceContent.errors || []),
-                workspaceIntegrityBeforeCheckOnly.reason
-            ]
-        };
-
-        return buildProfileOnlyWorkspaceContentBlockedResponse(
-            connectivityResult,
-            profileWorkspaceContent
-        );
-    }
-
     const destinationConnected =
         connectivityResult?.deploymentValidation?.destinationConnected === true;
     const workspaceReady = generatedWorkspace?.status === 'READY';
+    const selectedProfileNames =
+        profileUserPermissionSanitizationService.buildSelectedProfileNameSet(
+            generatedDeploymentPackage
+        );
 
+    let profilePermissionSanitization =
+        profileUserPermissionSanitizationService.emptyProfilePermissionSanitization();
     let checkOnlyDeployment;
+    let checkOnlyAttempt = 0;
+    let currentDeploymentApiVersion = deploymentApiVersion;
+    let currentDeploymentApiVersionPolicy = deploymentApiVersionPolicy;
+    let currentGeneratedManifest = generatedManifest;
+    let currentDeploymentApiNegotiation = deploymentApiNegotiation;
 
-    if (!destinationConnected) {
-        checkOnlyDeployment =
-            deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
-                connectivityResult?.deploymentValidation?.message ||
-                    'Destination connectivity validation blocked.'
+    while (checkOnlyAttempt < MAX_PROFILE_ONLY_CHECK_ONLY_ATTEMPTS) {
+        checkOnlyAttempt += 1;
+        profilePermissionSanitization.checkOnlyAttempts = checkOnlyAttempt;
+
+        const workspaceIntegrityBeforeCheckOnly =
+            await profileWorkspaceCanonicalContentService.verifyProfileWorkspaceContentUnchanged(
+                generatedWorkspace.workspacePath,
+                profileWorkspaceContent.profiles
             );
-    } else if (!workspaceReady) {
-        checkOnlyDeployment =
-            deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
-                'Workspace not READY; check-only deployment skipped.'
+
+        if (!workspaceIntegrityBeforeCheckOnly.ok) {
+            profileWorkspaceContent = {
+                ...profileWorkspaceContent,
+                status: 'BLOCKED',
+                errors: [
+                    ...(profileWorkspaceContent.errors || []),
+                    workspaceIntegrityBeforeCheckOnly.reason
+                ]
+            };
+
+            return buildProfileOnlyWorkspaceContentBlockedResponse(
+                connectivityResult,
+                profileWorkspaceContent
             );
-    } else {
+        }
+
+        if (!destinationConnected) {
+            checkOnlyDeployment =
+                deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
+                    connectivityResult?.deploymentValidation?.message ||
+                        'Destination connectivity validation blocked.'
+                );
+            break;
+        }
+
+        if (!workspaceReady) {
+            checkOnlyDeployment =
+                deploymentCheckOnlyGateService.buildCheckOnlyNotExecutedResult(
+                    'Workspace not READY; check-only deployment skipped.'
+                );
+            break;
+        }
+
         checkOnlyDeployment =
             deploymentCheckOnlyGateService.annotateCheckOnlyExecuted(
                 await checkOnlyDeploymentService.runCheckOnlyDeployment({
                     generatedWorkspace,
-                    generatedManifest,
+                    generatedManifest: currentGeneratedManifest,
                     refreshToken,
                     instanceUrl,
-                    deploymentApiVersion
+                    deploymentApiVersion: currentDeploymentApiVersion
                 })
             );
+
+        if (resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment)) {
+            profilePermissionSanitization.status =
+                profilePermissionSanitization.removedCount > 0
+                    ? 'COMPLETED'
+                    : 'SKIPPED';
+            profilePermissionSanitization.overallStatus = 'PASS';
+            break;
+        }
+
+        if (checkOnlyAttempt >= MAX_PROFILE_ONLY_CHECK_ONLY_ATTEMPTS) {
+            profilePermissionSanitization.status = 'BLOCKED';
+            profilePermissionSanitization.overallStatus = 'BLOCKED';
+            profilePermissionSanitization.errors.push(
+                'Maximum Profile-only check-only attempts were reached without success.'
+            );
+            break;
+        }
+
+        const confirmedFailures =
+            profileUserPermissionSanitizationService.extractConfirmedUnknownUserPermissionFailures(
+                checkOnlyDeployment,
+                selectedProfileNames
+            );
+
+        if (!confirmedFailures.ok) {
+            profilePermissionSanitization.status = 'BLOCKED';
+            profilePermissionSanitization.overallStatus = 'BLOCKED';
+            profilePermissionSanitization.errors.push(confirmedFailures.reason);
+            break;
+        }
+
+        const sanitizeResult =
+            await profileUserPermissionSanitizationService.applySanitizationPlan(
+                {
+                    workspacePath: generatedWorkspace.workspacePath,
+                    confirmedFailures: confirmedFailures.failures,
+                    attempt: checkOnlyAttempt,
+                    deploymentId: checkOnlyDeployment?.deploymentId || null
+                }
+            );
+
+        if (!sanitizeResult.ok) {
+            profilePermissionSanitization.status = 'BLOCKED';
+            profilePermissionSanitization.overallStatus = 'BLOCKED';
+            profilePermissionSanitization.errors.push(sanitizeResult.reason);
+            break;
+        }
+
+        profilePermissionSanitization.removedCount +=
+            sanitizeResult.removedPermissions.length;
+        profilePermissionSanitization.removedPermissions.push(
+            ...sanitizeResult.removedPermissions
+        );
+
+        const affectedProfileNames = new Set(
+            sanitizeResult.removedPermissions.map((entry) => entry.profileName)
+        );
+
+        profileWorkspaceContent =
+            await profileUserPermissionSanitizationService.refreshFinalWorkspaceHashes(
+                profileWorkspaceContent,
+                generatedWorkspace.workspacePath
+            );
+        profileWorkspaceContent = {
+            ...profileWorkspaceContent,
+            profiles: (profileWorkspaceContent.profiles || []).map((profile) =>
+                affectedProfileNames.has(profile.profileName)
+                    ? { ...profile, sanitized: true }
+                    : profile
+            )
+        };
+
+        const inspectionPackage =
+            profileWorkspaceCanonicalContentService.buildPackageForWorkspaceProfileInspection(
+                generatedDeploymentPackage
+            );
+        const workspaceReadFile =
+            profileWorkspaceCanonicalContentService.createWorkspaceFileReader(
+                generatedWorkspace.workspacePath
+            );
+
+        profileMetadataCompatibility =
+            await deploymentPermissionSetCompatibilityService.analyzeProfileMetadataCompatibilitySafe(
+                {
+                    generatedDeploymentPackage: inspectionPackage,
+                    readFile: workspaceReadFile
+                }
+            );
+
+        const profileInspectionAfterSanitization =
+            evaluateProfileOnlyProfileInspectionCompleteness(
+                inspectionPackage,
+                profileMetadataCompatibility
+            );
+
+        if (!profileInspectionAfterSanitization.ok) {
+            profilePermissionSanitization.status = 'BLOCKED';
+            profilePermissionSanitization.overallStatus = 'BLOCKED';
+            profilePermissionSanitization.errors.push(
+                profileInspectionAfterSanitization.reason
+            );
+            break;
+        }
+
+        const apiResolutionAfterSanitization =
+            await completeProfileOnlyMinimalDeploymentApiVersionAfterInspection(
+                {
+                    deploymentPackage,
+                    generatedDeploymentPackage,
+                    profileMetadataCompatibility,
+                    destinationDiscovery: destinationContext.destinationDiscovery,
+                    packageSourceReadFile: destinationContext.packageSourceReadFile,
+                    repositorySnapshotMetadata:
+                        destinationContext.repositorySnapshotMetadata
+                }
+            );
+
+        if (apiResolutionAfterSanitization.blocked) {
+            profilePermissionSanitization.status = 'BLOCKED';
+            profilePermissionSanitization.overallStatus = 'BLOCKED';
+            profilePermissionSanitization.errors.push(
+                apiResolutionAfterSanitization.reason ||
+                    'Profile-only Metadata API version requirements could not be satisfied after sanitization.'
+            );
+            break;
+        }
+
+        apiResolution = apiResolutionAfterSanitization;
+        currentDeploymentApiVersion =
+            apiResolutionAfterSanitization.deploymentApiVersion;
+        currentDeploymentApiVersionPolicy = {
+            ...apiResolutionAfterSanitization.deploymentApiVersionPolicy,
+            deploymentApiVersion: currentDeploymentApiVersion
+        };
+        currentDeploymentApiNegotiation =
+            apiResolutionAfterSanitization.deploymentApiNegotiation;
+
+        currentGeneratedManifest = packageXmlService.generateManifest(
+            generatedDeploymentPackage,
+            {
+                deploymentApiVersion: currentDeploymentApiVersion,
+                deploymentApiVersionPolicy: currentDeploymentApiVersionPolicy
+            }
+        );
+
+        await writeFileAsync(
+            path.join(generatedWorkspace.workspacePath, 'package.xml'),
+            currentGeneratedManifest.packageXml,
+            'utf8'
+        );
     }
+
+    deploymentApiVersion = currentDeploymentApiVersion;
+    deploymentApiVersionPolicy = currentDeploymentApiVersionPolicy;
+    deploymentApiNegotiation = currentDeploymentApiNegotiation;
+    generatedManifest = currentGeneratedManifest;
+
+    if (
+        profilePermissionSanitization.status === 'BLOCKED' &&
+        profilePermissionSanitization.overallStatus !== 'PASS'
+    ) {
+        profilePermissionSanitization.overallStatus = 'BLOCKED';
+    }
+
+    profilePermissionSanitization.profiles = (
+        profileWorkspaceContent.profiles || []
+    ).map((profile) => ({
+        profileName: profile.profileName,
+        workspaceRelativePath: profile.workspaceRelativePath,
+        originalCanonicalSha256:
+            profile.originalCanonicalSha256 || profile.canonicalSha256 || null,
+        finalWorkspaceSha256:
+            profile.finalWorkspaceSha256 ||
+            profile.workspaceSha256 ||
+            profile.canonicalSha256 ||
+            null,
+        sanitized: profile.sanitized === true,
+        verified: profile.verified === true
+    }));
 
     const deploymentReadiness = buildProfileOnlyMinimalReadiness({
         connectivityResult,
         generatedWorkspace,
         checkOnlyDeployment,
         deploymentApiVersionPolicy,
-        profileWorkspaceContent
+        profileWorkspaceContent,
+        profilePermissionSanitization
     });
 
     const response = {
@@ -1187,6 +1401,7 @@ async function runProfileOnlyMinimalValidation({
         profileMetadataCompatibility:
             apiResolution.profileMetadataCompatibility || null,
         profileWorkspaceContent,
+        profilePermissionSanitization,
         generatedDeploymentPackage,
         generatedManifest,
         generatedWorkspace,

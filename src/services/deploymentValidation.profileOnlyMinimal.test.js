@@ -434,6 +434,49 @@ function baseDeploymentPackage(overrides = {}) {
     };
 }
 
+function profileXmlWithUserPermission(
+    permissionName,
+    { enabled = true, viewAllFields = false } = {}
+) {
+    const viewAllFieldsXml = viewAllFields
+        ? '\n        <viewAllFields>true</viewAllFields>'
+        : '';
+    const permissionBlock =
+        permissionName === null || permissionName === undefined
+            ? ''
+            : `
+    <userPermissions>
+        <enabled>${enabled ? 'true' : 'false'}</enabled>
+        <name>${permissionName}</name>
+    </userPermissions>`;
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <objectPermissions>
+        <object>Account</object>${viewAllFieldsXml}
+    </objectPermissions>${permissionBlock}
+</Profile>`;
+}
+
+function buildUnknownUserPermissionCheckOnlyFailure(profileName, permissionName) {
+    return {
+        success: false,
+        status: 'FAILED',
+        executed: true,
+        deploymentId: '0AfUNKNOWNPERM',
+        message: 'Check-only deployment failed.',
+        deploymentDiagnostics: {
+            componentFailures: [
+                {
+                    metadataType: 'Profile',
+                    metadataName: profileName,
+                    problem: `Unknown user permission: ${permissionName}`
+                }
+            ]
+        }
+    };
+}
+
 async function main() {
     await runTest(
         'checkbox OFF reaches relationship discovery in legacy pipeline',
@@ -1949,6 +1992,683 @@ async function main() {
                     originalMaterialize;
                 deploymentWorkspaceService.buildDeploymentWorkspace =
                     originalBuild;
+                metadataValidationService.validateMetadataPackage =
+                    originalMetadataValidation;
+                spies.restore();
+                restoreAxios();
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only initial check-only success skips permission sanitization',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => ({
+                success: true,
+                status: 'SUCCESS',
+                executed: true
+            });
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: profileXmlWithUserPermission(
+                                        'CreateWorkBadgeDefinition'
+                                    )
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-sanitize-skipped'
+                    });
+
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'SKIPPED'
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedCount,
+                    0
+                );
+                assert.strictEqual(result.checkOnlyDeployment.success, true);
+                assert.ok(result.boundDeployArtifact?.artifactDigest);
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only removes unknown user permission and succeeds on second check-only',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const permissionName = 'CreateWorkBadgeDefinition';
+            const inline = profileXmlWithUserPermission(permissionName);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+            let checkOnlyCalls = 0;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                if (checkOnlyCalls === 1) {
+                    return buildUnknownUserPermissionCheckOnlyFailure(
+                        'Admin',
+                        permissionName
+                    );
+                }
+
+                return {
+                    success: true,
+                    status: 'SUCCESS',
+                    executed: true,
+                    deploymentId: '0AfSUCCESS'
+                };
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-sanitize-retry-success'
+                    });
+
+                assert.strictEqual(checkOnlyCalls, 2);
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'COMPLETED'
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedCount,
+                    1
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedPermissions[0]
+                        .permissionName,
+                    permissionName
+                );
+                assert.strictEqual(result.checkOnlyDeployment.success, true);
+                assert.strictEqual(result.deploymentReadiness.canDeploy, true);
+                assert.ok(result.boundDeployArtifact?.artifactDigest);
+
+                const adminRel =
+                    profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                        'Admin'
+                    );
+                const workspaceXml = await fs.promises.readFile(
+                    path.join(
+                        result.generatedWorkspace.workspacePath,
+                        ...adminRel.split('/')
+                    ),
+                    'utf8'
+                );
+                assert.doesNotMatch(workspaceXml, new RegExp(permissionName));
+
+                const profileRecord =
+                    result.profileWorkspaceContent.profiles[0];
+                assert.notStrictEqual(
+                    profileRecord.originalCanonicalSha256,
+                    profileRecord.finalWorkspaceSha256
+                );
+                assert.strictEqual(profileRecord.sanitized, true);
+
+                const integrity = await verifyBoundDeployArtifactIntegrity({
+                    artifactRecord: result.boundDeployArtifact,
+                    manifest: result.generatedManifest,
+                    generatedDeploymentPackage: result.generatedDeploymentPackage
+                });
+                assert.strictEqual(integrity.ok, true, integrity.reason);
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only mixed check-only failures block sanitization without workspace changes',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const permissionName = 'CreateWorkBadgeDefinition';
+            const inline = profileXmlWithUserPermission(permissionName);
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+            let checkOnlyCalls = 0;
+            const originalSha256 =
+                profileWorkspaceCanonicalContentService.sha256Utf8(inline);
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                return {
+                    success: false,
+                    status: 'FAILED',
+                    executed: true,
+                    deploymentDiagnostics: {
+                        componentFailures: [
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin',
+                                problem: `Unknown user permission: ${permissionName}`
+                            },
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin',
+                                problem: 'Invalid field permission'
+                            }
+                        ]
+                    }
+                };
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-sanitize-mixed-block'
+                    });
+
+                assert.strictEqual(checkOnlyCalls, 1);
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'BLOCKED'
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedCount,
+                    0
+                );
+                assert.strictEqual(result.deploymentReadiness.canDeploy, false);
+                assert.ok(!result.boundDeployArtifact);
+
+                const adminRel =
+                    profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                        'Admin'
+                    );
+                const workspaceXml = await fs.promises.readFile(
+                    path.join(
+                        result.generatedWorkspace.workspacePath,
+                        ...adminRel.split('/')
+                    ),
+                    'utf8'
+                );
+                assert.strictEqual(
+                    profileWorkspaceCanonicalContentService.sha256Utf8(
+                        workspaceXml
+                    ),
+                    originalSha256
+                );
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only generic check-only failure blocks sanitization',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const inline = profileXmlWithUserPermission('CreateWorkBadgeDefinition');
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => ({
+                success: false,
+                status: 'FAILED',
+                executed: true,
+                deploymentDiagnostics: {
+                    componentFailures: [
+                        {
+                            metadataType: 'Profile',
+                            metadataName: 'Admin',
+                            problem: 'Invalid field permission'
+                        }
+                    ]
+                }
+            });
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-sanitize-generic-block'
+                    });
+
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'BLOCKED'
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedCount,
+                    0
+                );
+                assert.ok(!result.boundDeployArtifact);
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only permission missing from workspace XML blocks sanitization retry',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const inline = profileXmlContent({ viewAllFields: false });
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+            let checkOnlyCalls = 0;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                return buildUnknownUserPermissionCheckOnlyFailure(
+                    'Admin',
+                    'CreateWorkBadgeDefinition'
+                );
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-sanitize-missing-perm-xml'
+                    });
+
+                assert.strictEqual(checkOnlyCalls, 1);
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'BLOCKED'
+                );
+                assert.ok(!result.boundDeployArtifact);
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only enforces five total check-only attempts without infinite retry',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const permissionNames = ['PermA', 'PermB', 'PermC', 'PermD', 'PermE'];
+            const inline = `<?xml version="1.0" encoding="UTF-8"?>
+<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <objectPermissions>
+        <object>Account</object>
+    </objectPermissions>
+    ${permissionNames
+        .map(
+            (name) => `<userPermissions>
+        <enabled>true</enabled>
+        <name>${name}</name>
+    </userPermissions>`
+        )
+        .join('\n    ')}
+</Profile>`;
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+            let checkOnlyCalls = 0;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                return buildUnknownUserPermissionCheckOnlyFailure(
+                    'Admin',
+                    permissionNames[checkOnlyCalls - 1]
+                );
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-sanitize-max-attempts'
+                    });
+
+                assert.strictEqual(checkOnlyCalls, 5);
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'BLOCKED'
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedCount,
+                    4
+                );
+                assert.strictEqual(result.deploymentReadiness.canDeploy, false);
+                assert.ok(!result.boundDeployArtifact);
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'checkbox OFF does not expose Profile-only permission sanitization retry loop',
+        async () => {
+            const restoreAxios = patchConnectivity();
+            const spies = installDiscoverySpies();
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            const originalMetadataValidation =
+                metadataValidationService.validateMetadataPackage;
+            let checkOnlyCalls = 0;
+
+            metadataValidationService.validateMetadataPackage = async () => ({
+                overallStatus: 'PASS',
+                results: []
+            });
+            deploymentWorkspaceService.buildDeploymentWorkspace = async () => ({
+                status: 'READY',
+                workspacePath: await createProfileWorkspaceRoot(),
+                dependenciesCopied: 1,
+                metadataCopied: 1
+            });
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                return buildUnknownUserPermissionCheckOnlyFailure(
+                    'Admin',
+                    'CreateWorkBadgeDefinition'
+                );
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result = await validationService.validateDeployment({
+                    refreshToken: 'rt',
+                    instanceUrl: 'https://test.example.my.salesforce.com',
+                    orgId: '00DTEST',
+                    deploymentPackage: baseDeploymentPackage({
+                        profileOnlyMinimalPackage: false
+                    })
+                });
+
+                assert.strictEqual(checkOnlyCalls, 1);
+                assert.strictEqual(
+                    result.profilePermissionSanitization,
+                    undefined
+                );
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
                 metadataValidationService.validateMetadataPackage =
                     originalMetadataValidation;
                 spies.restore();
