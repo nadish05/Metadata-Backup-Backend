@@ -3686,6 +3686,224 @@ async function main() {
     );
 
     await runTest(
+        'Safety E (dependency disable): bound deployment consumes dependency-disabled workspace artifact',
+        async () => {
+            statusStore.clearAllJobs();
+            statusStore.resetTtlForTests();
+
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const permissionName = 'ManageKnowledgeImportExport';
+            const inline = profileXmlWithUserPermission(permissionName);
+            const repoRelativePath =
+                'force-app/main/default/profiles/Admin.profile-meta.xml';
+            const repositoryProfileXml = profileXmlWithUserPermission(
+                permissionName,
+                { enabled: true, viewAllFields: false }
+            );
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                repositoryProfileContentByPath: {
+                    [repoRelativePath]: repositoryProfileXml
+                }
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+            let checkOnlyCalls = 0;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                if (checkOnlyCalls === 1) {
+                    return buildManageKnowledgeDependencyCheckOnlyFailure('Admin');
+                }
+
+                return {
+                    success: true,
+                    status: 'SUCCESS',
+                    executed: true,
+                    deploymentId: '0AfDEPENDENCYDISABLED'
+                };
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const validationId = statusStore.createJob();
+                const orgId = '00DDEPENDENCYDISABLE';
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId,
+                        validationId
+                    });
+
+                assert.strictEqual(checkOnlyCalls, 2);
+                assert.strictEqual(result.checkOnlyDeployment.success, true);
+                assert.strictEqual(result.deploymentReadiness.canDeploy, true);
+                assert.ok(result.boundDeployArtifact?.artifactDigest);
+                assert.strictEqual(
+                    result.profilePermissionSanitization.disabledCount,
+                    1
+                );
+
+                const adminRel =
+                    profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                        'Admin'
+                    );
+                const workspaceProfileXml = await fs.promises.readFile(
+                    path.join(
+                        result.generatedWorkspace.workspacePath,
+                        ...adminRel.split('/')
+                    ),
+                    'utf8'
+                );
+                assert.match(
+                    workspaceProfileXml,
+                    /<enabled>false<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+                );
+                assert.match(
+                    repositoryProfileXml,
+                    /<enabled>true<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+                );
+                assert.strictEqual(
+                    profileWorkspaceCanonicalContentService.sha256Utf8(
+                        workspaceProfileXml
+                    ),
+                    profileWorkspaceCanonicalContentService.sha256Utf8(
+                        await fs.promises.readFile(
+                            path.join(
+                                result.boundDeployArtifact.canonicalWorkspaceRoot,
+                                ...adminRel.split('/')
+                            ),
+                            'utf8'
+                        )
+                    )
+                );
+
+                const integrity = await verifyBoundDeployArtifactIntegrity({
+                    artifactRecord: result.boundDeployArtifact,
+                    manifest: result.generatedManifest,
+                    generatedDeploymentPackage:
+                        result.generatedDeploymentPackage
+                });
+                assert.strictEqual(integrity.ok, true, integrity.reason);
+
+                const profileRecord =
+                    result.profileWorkspaceContent.profiles[0];
+                assert.notStrictEqual(
+                    profileRecord.originalCanonicalSha256,
+                    profileRecord.finalWorkspaceSha256
+                );
+
+                statusStore.completeJob(validationId, result);
+                boundDeployService.setResolveVerifiedDestinationOrgIdForTests(
+                    async () => orgId
+                );
+                let deployExecutionCalls = 0;
+                let deployWorkspacePath = null;
+                boundDeployService.setRunDeploymentExecutionForTests(
+                    async (args) => {
+                        deployExecutionCalls += 1;
+                        deployWorkspacePath =
+                            args?.generatedWorkspace?.workspacePath || null;
+                        return {
+                            success: true,
+                            status: 'SUCCESS',
+                            deploymentId: '0AfBOUNDDEPENDENCY'
+                        };
+                    }
+                );
+                boundDeployService.setRunDeployAfterOptionalSnapshotForTests(
+                    async ({ runDeploymentExecution }) => ({
+                        deploymentExecution: await runDeploymentExecution(),
+                        snapshot: null,
+                        snapshotBlocked: false
+                    })
+                );
+
+                const deployResult =
+                    await boundDeployService.deployBoundValidationArtifact({
+                        boundValidationId: validationId,
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId
+                    });
+
+                assert.strictEqual(deployResult.success, true);
+                assert.strictEqual(deployExecutionCalls, 1);
+                assert.strictEqual(
+                    deployWorkspacePath,
+                    result.boundDeployArtifact.canonicalWorkspaceRoot
+                );
+                const boundProfileXml = await fs.promises.readFile(
+                    path.join(
+                        result.boundDeployArtifact.canonicalWorkspaceRoot,
+                        ...adminRel.split('/')
+                    ),
+                    'utf8'
+                );
+                assert.match(
+                    boundProfileXml,
+                    /<enabled>false<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+                );
+                assert.strictEqual(
+                    profileWorkspaceCanonicalContentService.sha256Utf8(
+                        boundProfileXml
+                    ),
+                    profileWorkspaceCanonicalContentService.sha256Utf8(
+                        workspaceProfileXml
+                    )
+                );
+            } finally {
+                boundDeployService.resetRunDeploymentExecutionForTests();
+                boundDeployService.resetRunDeployAfterOptionalSnapshotForTests();
+                boundDeployService.resetResolveVerifiedDestinationOrgIdForTests();
+                statusStore.clearAllJobs();
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
         'Safety F: post-validation workspace tampering blocks bound deployment',
         async () => {
             statusStore.clearAllJobs();

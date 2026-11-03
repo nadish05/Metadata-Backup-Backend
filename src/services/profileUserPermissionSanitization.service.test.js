@@ -52,6 +52,9 @@ function profileXmlWithUserPermissions({
     permissions = [],
     includeObject = true,
     includeField = false,
+    includeClass = false,
+    includePage = false,
+    includeTab = false,
     marker = ''
 } = {}) {
     const objectBlock = includeObject
@@ -67,6 +70,24 @@ function profileXmlWithUserPermissions({
         <readable>true</readable>
     </fieldPermissions>`
         : '';
+    const classBlock = includeClass
+        ? `<classAccesses>
+        <apexClass>SampleClass</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>`
+        : '';
+    const pageBlock = includePage
+        ? `<pageAccesses>
+        <apexPage>SamplePage</apexPage>
+        <enabled>true</enabled>
+    </pageAccesses>`
+        : '';
+    const tabBlock = includeTab
+        ? `<tabVisibilities>
+        <tab>standard-Account</tab>
+        <visibility>DefaultOn</visibility>
+    </tabVisibilities>`
+        : '';
     const userBlocks = permissions
         .map(
             (entry) => `<userPermissions>
@@ -81,8 +102,29 @@ function profileXmlWithUserPermissions({
 <Profile xmlns="http://soap.sforce.com/2006/04/metadata">${description}
     ${objectBlock}
     ${fieldBlock}
+    ${classBlock}
+    ${pageBlock}
+    ${tabBlock}
     ${userBlocks}
 </Profile>`;
+}
+
+function sha256Utf8(text) {
+    return profileWorkspaceCanonicalContentService.sha256Utf8(text);
+}
+
+function dependencyConfirmedFailure(profileName = 'Admin') {
+    return {
+        profileName,
+        permissionName: 'ManageKnowledgeImportExport',
+        dependencyPermissionNames: [
+            'ViewArchivedArticles',
+            'ViewDraftArticles'
+        ],
+        sourceFailure: {
+            problem: sanitizationService.MANAGE_KNOWLEDGE_DEPENDENCY_PROBLEM
+        }
+    };
 }
 
 async function writeWorkspaceProfile(workspacePath, profileName, xml) {
@@ -683,6 +725,9 @@ async function main() {
         const empty = sanitizationService.emptyProfilePermissionSanitization();
         assert.strictEqual(empty.status, 'NOT_EXECUTED');
         assert.strictEqual(empty.removedCount, 0);
+        assert.deepStrictEqual(empty.removedPermissions, []);
+        assert.strictEqual(empty.disabledCount, 0);
+        assert.deepStrictEqual(empty.disabledPermissions, []);
     });
 
     await runTest(
@@ -1395,6 +1440,603 @@ async function main() {
             await rm(workspacePath, { recursive: true, force: true });
         }
     });
+
+    await runTest(
+        'dependency disable: repository Profile bytes remain unchanged while workspace is disabled',
+        async () => {
+            const repositoryDir = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-repo-')
+            );
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-ws-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [
+                    { name: 'PermA', enabled: true },
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            const repositoryPath = path.join(
+                repositoryDir,
+                'Admin.profile-meta.xml'
+            );
+
+            try {
+                await writeFile(repositoryPath, xml, 'utf8');
+                const { absolutePath } = await writeWorkspaceProfile(
+                    workspacePath,
+                    'Admin',
+                    xml
+                );
+                const repositoryShaBefore = sha256Utf8(
+                    await readFile(repositoryPath, 'utf8')
+                );
+                const result =
+                    await sanitizationService.applyDependencyDisablePlan({
+                        workspacePath,
+                        confirmedFailure: dependencyConfirmedFailure('Admin'),
+                        attempt: 1
+                    });
+
+                assert.strictEqual(result.ok, true);
+                const repositoryShaAfter = sha256Utf8(
+                    await readFile(repositoryPath, 'utf8')
+                );
+                assert.strictEqual(repositoryShaBefore, repositoryShaAfter);
+                assert.match(
+                    await readFile(repositoryPath, 'utf8'),
+                    /<enabled>true<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+                );
+                const workspaceXml = await readFile(absolutePath, 'utf8');
+                assert.match(
+                    workspaceXml,
+                    /<enabled>false<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+                );
+                assert.match(
+                    workspaceXml,
+                    /<enabled>true<\/enabled>[\s\S]*<name>PermA<\/name>/
+                );
+            } finally {
+                await rm(repositoryDir, { recursive: true, force: true });
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'dependency Safety D: disable preserves unrelated Profile sections and permissions',
+        async () => {
+            const supportedTrue = 'SupportedPerm_DependencySafetyD';
+            const xml = profileXmlWithUserPermissions({
+                marker: 'dependency-disable-marker-9911',
+                includeField: true,
+                includeClass: true,
+                includePage: true,
+                includeTab: true,
+                permissions: [
+                    { name: supportedTrue, enabled: true },
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            const descriptionBlock = extractXmlBlock(xml, 'description');
+            const objectBlock = extractXmlBlock(xml, 'objectPermissions');
+            const fieldBlock = extractXmlBlock(xml, 'fieldPermissions');
+            const classBlock = extractXmlBlock(xml, 'classAccesses');
+            const pageBlock = extractXmlBlock(xml, 'pageAccesses');
+            const tabBlock = extractXmlBlock(xml, 'tabVisibilities');
+            const supportedTrueBlock = `<userPermissions>
+        <enabled>true</enabled>
+        <name>${supportedTrue}</name>
+    </userPermissions>`;
+            const knowledgeTrueBlock = `<userPermissions>
+        <enabled>true</enabled>
+        <name>ManageKnowledgeImportExport</name>
+    </userPermissions>`;
+            const knowledgeFalseBlock = `<userPermissions>
+        <enabled>false</enabled>
+        <name>ManageKnowledgeImportExport</name>
+    </userPermissions>`;
+
+            const disable =
+                sanitizationService.disableSingleUserPermissionEnabledFlag(
+                    xml,
+                    'ManageKnowledgeImportExport'
+                );
+
+            assert.strictEqual(disable.ok, true);
+            assert.strictEqual(
+                disable.xml.includes(descriptionBlock),
+                true,
+                'description block changed'
+            );
+            assert.strictEqual(
+                disable.xml.includes(objectBlock),
+                true,
+                'objectPermissions block changed'
+            );
+            assert.strictEqual(
+                disable.xml.includes(fieldBlock),
+                true,
+                'fieldPermissions block changed'
+            );
+            assert.strictEqual(
+                disable.xml.includes(classBlock),
+                true,
+                'classAccesses block changed'
+            );
+            assert.strictEqual(
+                disable.xml.includes(pageBlock),
+                true,
+                'pageAccesses block changed'
+            );
+            assert.strictEqual(
+                disable.xml.includes(tabBlock),
+                true,
+                'tabVisibilities block changed'
+            );
+            assert.strictEqual(
+                disable.xml.includes(supportedTrueBlock),
+                true,
+                'unrelated userPermissions block changed'
+            );
+            assert.strictEqual(disable.xml.includes(knowledgeTrueBlock), false);
+            assert.strictEqual(
+                disable.xml.includes(knowledgeFalseBlock),
+                true
+            );
+            assert.doesNotThrow(() => {
+                sanitizationService.validateSanitizedProfileXml(disable.xml);
+            });
+        }
+    );
+
+    await runTest(
+        'dependency Safety A: workspace write failure blocks disable plan',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-write-fail-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            let restoreWrite = () => {};
+
+            try {
+                const { absolutePath } = await writeWorkspaceProfile(
+                    workspacePath,
+                    'Admin',
+                    xml
+                );
+                restoreWrite = patchNodeFsWriteFile(
+                    ({ file, data, encoding, cb, original }) => {
+                        if (
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath) &&
+                            typeof data === 'string' &&
+                            data.includes('<enabled>false</enabled>')
+                        ) {
+                            process.nextTick(() =>
+                                cb(new Error('Simulated workspace write failure'))
+                            );
+                            return;
+                        }
+
+                        return original(file, data, encoding, cb);
+                    }
+                );
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                const result =
+                    await freshSanitizationService.applyDependencyDisablePlan({
+                        workspacePath,
+                        confirmedFailure: dependencyConfirmedFailure('Admin'),
+                        attempt: 1
+                    });
+
+                assert.strictEqual(result.ok, false);
+                assert.match(
+                    result.reason,
+                    /write failure|Simulated workspace write failure/i
+                );
+                const readBack = await readFile(absolutePath, 'utf8');
+                assert.match(
+                    readBack,
+                    /<enabled>true<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+                );
+            } finally {
+                restoreWrite();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'dependency Safety B: workspace read-back failure blocks disable plan',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-read-fail-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            let failNextSanitizedReadBack = false;
+            let restoreWrite = () => {};
+            let restoreRead = () => {};
+
+            try {
+                const { absolutePath } = await writeWorkspaceProfile(
+                    workspacePath,
+                    'Admin',
+                    xml
+                );
+                restoreWrite = patchNodeFsWriteFile(
+                    ({ file, data, encoding, cb, original }) => {
+                        if (
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath) &&
+                            typeof data === 'string' &&
+                            data.includes('<enabled>false</enabled>')
+                        ) {
+                            failNextSanitizedReadBack = true;
+                        }
+
+                        return original(file, data, encoding, cb);
+                    }
+                );
+                restoreRead = patchNodeFsReadFile(
+                    ({ file, opts, cb, original }) => {
+                        if (
+                            failNextSanitizedReadBack &&
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath)
+                        ) {
+                            failNextSanitizedReadBack = false;
+                            process.nextTick(() =>
+                                cb(
+                                    new Error(
+                                        'Simulated workspace read-back failure'
+                                    )
+                                )
+                            );
+                            return;
+                        }
+
+                        return original(file, opts, cb);
+                    }
+                );
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                const result =
+                    await freshSanitizationService.applyDependencyDisablePlan({
+                        workspacePath,
+                        confirmedFailure: dependencyConfirmedFailure('Admin'),
+                        attempt: 1
+                    });
+
+                assert.strictEqual(result.ok, false);
+                assert.match(
+                    result.reason,
+                    /read-back verification failed|Simulated workspace read-back failure/i
+                );
+            } finally {
+                restoreRead();
+                restoreWrite();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'dependency Safety C: read-back hash mismatch blocks disable verification',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-hash-mismatch-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            let tamperNextSanitizedReadBack = false;
+            let restoreWrite = () => {};
+            let restoreRead = () => {};
+
+            try {
+                const { absolutePath } = await writeWorkspaceProfile(
+                    workspacePath,
+                    'Admin',
+                    xml
+                );
+                restoreWrite = patchNodeFsWriteFile(
+                    ({ file, data, encoding, cb, original }) => {
+                        if (
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath) &&
+                            typeof data === 'string' &&
+                            data.includes('<enabled>false</enabled>')
+                        ) {
+                            tamperNextSanitizedReadBack = true;
+                        }
+
+                        return original(file, data, encoding, cb);
+                    }
+                );
+                restoreRead = patchNodeFsReadFile(
+                    ({ file, opts, cb, original }) => {
+                        if (
+                            tamperNextSanitizedReadBack &&
+                            path.resolve(String(file)) ===
+                                path.resolve(absolutePath)
+                        ) {
+                            tamperNextSanitizedReadBack = false;
+
+                            return original(file, opts, (error, data) => {
+                                if (error) {
+                                    cb(error);
+                                    return;
+                                }
+
+                                cb(null, `${data}\n<!-- tampered -->`);
+                            });
+                        }
+
+                        return original(file, opts, cb);
+                    }
+                );
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                const result =
+                    await freshSanitizationService.applyDependencyDisablePlan({
+                        workspacePath,
+                        confirmedFailure: dependencyConfirmedFailure('Admin'),
+                        attempt: 1
+                    });
+
+                assert.strictEqual(result.ok, false);
+                assert.match(
+                    result.reason,
+                    /read-back verification failed/i
+                );
+            } finally {
+                restoreRead();
+                restoreWrite();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'dependency disable fails closed on workspace read failure',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-initial-read-fail-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            let restoreRead = () => {};
+
+            try {
+                const { absolutePath } = await writeWorkspaceProfile(
+                    workspacePath,
+                    'Admin',
+                    xml
+                );
+                restoreRead = patchNodeFsReadFile(
+                    ({ file, opts, cb, original }) => {
+                        if (
+                            path.resolve(String(file)) ===
+                            path.resolve(absolutePath)
+                        ) {
+                            process.nextTick(() =>
+                                cb(new Error('Simulated workspace read failure'))
+                            );
+                            return;
+                        }
+
+                        return original(file, opts, cb);
+                    }
+                );
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                await assert.rejects(
+                    () =>
+                        freshSanitizationService.applyDependencyDisablePlan({
+                            workspacePath,
+                            confirmedFailure: dependencyConfirmedFailure('Admin'),
+                            attempt: 1
+                        }),
+                    (error) => {
+                        assert.match(
+                            error.message,
+                            /read failure|Simulated workspace read failure/i
+                        );
+                        return true;
+                    }
+                );
+            } finally {
+                restoreRead();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'dependency disable fails closed when workspace Profile file is missing',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-missing-profile-')
+            );
+
+            try {
+                await assert.rejects(
+                    () =>
+                        sanitizationService.applyDependencyDisablePlan({
+                            workspacePath,
+                            confirmedFailure: dependencyConfirmedFailure('Admin'),
+                            attempt: 1
+                        }),
+                    (error) => {
+                        assert.strictEqual(error.code, 'ENOENT');
+                        return true;
+                    }
+                );
+            } finally {
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'dependency disable fails closed when sanitized Profile XML is invalid',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-invalid-xml-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            const compatibilityService = require('./deploymentPermissionSetCompatibility.service');
+            const originalInspect = compatibilityService.inspectXmlStructure;
+
+            try {
+                await writeWorkspaceProfile(workspacePath, 'Admin', xml);
+                compatibilityService.inspectXmlStructure = (profileXml, options) => {
+                    if (
+                        profileXml.includes('ManageKnowledgeImportExport') &&
+                        profileXml.includes('<enabled>false</enabled>')
+                    ) {
+                        throw new Error('Simulated invalid Profile XML');
+                    }
+
+                    return originalInspect(profileXml, options);
+                };
+                loadSanitizationServiceFresh();
+                const freshSanitizationService = require('./profileUserPermissionSanitization.service');
+                const result =
+                    await freshSanitizationService.applyDependencyDisablePlan({
+                        workspacePath,
+                        confirmedFailure: dependencyConfirmedFailure('Admin'),
+                        attempt: 1
+                    });
+
+                assert.strictEqual(result.ok, false);
+                assert.match(result.reason, /invalid Profile XML|Simulated invalid/i);
+            } finally {
+                compatibilityService.inspectXmlStructure = originalInspect;
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'applyDependencyDisablePlan emits PROFILE_PERMISSION_DISABLE_VERIFIED when debug enabled',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-verified-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(true);
+            const lines = [];
+            diagnosticLog.setProfilePermissionSanitizationLogSinkForTests((line) =>
+                lines.push(line)
+            );
+
+            try {
+                await writeWorkspaceProfile(workspacePath, 'Admin', xml);
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                await freshSanitizationService.applyDependencyDisablePlan({
+                    workspacePath,
+                    validationId: 'val-disable-verified',
+                    confirmedFailure: dependencyConfirmedFailure('Admin'),
+                    attempt: 1
+                });
+
+                const verifiedEvents = lines
+                    .map((line) =>
+                        JSON.parse(
+                            line.replace(diagnosticLog.LOG_PREFIX, '').trim()
+                        )
+                    )
+                    .filter(
+                        (record) =>
+                            record.event === 'PROFILE_PERMISSION_DISABLE_VERIFIED'
+                    );
+
+                assert.strictEqual(verifiedEvents.length, 1);
+                assert.strictEqual(
+                    verifiedEvents[0].verificationStatus,
+                    'PASSED'
+                );
+                assert.strictEqual(
+                    verifiedEvents[0].permissionName,
+                    'ManageKnowledgeImportExport'
+                );
+                assert.strictEqual(verifiedEvents[0].finalEnabled, false);
+                assert.strictEqual(
+                    lines.some((line) => line.includes('<Profile')),
+                    false,
+                    'Profile XML must not appear in diagnostic output'
+                );
+            } finally {
+                diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
+                diagnosticLog.resetProfilePermissionSanitizationDebugForTests();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
+
+    await runTest(
+        'PROFILE_PERMISSION_DISABLE_VERIFIED is suppressed when debug logging disabled',
+        async () => {
+            const workspacePath = await fs.promises.mkdtemp(
+                path.join(os.tmpdir(), 'sanitize-disable-verified-off-')
+            );
+            const xml = profileXmlWithUserPermissions({
+                permissions: [
+                    { name: 'ManageKnowledgeImportExport', enabled: true }
+                ]
+            });
+            diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(
+                false
+            );
+            const lines = [];
+            diagnosticLog.setProfilePermissionSanitizationLogSinkForTests((line) =>
+                lines.push(line)
+            );
+
+            try {
+                await writeWorkspaceProfile(workspacePath, 'Admin', xml);
+                const freshSanitizationService = loadSanitizationServiceFresh();
+                await freshSanitizationService.applyDependencyDisablePlan({
+                    workspacePath,
+                    confirmedFailure: dependencyConfirmedFailure('Admin'),
+                    attempt: 1
+                });
+
+                assert.strictEqual(lines.length, 0);
+            } finally {
+                diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
+                diagnosticLog.resetProfilePermissionSanitizationDebugForTests();
+                loadSanitizationServiceFresh();
+                await rm(workspacePath, { recursive: true, force: true });
+            }
+        }
+    );
 }
 
 main();

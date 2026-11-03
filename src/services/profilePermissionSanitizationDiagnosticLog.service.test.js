@@ -447,8 +447,56 @@ async function main() {
             }
         }
     );
-}
 
-main();
+    await runTest(
+        'PROFILE_PERMISSION_DISABLE_VERIFIED event omits Profile XML from diagnostic payload',
+        async () => {
+            diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(
+                true
+            );
+            const lines = [];
+            diagnosticLog.setProfilePermissionSanitizationLogSinkForTests((line) =>
+                lines.push(line)
+            );
+            const profileXmlSnippet =
+                '<?xml version="1.0"?><Profile xmlns="http://soap.sforce.com/2006/04/metadata"><userPermissions><enabled>true</enabled><name>ManageKnowledgeImportExport</name></userPermissions></Profile>';
+
+            try {
+                diagnosticLog.logProfilePermissionDisableVerified({
+                    validationId: 'validation_disable_diag',
+                    profileName: 'Admin',
+                    permissionName: 'ManageKnowledgeImportExport',
+                    originalBlockFound: true,
+                    originalEnabled: true,
+                    finalEnabled: false,
+                    matchingBlocksBefore: 1,
+                    matchingBlocksAfter: 1,
+                    workspaceReadBack: true,
+                    xmlStructureValid: true,
+                    workspaceIntegrityVerified: true,
+                    unrelatedBlocksUnchanged: true,
+                    verificationStatus: 'PASSED',
+                    failureReason: profileXmlSnippet
+                });
+
+                const record = JSON.parse(
+                    lines[0].replace(diagnosticLog.LOG_PREFIX, '').trim()
+                );
+                assert.strictEqual(
+                    record.event,
+                    'PROFILE_PERMISSION_DISABLE_VERIFIED'
+                );
+                assert.strictEqual(record.failureReason, '[Profile XML omitted]');
+                assert.strictEqual(
+                    lines.some((line) => line.includes('<Profile')),
+                    false
+                );
+            } finally {
+                diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
+                diagnosticLog.resetProfilePermissionSanitizationDebugForTests();
+            }
+        }
+    );
+}
 
 main();
