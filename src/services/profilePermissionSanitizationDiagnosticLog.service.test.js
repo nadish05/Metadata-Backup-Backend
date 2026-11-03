@@ -126,7 +126,7 @@ async function main() {
     });
 
     await runTest(
-        'unrecognized dependency failure is logged as UNRECOGNIZED_FAILURE',
+        'confirmed dependency failure is logged as CONFIRMED_DEPENDENCY_PERMISSION_DISABLED',
         async () => {
             diagnosticLog.setProfilePermissionSanitizationDebugEnabledForTests(
                 true
@@ -164,7 +164,7 @@ async function main() {
                 const record = parseLoggedRecords(lines)[0];
                 assert.strictEqual(
                     record.failures[0].classification,
-                    'UNRECOGNIZED_FAILURE'
+                    'CONFIRMED_DEPENDENCY_PERMISSION_DISABLED'
                 );
             } finally {
                 diagnosticLog.resetProfilePermissionSanitizationLogSinkForTests();
@@ -312,7 +312,28 @@ async function main() {
                     },
                     selected
                 ),
-                'UNRECOGNIZED_FAILURE'
+                'CONFIRMED_DEPENDENCY_PERMISSION_DISABLED'
+            );
+            const dependencyExtract =
+                sanitizationService.extractConfirmedManageKnowledgeDependencyFailure(
+                    {
+                        deploymentDiagnostics: {
+                            componentFailures: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    problem:
+                                        'Permission ManageKnowledgeImportExport depends on permission(s): ViewArchivedArticles, ViewDraftArticles'
+                                }
+                            ]
+                        }
+                    },
+                    selected
+                );
+            assert.strictEqual(dependencyExtract.ok, true);
+            assert.strictEqual(
+                dependencyExtract.failure.permissionName,
+                'ManageKnowledgeImportExport'
             );
         }
     );

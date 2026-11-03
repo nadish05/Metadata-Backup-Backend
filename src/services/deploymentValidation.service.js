@@ -1255,7 +1255,8 @@ async function runProfileOnlyMinimalValidation({
 
         if (checkOnlySuccess) {
             profilePermissionSanitization.status =
-                profilePermissionSanitization.removedCount > 0
+                profilePermissionSanitization.removedCount > 0 ||
+                profilePermissionSanitization.disabledCount > 0
                     ? 'COMPLETED'
                     : 'SKIPPED';
             profilePermissionSanitization.overallStatus = 'PASS';
@@ -1263,7 +1264,8 @@ async function runProfileOnlyMinimalValidation({
                 validationId,
                 attempt: checkOnlyAttempt,
                 sanitizationAttempted:
-                    profilePermissionSanitization.removedCount > 0,
+                    profilePermissionSanitization.removedCount > 0 ||
+                    profilePermissionSanitization.disabledCount > 0,
                 retryAllowed: false,
                 nextAttempt: null,
                 stopReason: 'CHECK_ONLY_SUCCEEDED'
@@ -1295,32 +1297,60 @@ async function runProfileOnlyMinimalValidation({
                 selectedProfileNames
             );
 
-        if (!confirmedFailures.ok) {
-            profilePermissionSanitization.status = 'BLOCKED';
-            profilePermissionSanitization.overallStatus = 'BLOCKED';
-            profilePermissionSanitization.errors.push(confirmedFailures.reason);
-            profilePermissionSanitizationDiagnosticLog.logRetryDecision({
-                validationId,
-                attempt: checkOnlyAttempt,
-                sanitizationAttempted: false,
-                retryAllowed: false,
-                nextAttempt: null,
-                stopReason: confirmedFailures.reason
-            });
-            break;
-        }
+        let sanitizeResult;
 
-        const sanitizeResult =
-            await profileUserPermissionSanitizationService.applySanitizationPlan(
-                {
-                    workspacePath: generatedWorkspace.workspacePath,
-                    confirmedFailures: confirmedFailures.failures,
-                    attempt: checkOnlyAttempt,
-                    deploymentId: checkOnlyDeployment?.deploymentId || null,
+        if (confirmedFailures.ok) {
+            sanitizeResult =
+                await profileUserPermissionSanitizationService.applySanitizationPlan(
+                    {
+                        workspacePath: generatedWorkspace.workspacePath,
+                        confirmedFailures: confirmedFailures.failures,
+                        attempt: checkOnlyAttempt,
+                        deploymentId: checkOnlyDeployment?.deploymentId || null,
+                        validationId,
+                        profileWorkspaceProfiles: profileWorkspaceContent.profiles
+                    }
+                );
+        } else {
+            const confirmedDependencyFailure =
+                profileUserPermissionSanitizationService.extractConfirmedManageKnowledgeDependencyFailure(
+                    checkOnlyDeployment,
+                    selectedProfileNames
+                );
+
+            if (!confirmedDependencyFailure.ok) {
+                profilePermissionSanitization.status = 'BLOCKED';
+                profilePermissionSanitization.overallStatus = 'BLOCKED';
+                profilePermissionSanitization.errors.push(
+                    confirmedDependencyFailure.reason ||
+                        confirmedFailures.reason ||
+                        'Check-only failure is not eligible for Profile permission sanitization.'
+                );
+                profilePermissionSanitizationDiagnosticLog.logRetryDecision({
                     validationId,
-                    profileWorkspaceProfiles: profileWorkspaceContent.profiles
-                }
-            );
+                    attempt: checkOnlyAttempt,
+                    sanitizationAttempted: false,
+                    retryAllowed: false,
+                    nextAttempt: null,
+                    stopReason:
+                        confirmedDependencyFailure.reason ||
+                        confirmedFailures.reason
+                });
+                break;
+            }
+
+            sanitizeResult =
+                await profileUserPermissionSanitizationService.applyDependencyDisablePlan(
+                    {
+                        workspacePath: generatedWorkspace.workspacePath,
+                        confirmedFailure: confirmedDependencyFailure.failure,
+                        attempt: checkOnlyAttempt,
+                        deploymentId: checkOnlyDeployment?.deploymentId || null,
+                        validationId,
+                        profileWorkspaceProfiles: profileWorkspaceContent.profiles
+                    }
+                );
+        }
 
         if (!sanitizeResult.ok) {
             profilePermissionSanitization.status = 'BLOCKED';
@@ -1337,15 +1367,30 @@ async function runProfileOnlyMinimalValidation({
             break;
         }
 
-        profilePermissionSanitization.removedCount +=
-            sanitizeResult.removedPermissions.length;
-        profilePermissionSanitization.removedPermissions.push(
-            ...sanitizeResult.removedPermissions
-        );
+        if (sanitizeResult.removedPermissions?.length) {
+            profilePermissionSanitization.removedCount +=
+                sanitizeResult.removedPermissions.length;
+            profilePermissionSanitization.removedPermissions.push(
+                ...sanitizeResult.removedPermissions
+            );
+        }
 
-        const affectedProfileNames = new Set(
-            sanitizeResult.removedPermissions.map((entry) => entry.profileName)
-        );
+        if (sanitizeResult.disabledPermissions?.length) {
+            profilePermissionSanitization.disabledCount +=
+                sanitizeResult.disabledPermissions.length;
+            profilePermissionSanitization.disabledPermissions.push(
+                ...sanitizeResult.disabledPermissions
+            );
+        }
+
+        const affectedProfileNames = new Set([
+            ...(sanitizeResult.removedPermissions || []).map(
+                (entry) => entry.profileName
+            ),
+            ...(sanitizeResult.disabledPermissions || []).map(
+                (entry) => entry.profileName
+            )
+        ]);
 
         profileWorkspaceContent =
             await profileUserPermissionSanitizationService.refreshFinalWorkspaceHashes(
@@ -1593,6 +1638,7 @@ async function runProfileOnlyMinimalValidation({
         sanitizationStatus: profilePermissionSanitization.status,
         sanitizationOverallStatus: profilePermissionSanitization.overallStatus,
         removedCount: profilePermissionSanitization.removedCount,
+        disabledCount: profilePermissionSanitization.disabledCount,
         checkOnlyAttempts: profilePermissionSanitization.checkOnlyAttempts,
         finalCheckOnlySuccess:
             resolveProfileOnlyCheckOnlySuccess(checkOnlyDeployment),

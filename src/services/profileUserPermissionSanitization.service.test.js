@@ -1204,6 +1204,197 @@ async function main() {
             }
         }
     );
+
+    const knowledgeDependencyProblem =
+        sanitizationService.MANAGE_KNOWLEDGE_DEPENDENCY_PROBLEM;
+
+    function dependencyFailure(profileName = 'Admin', problem = knowledgeDependencyProblem) {
+        return {
+            metadataType: 'Profile',
+            metadataName: profileName,
+            problem
+        };
+    }
+
+    await runTest('dependency parser accepts exact confirmed error', async () => {
+        const parsed =
+            sanitizationService.parseManageKnowledgeImportExportDependencyProblem(
+                knowledgeDependencyProblem
+            );
+        assert.ok(parsed);
+        assert.strictEqual(parsed.permissionName, 'ManageKnowledgeImportExport');
+        assert.deepStrictEqual(parsed.dependencyPermissionNames, [
+            'ViewArchivedArticles',
+            'ViewDraftArticles'
+        ]);
+    });
+
+    await runTest('dependency parser rejects wrong parent permission wording', async () => {
+        assert.strictEqual(
+            sanitizationService.parseManageKnowledgeImportExportDependencyProblem(
+                'Permission ManageKnowledge depends on permission(s): ViewArchivedArticles, ViewDraftArticles'
+            ),
+            null
+        );
+    });
+
+    await runTest('dependency parser rejects missing dependency', async () => {
+        assert.strictEqual(
+            sanitizationService.parseManageKnowledgeImportExportDependencyProblem(
+                'Permission ManageKnowledgeImportExport depends on permission(s): ViewArchivedArticles'
+            ),
+            null
+        );
+    });
+
+    await runTest('dependency parser rejects additional dependency', async () => {
+        assert.strictEqual(
+            sanitizationService.parseManageKnowledgeImportExportDependencyProblem(
+                'Permission ManageKnowledgeImportExport depends on permission(s): ViewArchivedArticles, ViewDraftArticles, EditKnowledge'
+            ),
+            null
+        );
+    });
+
+    await runTest('dependency parser rejects different error wording', async () => {
+        assert.strictEqual(
+            sanitizationService.parseManageKnowledgeImportExportDependencyProblem(
+                'Permission ManageKnowledgeImportExport depends on permission(s): ViewDraftArticles, ViewArchivedArticles'
+            ),
+            null
+        );
+    });
+
+    await runTest('dependency extractor rejects multiple component failures', async () => {
+        const result =
+            sanitizationService.extractConfirmedManageKnowledgeDependencyFailure(
+                checkOnlyWithFailures([
+                    dependencyFailure(),
+                    dependencyFailure()
+                ]),
+                selectedAdmin
+            );
+        assert.strictEqual(result.ok, false);
+    });
+
+    await runTest('dependency disable changes true to false and keeps block', async () => {
+        const xml = profileXmlWithUserPermissions({
+            permissions: [
+                {
+                    name: 'ManageKnowledgeImportExport',
+                    enabled: true
+                }
+            ]
+        });
+        const disable = sanitizationService.disableSingleUserPermissionEnabledFlag(
+            xml,
+            'ManageKnowledgeImportExport'
+        );
+        assert.strictEqual(disable.ok, true);
+        assert.match(disable.xml, /ManageKnowledgeImportExport/);
+        assert.match(
+            disable.xml,
+            /<enabled>false<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+        );
+    });
+
+    await runTest('dependency disable fails closed when permission missing', async () => {
+        const xml = profileXmlWithUserPermissions({ permissions: [] });
+        const disable = sanitizationService.disableSingleUserPermissionEnabledFlag(
+            xml,
+            'ManageKnowledgeImportExport'
+        );
+        assert.strictEqual(disable.ok, false);
+    });
+
+    await runTest('dependency disable fails closed for duplicate permission', async () => {
+        const xml = profileXmlWithUserPermissions({
+            permissions: [
+                { name: 'ManageKnowledgeImportExport', enabled: true },
+                { name: 'ManageKnowledgeImportExport', enabled: true }
+            ]
+        });
+        const disable = sanitizationService.disableSingleUserPermissionEnabledFlag(
+            xml,
+            'ManageKnowledgeImportExport'
+        );
+        assert.strictEqual(disable.ok, false);
+    });
+
+    await runTest('dependency disable fails closed when already false', async () => {
+        const xml = profileXmlWithUserPermissions({
+            permissions: [
+                { name: 'ManageKnowledgeImportExport', enabled: false }
+            ]
+        });
+        const disable = sanitizationService.disableSingleUserPermissionEnabledFlag(
+            xml,
+            'ManageKnowledgeImportExport'
+        );
+        assert.strictEqual(disable.ok, false);
+    });
+
+    await runTest('dependency disable leaves unrelated permissions unchanged', async () => {
+        const xml = profileXmlWithUserPermissions({
+            permissions: [
+                { name: 'PermA', enabled: true },
+                { name: 'ManageKnowledgeImportExport', enabled: true }
+            ]
+        });
+        const disable = sanitizationService.disableSingleUserPermissionEnabledFlag(
+            xml,
+            'ManageKnowledgeImportExport'
+        );
+        assert.strictEqual(disable.ok, true);
+        assert.match(disable.xml, /<name>PermA<\/name>/);
+        assert.match(disable.xml, /<enabled>true<\/enabled>[\s\S]*<name>PermA<\/name>/);
+    });
+
+    await runTest('applyDependencyDisablePlan updates workspace and records disabled permission', async () => {
+        const workspacePath = await fs.promises.mkdtemp(
+            path.join(os.tmpdir(), 'sanitize-disable-')
+        );
+        const xml = profileXmlWithUserPermissions({
+            permissions: [
+                { name: 'ManageKnowledgeImportExport', enabled: true }
+            ]
+        });
+
+        try {
+            const { absolutePath } = await writeWorkspaceProfile(
+                workspacePath,
+                'Admin',
+                xml
+            );
+            const result = await sanitizationService.applyDependencyDisablePlan({
+                workspacePath,
+                confirmedFailure: {
+                    profileName: 'Admin',
+                    permissionName: 'ManageKnowledgeImportExport',
+                    dependencyPermissionNames: [
+                        'ViewArchivedArticles',
+                        'ViewDraftArticles'
+                    ],
+                    sourceFailure: { problem: knowledgeDependencyProblem }
+                },
+                attempt: 1
+            });
+            assert.strictEqual(result.ok, true);
+            assert.strictEqual(result.disabledPermissions.length, 1);
+            assert.strictEqual(
+                result.disabledPermissions[0].classification,
+                'DEPENDENCY_PERMISSION_DISABLED'
+            );
+            const readBack = await readFile(absolutePath, 'utf8');
+            assert.match(readBack, /ManageKnowledgeImportExport/);
+            assert.match(
+                readBack,
+                /<enabled>false<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+            );
+        } finally {
+            await rm(workspacePath, { recursive: true, force: true });
+        }
+    });
 }
 
 main();

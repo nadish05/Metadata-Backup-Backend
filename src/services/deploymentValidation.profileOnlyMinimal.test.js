@@ -480,6 +480,43 @@ function buildUnknownUserPermissionCheckOnlyFailure(profileName, permissionName)
     };
 }
 
+function buildManageKnowledgeDependencyCheckOnlyFailure(profileName) {
+    return {
+        success: false,
+        status: 'FAILED',
+        executed: true,
+        deploymentId: '0AfKNOWLEDGEDEP',
+        message: 'Check-only deployment failed.',
+        deploymentDiagnostics: {
+            componentFailures: [
+                {
+                    metadataType: 'Profile',
+                    metadataName: profileName,
+                    problem:
+                        'Permission ManageKnowledgeImportExport depends on permission(s): ViewArchivedArticles, ViewDraftArticles'
+                }
+            ]
+        }
+    };
+}
+
+function profileXmlWithTwoEnabledUserPermissions(firstPermission, secondPermission) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <objectPermissions>
+        <object>Account</object>
+    </objectPermissions>
+    <userPermissions>
+        <enabled>true</enabled>
+        <name>${firstPermission}</name>
+    </userPermissions>
+    <userPermissions>
+        <enabled>true</enabled>
+        <name>${secondPermission}</name>
+    </userPermissions>
+</Profile>`;
+}
+
 function patchNodeFsWriteFile(handler) {
     const original = fs.writeFile.bind(fs);
 
@@ -2260,6 +2297,369 @@ async function main() {
                     generatedDeploymentPackage: result.generatedDeploymentPackage
                 });
                 assert.strictEqual(integrity.ok, true, integrity.reason);
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only dependency failure disables ManageKnowledgeImportExport and completes check-only',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const inline = profileXmlWithUserPermission(
+                'ManageKnowledgeImportExport'
+            );
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+            let checkOnlyCalls = 0;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                if (checkOnlyCalls === 1) {
+                    return buildManageKnowledgeDependencyCheckOnlyFailure('Admin');
+                }
+
+                return {
+                    success: true,
+                    status: 'SUCCESS',
+                    executed: true,
+                    deploymentId: '0AfSUCCESS'
+                };
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-dependency-disable-success'
+                    });
+
+                assert.strictEqual(checkOnlyCalls, 2);
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'COMPLETED'
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.disabledCount,
+                    1
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedCount,
+                    0
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.disabledPermissions[0]
+                        .permissionName,
+                    'ManageKnowledgeImportExport'
+                );
+                assert.strictEqual(result.checkOnlyDeployment.success, true);
+                assert.strictEqual(result.deploymentReadiness.canDeploy, true);
+                assert.ok(result.boundDeployArtifact?.artifactDigest);
+
+                const adminRel =
+                    profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                        'Admin'
+                    );
+                const workspaceXml = await fs.promises.readFile(
+                    path.join(
+                        result.generatedWorkspace.workspacePath,
+                        ...adminRel.split('/')
+                    ),
+                    'utf8'
+                );
+                assert.match(workspaceXml, /ManageKnowledgeImportExport/);
+                assert.match(
+                    workspaceXml,
+                    /<enabled>false<\/enabled>[\s\S]*<name>ManageKnowledgeImportExport<\/name>/
+                );
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only unknown removal then dependency disable completes check-only',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const badgePermission = 'CreateWorkBadgeDefinition';
+            const inline = profileXmlWithTwoEnabledUserPermissions(
+                badgePermission,
+                'ManageKnowledgeImportExport'
+            );
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+            let checkOnlyCalls = 0;
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                if (checkOnlyCalls === 1) {
+                    return buildUnknownUserPermissionCheckOnlyFailure(
+                        'Admin',
+                        badgePermission
+                    );
+                }
+
+                if (checkOnlyCalls === 2) {
+                    return buildManageKnowledgeDependencyCheckOnlyFailure('Admin');
+                }
+
+                return {
+                    success: true,
+                    status: 'SUCCESS',
+                    executed: true,
+                    deploymentId: '0AfSUCCESS'
+                };
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-sequential-sanitize-success'
+                    });
+
+                assert.strictEqual(checkOnlyCalls, 3);
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'COMPLETED'
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedCount,
+                    1
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.disabledCount,
+                    1
+                );
+                assert.strictEqual(result.checkOnlyDeployment.success, true);
+                assert.strictEqual(result.deploymentReadiness.canDeploy, true);
+                assert.ok(result.boundDeployArtifact?.artifactDigest);
+            } finally {
+                deploymentWorkspaceService.buildDeploymentWorkspace =
+                    originalBuild;
+                checkOnlyDeploymentService.runCheckOnlyDeployment =
+                    originalCheckOnly;
+                restoreReader();
+                restoreAxios();
+                if (workspaceRootToCleanup) {
+                    await rm(workspaceRootToCleanup, {
+                        recursive: true,
+                        force: true
+                    });
+                }
+            }
+        }
+    );
+
+    await runTest(
+        'Profile-only mixed unknown and dependency failures block sanitization',
+        async () => {
+            const restoreAxios = patchConnectivityWithDestinationVersions(['67.0']);
+            const inline = profileXmlWithTwoEnabledUserPermissions(
+                'CreateWorkBadgeDefinition',
+                'ManageKnowledgeImportExport'
+            );
+            const restoreReader = installRepositoryReaderMock({
+                sourceMetadataApiVersion: '67.0',
+                profileXml: profileXmlContent({ viewAllFields: false })
+            });
+            const originalBuild =
+                deploymentWorkspaceService.buildDeploymentWorkspace;
+            const originalCheckOnly =
+                checkOnlyDeploymentService.runCheckOnlyDeployment;
+            let workspaceRootToCleanup = null;
+            let checkOnlyCalls = 0;
+            const originalSha256 =
+                profileWorkspaceCanonicalContentService.sha256Utf8(inline);
+
+            deploymentWorkspaceService.buildDeploymentWorkspace = async (
+                args
+            ) => {
+                const workspaceRoot = await createBoundReadyWorkspace(
+                    args.generatedManifest
+                );
+                workspaceRootToCleanup = workspaceRoot;
+                return {
+                    status: 'READY',
+                    workspacePath: workspaceRoot,
+                    dependenciesCopied: 0,
+                    metadataCopied: 1
+                };
+            };
+            checkOnlyDeploymentService.runCheckOnlyDeployment = async () => {
+                checkOnlyCalls += 1;
+
+                return {
+                    success: false,
+                    status: 'FAILED',
+                    executed: true,
+                    deploymentDiagnostics: {
+                        componentFailures: [
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin',
+                                problem:
+                                    'Unknown user permission: CreateWorkBadgeDefinition'
+                            },
+                            {
+                                metadataType: 'Profile',
+                                metadataName: 'Admin',
+                                problem:
+                                    'Permission ManageKnowledgeImportExport depends on permission(s): ViewArchivedArticles, ViewDraftArticles'
+                            }
+                        ]
+                    }
+                };
+            };
+
+            try {
+                const validationService = loadValidationServiceFresh();
+                const result =
+                    await validationService.runProfileOnlyMinimalValidation({
+                        connectivityResult: connectivityPass,
+                        deploymentPackage: baseDeploymentPackage({
+                            profileOnlyMinimalPackage: true,
+                            selectedMetadata: [
+                                {
+                                    metadataType: 'Profile',
+                                    metadataName: 'Admin',
+                                    content: inline
+                                }
+                            ]
+                        }),
+                        refreshToken: 'rt',
+                        instanceUrl: 'https://test.example.my.salesforce.com',
+                        orgId: '00DTEST',
+                        validationId: 'val-mixed-unknown-dependency-blocked'
+                    });
+
+                assert.strictEqual(checkOnlyCalls, 1);
+                assert.strictEqual(
+                    result.profilePermissionSanitization.status,
+                    'BLOCKED'
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.removedCount,
+                    0
+                );
+                assert.strictEqual(
+                    result.profilePermissionSanitization.disabledCount,
+                    0
+                );
+
+                const adminRel =
+                    profileWorkspaceCanonicalContentService.resolveProfileWorkspaceRelativePath(
+                        'Admin'
+                    );
+                const workspaceXml = await fs.promises.readFile(
+                    path.join(
+                        result.generatedWorkspace.workspacePath,
+                        ...adminRel.split('/')
+                    ),
+                    'utf8'
+                );
+                assert.strictEqual(
+                    profileWorkspaceCanonicalContentService.sha256Utf8(
+                        workspaceXml
+                    ),
+                    originalSha256
+                );
             } finally {
                 deploymentWorkspaceService.buildDeploymentWorkspace =
                     originalBuild;

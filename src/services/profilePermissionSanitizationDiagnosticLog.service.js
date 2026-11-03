@@ -217,6 +217,7 @@ function logFinalResult({
     sanitizationStatus = null,
     sanitizationOverallStatus = null,
     removedCount = null,
+    disabledCount = null,
     checkOnlyAttempts = null,
     finalCheckOnlySuccess = null,
     canDeploy = null,
@@ -228,6 +229,7 @@ function logFinalResult({
         sanitizationStatus,
         sanitizationOverallStatus,
         removedCount,
+        disabledCount,
         checkOnlyAttempts,
         finalCheckOnlySuccess,
         canDeploy,
@@ -272,6 +274,44 @@ function logProfilePermissionRemovalVerified({
     });
 }
 
+function logProfilePermissionDisableVerified({
+    validationId = null,
+    attempt = null,
+    profileName = null,
+    permissionName = null,
+    originalBlockFound = null,
+    originalEnabled = null,
+    finalEnabled = null,
+    matchingBlocksBefore = null,
+    matchingBlocksAfter = null,
+    workspaceReadBack = null,
+    xmlStructureValid = null,
+    workspaceIntegrityVerified = null,
+    unrelatedBlocksUnchanged = null,
+    salesforcePermissionNameMatches = null,
+    verificationStatus = null,
+    failureReason = null
+} = {}) {
+    emitDiagnostic('PROFILE_PERMISSION_DISABLE_VERIFIED', {
+        validationId,
+        attempt,
+        profileName,
+        permissionName,
+        originalBlockFound,
+        originalEnabled,
+        finalEnabled,
+        matchingBlocksBefore,
+        matchingBlocksAfter,
+        workspaceReadBack,
+        xmlStructureValid,
+        workspaceIntegrityVerified,
+        unrelatedBlocksUnchanged,
+        salesforcePermissionNameMatches,
+        verificationStatus,
+        failureReason: failureReason || null
+    });
+}
+
 module.exports = {
     LOG_PREFIX,
     isProfilePermissionSanitizationDebugEnabled,
@@ -288,5 +328,6 @@ module.exports = {
     logWorkspaceModification,
     logRetryDecision,
     logFinalResult,
-    logProfilePermissionRemovalVerified
+    logProfilePermissionRemovalVerified,
+    logProfilePermissionDisableVerified
 };
