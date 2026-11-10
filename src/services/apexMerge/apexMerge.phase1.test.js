@@ -31,6 +31,8 @@ const {
     SESSION_STATUS
 } = require('./mergeSession.store');
 const mergeSessionService = require('./mergeSession.service');
+const { retrieveSealedMergeArtifact } = require('./apexMergeArtifactHandoff.service');
+const { getSession } = require('./mergeSession.store');
 const { assertNoDestinationDrift } = require('./apexMergeDrift.service');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
 
@@ -263,11 +265,9 @@ async function main() {
         });
 
         sealSession(session.mergeSessionId, { mergeManifestId: 'manifest_test' });
-        const record = require('./mergeSession.store').getSession(
-            session.mergeSessionId
-        );
-        record.sealedAt = new Date(Date.now() - 10).toISOString();
-        require('./mergeSession.store').updateSession(session.mergeSessionId, record);
+        require('./mergeSession.store').patchSessionRaw(session.mergeSessionId, {
+            sealedAt: new Date(Date.now() - 10).toISOString()
+        });
 
         return new Promise((resolve) => {
             setTimeout(() => {
@@ -444,6 +444,317 @@ async function main() {
                 }),
             (error) => error.code === MERGE_ERROR.INVALID_REQUEST
         );
+    });
+
+    function buildSealedHandoffFixture(overrides = {}) {
+        clearAllSessions();
+
+        const clsContent =
+            overrides.clsContent ||
+            'public class Demo { public String merged() { return "ok"; } }';
+        const metaContent =
+            overrides.metaContent ||
+            '<?xml version="1.0"?><ApexClass><apiVersion>59.0</apiVersion></ApexClass>';
+
+        const session = createSessionRecord({
+            comparisonId: overrides.comparisonId || 'cmp-handoff',
+            deploymentPlanId: overrides.deploymentPlanId || 'plan-handoff',
+            repoUrl: 'https://github.com/example/repo.git',
+            sourceBranch: 'source',
+            destinationBranch: 'destination',
+            gitPins: {
+                sourceHeadSha: 'abc',
+                destinationHeadSha: 'def'
+            },
+            classes: overrides.classes || [
+                {
+                    metadataName: 'Demo',
+                    filePath: 'force-app/main/default/classes/Demo.cls',
+                    metaXmlPath:
+                        'force-app/main/default/classes/Demo.cls-meta.xml',
+                    mergeMode: 'FULL',
+                    mergeBaseSha: 'base-sha',
+                    conflictState: 'NONE',
+                    artifacts: {
+                        cls: { content: clsContent, conflict: false },
+                        metaXml: { content: metaContent, conflict: false }
+                    }
+                }
+            ]
+        });
+
+        const manifest = buildApexMergeManifest(session);
+        sealSession(session.mergeSessionId, manifest);
+
+        return {
+            mergeSessionId: session.mergeSessionId,
+            manifest,
+            clsContent,
+            metaContent,
+            query: {
+                comparisonId: manifest.comparisonId,
+                deploymentPlanId: manifest.deploymentPlanId,
+                mergeManifestId: manifest.mergeManifestId
+            }
+        };
+    }
+
+    await runTest('sealed manifest includes stable artifact IDs for cls and metaXml', () => {
+        const { manifest } = buildSealedHandoffFixture();
+        const unit = manifest.units[0];
+
+        assert.ok(unit.artifacts.cls.artifactId);
+        assert.ok(unit.artifacts.metaXml.artifactId);
+        assert.notStrictEqual(
+            unit.artifacts.cls.artifactId,
+            unit.artifacts.metaXml.artifactId
+        );
+        assert.match(unit.artifacts.cls.artifactId, /_Demo_cls$/);
+        assert.match(unit.artifacts.metaXml.artifactId, /_Demo_metaXml$/);
+    });
+
+    await runTest('handoff returns exact UTF-8 bytes with matching hash and length', () => {
+        const { mergeSessionId, manifest, clsContent, metaContent, query } =
+            buildSealedHandoffFixture();
+        const clsId = manifest.units[0].artifacts.cls.artifactId;
+        const metaId = manifest.units[0].artifacts.metaXml.artifactId;
+
+        const clsBytes = retrieveSealedMergeArtifact({
+            mergeSessionId,
+            artifactId: clsId,
+            ...query
+        });
+        const metaBytes = retrieveSealedMergeArtifact({
+            mergeSessionId,
+            artifactId: metaId,
+            ...query
+        });
+
+        assert.strictEqual(clsBytes.toString('utf8'), clsContent);
+        assert.strictEqual(metaBytes.toString('utf8'), metaContent);
+        assert.strictEqual(
+            manifest.units[0].artifacts.cls.sha256,
+            sha256Utf8(clsContent)
+        );
+        assert.strictEqual(
+            clsBytes.length,
+            manifest.units[0].artifacts.cls.byteLength
+        );
+    });
+
+    await runTest('handoff rejects unknown artifact ID', () => {
+        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId,
+                    artifactId: `${manifest.mergeManifestId}_Missing_cls`,
+                    ...query
+                }),
+            (error) => error.code === MERGE_ERROR.ARTIFACT_NOT_FOUND
+        );
+    });
+
+    await runTest('handoff rejects unknown session', () => {
+        const { manifest, query } = buildSealedHandoffFixture();
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId: 'merge_does_not_exist',
+                    artifactId: manifest.units[0].artifacts.cls.artifactId,
+                    ...query
+                }),
+            (error) => error.code === MERGE_ERROR.SESSION_NOT_FOUND
+        );
+    });
+
+    await runTest('handoff rejects expired sealed session', () => {
+        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+        setTtlForTests(1, 60 * 60 * 1000);
+
+        require('./mergeSession.store').patchSessionRaw(mergeSessionId, {
+            sealedAt: new Date(Date.now() - 10).toISOString()
+        });
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId,
+                    artifactId: manifest.units[0].artifacts.cls.artifactId,
+                    ...query
+                }),
+            (error) => error.code === MERGE_ERROR.SESSION_EXPIRED
+        );
+
+        resetTtlForTests();
+    });
+
+    await runTest('handoff rejects unsealed session', () => {
+        clearAllSessions();
+        const session = createSessionRecord({
+            comparisonId: 'cmp-open',
+            deploymentPlanId: 'plan-open',
+            repoUrl: 'https://github.com/example/repo.git',
+            sourceBranch: 'source',
+            destinationBranch: 'destination',
+            gitPins: { sourceHeadSha: 'a', destinationHeadSha: 'b' },
+            classes: [
+                {
+                    metadataName: 'Open',
+                    filePath: 'force-app/main/default/classes/Open.cls',
+                    metaXmlPath: 'force-app/main/default/classes/Open.cls-meta.xml',
+                    mergeMode: 'FULL',
+                    mergeBaseSha: 'base',
+                    conflictState: 'NONE',
+                    artifacts: {
+                        cls: { content: 'public class Open {}', conflict: false },
+                        metaXml: { content: '<xml/>', conflict: false }
+                    }
+                }
+            ]
+        });
+
+        const manifest = buildApexMergeManifest(session);
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId: session.mergeSessionId,
+                    artifactId: manifest.units[0].artifacts.cls.artifactId,
+                    comparisonId: manifest.comparisonId,
+                    deploymentPlanId: manifest.deploymentPlanId,
+                    mergeManifestId: manifest.mergeManifestId
+                }),
+            (error) => error.code === MERGE_ERROR.SESSION_NOT_SEALED
+        );
+    });
+
+    await runTest('handoff rejects correlation mismatches', () => {
+        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+        const artifactId = manifest.units[0].artifacts.cls.artifactId;
+
+        const cases = [
+            { ...query, comparisonId: 'wrong-cmp' },
+            { ...query, deploymentPlanId: 'wrong-plan' },
+            {
+                ...query,
+                mergeManifestId: 'manifest_00000000-0000-4000-8000-000000000099'
+            }
+        ];
+
+        for (const badQuery of cases) {
+            assert.throws(
+                () =>
+                    retrieveSealedMergeArtifact({
+                        mergeSessionId,
+                        artifactId,
+                        ...badQuery
+                    }),
+                (error) => error.code === MERGE_ERROR.CORRELATION_MISMATCH
+            );
+        }
+    });
+
+    await runTest('handoff rejects tampered in-memory artifact bytes', () => {
+        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+        const artifactId = manifest.units[0].artifacts.cls.artifactId;
+
+        const live = getSession(mergeSessionId);
+        live.classes[0].artifacts.cls.content =
+            'public class Demo { public String tampered() { return "x"; } }';
+        require('./mergeSession.store').updateSession(mergeSessionId, live);
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId,
+                    artifactId,
+                    ...query
+                }),
+            (error) => error.code === MERGE_ERROR.HASH_MISMATCH
+        );
+    });
+
+    await runTest('handoff cannot read artifacts from another sealed session', () => {
+        const first = buildSealedHandoffFixture({
+            comparisonId: 'cmp-a',
+            deploymentPlanId: 'plan-a'
+        });
+        const second = buildSealedHandoffFixture({
+            comparisonId: 'cmp-b',
+            deploymentPlanId: 'plan-b',
+            classes: [
+                {
+                    metadataName: 'Other',
+                    filePath: 'force-app/main/default/classes/Other.cls',
+                    metaXmlPath:
+                        'force-app/main/default/classes/Other.cls-meta.xml',
+                    mergeMode: 'FULL',
+                    mergeBaseSha: 'base-sha',
+                    conflictState: 'NONE',
+                    artifacts: {
+                        cls: { content: 'public class Other {}', conflict: false },
+                        metaXml: { content: '<other/>', conflict: false }
+                    }
+                }
+            ]
+        });
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId: second.mergeSessionId,
+                    artifactId: first.manifest.units[0].artifacts.cls.artifactId,
+                    comparisonId: second.manifest.comparisonId,
+                    deploymentPlanId: second.manifest.deploymentPlanId,
+                    mergeManifestId: second.manifest.mergeManifestId
+                }),
+            (error) => error.code === MERGE_ERROR.ARTIFACT_NOT_FOUND
+        );
+    });
+
+    await runTest('multiple classes expose distinct artifact IDs', () => {
+        const { manifest } = buildSealedHandoffFixture({
+            classes: [
+                {
+                    metadataName: 'Alpha',
+                    filePath: 'force-app/main/default/classes/Alpha.cls',
+                    metaXmlPath:
+                        'force-app/main/default/classes/Alpha.cls-meta.xml',
+                    mergeMode: 'FULL',
+                    mergeBaseSha: 'base',
+                    conflictState: 'NONE',
+                    artifacts: {
+                        cls: { content: 'public class Alpha {}', conflict: false },
+                        metaXml: { content: '<a/>', conflict: false }
+                    }
+                },
+                {
+                    metadataName: 'Beta',
+                    filePath: 'force-app/main/default/classes/Beta.cls',
+                    metaXmlPath:
+                        'force-app/main/default/classes/Beta.cls-meta.xml',
+                    mergeMode: 'FULL',
+                    mergeBaseSha: 'base',
+                    conflictState: 'NONE',
+                    artifacts: {
+                        cls: { content: 'public class Beta {}', conflict: false },
+                        metaXml: { content: '<b/>', conflict: false }
+                    }
+                }
+            ]
+        });
+
+        const ids = new Set();
+
+        for (const unit of manifest.units) {
+            ids.add(unit.artifacts.cls.artifactId);
+            ids.add(unit.artifacts.metaXml.artifactId);
+        }
+
+        assert.strictEqual(ids.size, 4);
     });
 }
 

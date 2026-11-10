@@ -436,12 +436,17 @@ function getMergeSession(mergeSessionId) {
     };
 }
 
+const {
+    retrieveSealedMergeArtifact
+} = require('./apexMergeArtifactHandoff.service');
+
 module.exports = {
     createMergeSession,
     previewMergeSession,
     resolveMergeSession,
     sealMergeSession,
     getMergeSession,
+    retrieveSealedMergeArtifact,
     mapClassPreviewResponse,
     buildPerClassFocusResponse,
     normalizeResolutionRequests,

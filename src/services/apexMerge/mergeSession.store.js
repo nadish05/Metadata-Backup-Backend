@@ -27,22 +27,7 @@ function nowIso() {
 
 function purgeExpiredSessions(referenceTime = Date.now()) {
     for (const [mergeSessionId, session] of sessionStore.entries()) {
-        const createdMs = new Date(session.createdAt).getTime();
-        const sealedMs = session.sealedAt
-            ? new Date(session.sealedAt).getTime()
-            : null;
-
-        const ageMs = referenceTime - createdMs;
-        if (Number.isFinite(ageMs) && ageMs > maxAgeMs) {
-            sessionStore.delete(mergeSessionId);
-            continue;
-        }
-
-        if (
-            session.status === SESSION_STATUS.SEALED &&
-            sealedMs !== null &&
-            referenceTime - sealedMs > ttlMs
-        ) {
+        if (isSessionExpired(session, referenceTime)) {
             sessionStore.delete(mergeSessionId);
         }
     }
@@ -66,13 +51,79 @@ function createSessionRecord(session) {
     return record;
 }
 
+function isSessionExpired(session, referenceTime = Date.now()) {
+    if (!session) {
+        return true;
+    }
+
+    const createdMs = new Date(session.createdAt).getTime();
+    const sealedMs = session.sealedAt
+        ? new Date(session.sealedAt).getTime()
+        : null;
+
+    const ageMs = referenceTime - createdMs;
+    if (Number.isFinite(ageMs) && ageMs > maxAgeMs) {
+        return true;
+    }
+
+    if (
+        session.status === SESSION_STATUS.SEALED &&
+        sealedMs !== null &&
+        referenceTime - sealedMs > ttlMs
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
+function readSessionRaw(mergeSessionId) {
+    if (!mergeSessionId) {
+        return null;
+    }
+
+    return sessionStore.get(String(mergeSessionId).trim()) || null;
+}
+
+function purgeSession(mergeSessionId) {
+    if (!mergeSessionId) {
+        return;
+    }
+
+    sessionStore.delete(String(mergeSessionId).trim());
+}
+
 function getSession(mergeSessionId) {
     if (!mergeSessionId) {
         return null;
     }
 
     purgeExpiredSessions();
-    return sessionStore.get(String(mergeSessionId).trim()) || null;
+    const session = readSessionRaw(mergeSessionId);
+
+    if (session && isSessionExpired(session)) {
+        purgeSession(mergeSessionId);
+        return null;
+    }
+
+    return session;
+}
+
+function patchSessionRaw(mergeSessionId, patch) {
+    const session = readSessionRaw(mergeSessionId);
+
+    if (!session) {
+        return null;
+    }
+
+    const next = {
+        ...session,
+        ...patch,
+        updatedAt: nowIso()
+    };
+
+    sessionStore.set(mergeSessionId, next);
+    return next;
 }
 
 function updateSession(mergeSessionId, patch) {
@@ -128,6 +179,10 @@ module.exports = {
     sealSession,
     clearAllSessions,
     purgeExpiredSessions,
+    readSessionRaw,
+    patchSessionRaw,
+    isSessionExpired,
+    purgeSession,
     setTtlForTests,
     resetTtlForTests
 };

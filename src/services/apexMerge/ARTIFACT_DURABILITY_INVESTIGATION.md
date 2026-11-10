@@ -1,48 +1,43 @@
-# Artifact durability investigation (Git immutable ref strategy)
+# Artifact durability — approved direction
 
-**Status:** Investigation only — **not implemented** in Phase 1.5.
+## Superseded: GitHub immutable ref strategy
 
-## Problem
+The GitHub orphan-commit / `refs/apex-merge/*` approach described in early investigations is **superseded** and **must not** be implemented. GitHub remains the metadata **source and comparison** repository only; it is not approved storage for sealed merge artifacts.
 
-Sealed `apexMergeManifest.units[]` stores **SHA-256 + byteLength** only. Resolved bytes live in the in-memory session (`mergeSession.store.js`). After restart or TTL, Phase 2 cannot reconstruct user-resolved content from hashes alone unless Git re-merge reproduces identical bytes.
+Constraints:
 
-## Proposed pattern
+- No GitHub artifact branches, commits, or refs for merge bytes.
+- No external databases, object storage, or durable backend filesystem for merge artifacts.
+- Salesforce Application Org is the **only** persistent product storage.
 
-1. On seal, write merged `.cls` and `.cls-meta.xml` to a dedicated path, e.g.  
-   `apex-merge-artifacts/{mergeManifestId}/force-app/.../ClassName.cls`
-2. Create an **orphan commit** (or commit on a dedicated ref such as `refs/apex-merge/manifest-{id}`) without updating `source` or `destination` branches.
-3. Manifest gains: `artifactGitRef`, `artifactCommitSha`, per-unit `artifactPaths[]`.
-4. At validate/deploy, `git show <commitSha>:path` → verify SHA-256 → write workspace.
+## Approved architecture
 
-## Existing backend GitHub integration
+| Phase | Layer | Responsibility |
+|-------|--------|----------------|
+| **1.6a** (implemented) | Backend session (in-memory) | Seal assigns `artifactId` per `.cls` / `.cls-meta.xml`; binary `GET` with SHA-256 verification during TTL |
+| **1.6b** (planned) | Salesforce Apex | Immediately after seal: binary GET → verify hash → `ContentVersion` on `Deployment_Plan__c`; manifest JSON holds refs + hashes |
+| **Phase 2** (later) | Backend validate | Load bytes from `deploymentPackage` (injected by Apex from Files); `verifyManifestUnitHashes` |
 
-| Capability | Finding |
-|------------|---------|
-| Token | `GITHUB_TOKEN` env; injected into HTTPS clone URLs (`apexMergeGit.service.js`, `deploymentWorkspace.service.js`, compare/deployment controllers). |
-| API routes | `/api/github/*` — clone/migrate/status only; **no** Contents API or ref-creation helper today. |
-| Merge sessions | Ephemeral `git clone` + `fetch --all` to temp dir; no push. |
-| Permissions needed (proposed) | `contents:write` (create blobs/trees/commits), `contents:read`, ability to create/update **refs** (not branch tips used for Agent/Gym). Fine-grained or PAT scoped to one repo. |
+Flow:
 
-## Design considerations
+```
+Merge wizard → seal (manifest + artifactIds)
+    → Apex callouts GET each artifact (correlation query params)
+    → SHA-256 verify in Apex
+    → ContentVersion (Salesforce Files)
+    → Deployment_Plan__c manifest JSON (hashes + contentDocumentId / artifactId)
+```
 
-| Topic | Notes |
-|-------|-------|
-| Atomicity | Seal should fail if artifact push fails; do not return manifest without a verified `artifactCommitSha`. |
-| Concurrent sessions | Use unique `mergeManifestId` paths; no shared ref per session. |
-| Partial upload | Multi-file commit in one Git tree; rollback ref creation if commit fails. |
-| Retention | Orphan commits accumulate; policy needed (GC via GitHub API or scheduled prune of `refs/apex-merge/*` older than N days). |
-| Backend restart | **Durable** if manifest + commit SHA live on Salesforce plan JSON and GitHub ref survives TTL. Session memory is not required. |
-| Branch safety | Never fast-forward `source`/`destination`; only `refs/apex-merge/...` or orphan commits. |
-| Re-merge fallback | Still verify SHA-256 after fetch; hash mismatch → block deploy. |
+Pattern mirrors existing **snapshot export** (`snapshotExport` metadata + `/api/deployment/snapshot-artifact` binary GET + `SnapshotPersistenceService`), but merge handoff uses `/api/merge/apex/sessions/.../artifacts/...` and persists to the deployment plan instead of rollback snapshot members.
 
-## Recommended implementation (post-approval)
+## Phase 1.6a scope (backend)
 
-1. `apexMergeArtifactGit.service.js` — create tree, commit, update ref via GitHub REST (use same token plumbing).
-2. Extend `buildApexMergeManifest` with optional `artifactStore` block after successful push.
-3. Change `applyApexMergeFromManifest` (Phase 2) to prefer `git show artifactCommitSha:path` over pure re-merge when present.
-4. Keep Salesforce `Apex_Merge_Manifest_JSON__c` as transport; size limit may require storing only `artifactCommitSha` + manifest id if bytes are on GitHub.
+- `units[].artifacts.*.artifactId` in sealed manifest
+- `GET /api/merge/apex/sessions/:id/artifacts/:artifactId`
+- Mandatory correlation query: `comparisonId`, `deploymentPlanId`, `mergeManifestId`
+- No Salesforce Files persistence in 1.6a
 
-## Risks if not implemented before Phase 2
+## Remaining risks
 
-- Conflict resolutions (`ACCEPT_*`) and any merge outcome that differs from a fresh `git merge-file` will fail hash verification when the session has expired.
-- Hash-only manifest + Git re-merge is sufficient only for **automatic** clean merges within pinned SHAs.
+- If Apex does not complete handoff before sealed session TTL (~1h), bytes are lost and merge must be repeated.
+- Correlation IDs are not a substitute for network-layer auth; restrict backend merge URL exposure consistent with existing deployment API practices.

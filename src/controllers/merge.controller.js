@@ -20,7 +20,9 @@ function mapMergeError(error) {
             MALFORMED_CLASS_SELECTION: 400,
             MISSING_THREE_WAY_ARTIFACTS: 422,
             INVALID_RESOLUTION_STRATEGY: 400,
-            SESSION_SEALED: 409
+            SESSION_SEALED: 409,
+            SESSION_NOT_SEALED: 409,
+            ARTIFACT_NOT_FOUND: 404
         };
 
         return {
@@ -97,6 +99,26 @@ exports.getMergeSession = async (req, res) => {
     try {
         const result = mergeSessionService.getMergeSession(req.params.id);
         return res.json(result);
+    } catch (error) {
+        const mapped = mapMergeError(error);
+        return res.status(mapped.httpStatus).json(mapped.body);
+    }
+};
+
+exports.getMergeSessionArtifact = async (req, res) => {
+    try {
+        const bytes = mergeSessionService.retrieveSealedMergeArtifact({
+            mergeSessionId: req.params.id,
+            artifactId: req.params.artifactId,
+            comparisonId: req.query.comparisonId,
+            deploymentPlanId: req.query.deploymentPlanId,
+            mergeManifestId: req.query.mergeManifestId
+        });
+
+        res.set('Content-Type', 'application/octet-stream');
+        res.set('Cache-Control', 'no-store');
+        res.set('Content-Length', String(bytes.length));
+        return res.status(200).send(bytes);
     } catch (error) {
         const mapped = mapMergeError(error);
         return res.status(mapped.httpStatus).json(mapped.body);

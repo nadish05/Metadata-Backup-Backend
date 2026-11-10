@@ -172,7 +172,83 @@ Each **unit**:
 | `mergeMode` | yes (`FULL`) |
 | `mergeBaseSha` | yes |
 | `conflictState` | yes (`NONE` \| `RESOLVED`) |
-| `artifacts.cls` | yes | `{ sha256, byteLength }` |
-| `artifacts.metaXml` | yes | `{ sha256, byteLength }` |
+| `artifacts.cls` | yes | `{ artifactId, sha256, byteLength }` |
+| `artifacts.metaXml` | yes | `{ artifactId, sha256, byteLength }` |
 
-Artifact **content is not** in the manifest (hashes only). Bytes live in the merge session until TTL; durable storage is a separate Phase 2+ design.
+### Artifact ID format (Phase 1.6a)
+
+Generated once at seal and stored in the manifest:
+
+`{mergeManifestId}_{metadataName}_{role}`
+
+| Part | Example |
+|------|---------|
+| `mergeManifestId` | `manifest_550e8400-e29b-41d4-a716-446655440000` |
+| `metadataName` | Sanitized `[A-Za-z0-9_]` only (invalid chars → `_`) |
+| `role` | `cls` or `metaXml` |
+
+Example: `manifest_550e8400-e29b-41d4-a716-446655440000_AccountService_cls`
+
+IDs are unique within a manifest (one `mergeManifestId` per seal). They do not embed paths, credentials, or secrets.
+
+Artifact **content is not** in the manifest (hashes + IDs only). Bytes remain in the in-memory sealed session until TTL for binary handoff.
+
+## Artifact handoff — `GET /apex/sessions/:id/artifacts/:artifactId` (Phase 1.6a)
+
+Salesforce Application Org retrieves approved bytes before session expiry (Phase 1.6b persists to `ContentVersion`).
+
+### Request
+
+| Param | Location | Required |
+|-------|----------|----------|
+| `mergeSessionId` | path `:id` | yes |
+| `artifactId` | path | yes |
+| `comparisonId` | query | yes |
+| `deploymentPlanId` | query | yes |
+| `mergeManifestId` | query | yes |
+
+Example:
+
+`GET /api/merge/apex/sessions/merge_<uuid>/artifacts/manifest_<uuid>_Demo_cls?comparisonId=...&deploymentPlanId=...&mergeManifestId=manifest_<uuid>`
+
+### Success `200`
+
+| Header | Value |
+|--------|--------|
+| `Content-Type` | `application/octet-stream` |
+| `Cache-Control` | `no-store` |
+| `Content-Length` | byte length (UTF-8) |
+
+Body: raw UTF-8 artifact bytes (no JSON wrapper).
+
+### Integrity (server-side before response)
+
+1. Session must be `SEALED` with manifest present.
+2. Correlation: `comparisonId`, `deploymentPlanId`, `mergeManifestId` match sealed manifest.
+3. `artifactId` registered under `manifest.units[]`.
+4. Content read from session unit (not Git re-merge).
+5. SHA-256 and `byteLength` must match manifest descriptor — else `HASH_MISMATCH`.
+
+### Error envelope
+
+Same JSON shape as other merge routes: `{ success: false, code, error, details }`.
+
+| Code | HTTP | When |
+|------|------|------|
+| `SESSION_NOT_FOUND` | 404 | Unknown session |
+| `SESSION_EXPIRED` | 410 | Sealed/open TTL exceeded |
+| `SESSION_NOT_SEALED` | 409 | Session not sealed |
+| `ARTIFACT_NOT_FOUND` | 404 | ID not in manifest / unit missing |
+| `CORRELATION_MISMATCH` | 409 | Query IDs ≠ manifest |
+| `HASH_MISMATCH` | 400 | Bytes ≠ sealed hash/length |
+| `INVALID_REQUEST` | 400 | Missing query params or bad `artifactId` format |
+
+### Expiration
+
+- Sealed sessions: ~**1 hour** after `sealedAt` (configurable in store for tests).
+- Open sessions: ~**6 hours** from `createdAt`.
+- After expiry, artifact GET fails; user must repeat merge. **No backend durable artifact store.**
+
+### Security assumptions
+
+Merge routes have **no separate authentication layer** beyond correlation query parameters and session/manifest binding. Knowing `mergeSessionId`, `mergeManifestId`, and plan/comparison IDs is treated as sufficient to fetch bytes during the handoff window — same trust model as existing merge APIs. Apex proxy in the Application Org should perform handoff immediately after seal; LWC must not receive merge artifact bodies or OAuth tokens.

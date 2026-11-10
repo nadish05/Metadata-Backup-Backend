@@ -3,6 +3,10 @@
 const crypto = require('crypto');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
 const { hasConflictMarkers } = require('./apexMergeFullClass.service');
+const {
+    buildMergeArtifactId,
+    ARTIFACT_ROLE
+} = require('./apexMergeArtifactId.service');
 
 const MANIFEST_SCHEMA_VERSION = 1;
 
@@ -13,12 +17,18 @@ function sha256Utf8(content) {
         .digest('hex');
 }
 
-function buildArtifactDescriptor(content) {
+function buildArtifactDescriptor(content, { artifactId = null } = {}) {
     const normalized = String(content ?? '');
-    return {
+    const descriptor = {
         sha256: sha256Utf8(normalized),
         byteLength: Buffer.byteLength(normalized, 'utf8')
     };
+
+    if (artifactId) {
+        descriptor.artifactId = artifactId;
+    }
+
+    return descriptor;
 }
 
 function generateManifestId() {
@@ -35,6 +45,8 @@ function buildApexMergeManifest(session) {
             'Session is required to build a manifest.'
         );
     }
+
+    const mergeManifestId = generateManifestId();
 
     const units = (session.classes || []).map((unit) => {
         if (unit.conflictState !== 'RESOLVED' && unit.conflictState !== 'NONE') {
@@ -77,15 +89,27 @@ function buildApexMergeManifest(session) {
             mergeBaseSha: unit.mergeBaseSha,
             conflictState: unit.conflictState,
             artifacts: {
-                cls: buildArtifactDescriptor(clsContent),
-                metaXml: buildArtifactDescriptor(metaContent)
+                cls: buildArtifactDescriptor(clsContent, {
+                    artifactId: buildMergeArtifactId(
+                        mergeManifestId,
+                        unit.metadataName,
+                        ARTIFACT_ROLE.CLS
+                    )
+                }),
+                metaXml: buildArtifactDescriptor(metaContent, {
+                    artifactId: buildMergeArtifactId(
+                        mergeManifestId,
+                        unit.metadataName,
+                        ARTIFACT_ROLE.META_XML
+                    )
+                })
             }
         };
     });
 
     return {
         schemaVersion: MANIFEST_SCHEMA_VERSION,
-        mergeManifestId: generateManifestId(),
+        mergeManifestId,
         mergeSessionId: session.mergeSessionId,
         comparisonId: session.comparisonId,
         deploymentPlanId: session.deploymentPlanId,
@@ -142,7 +166,16 @@ function verifyManifestUnitHashes(unit, { clsContent, metaContent }) {
     }
 }
 
-function assertManifestCorrelation(manifest, { comparisonId, deploymentPlanId }) {
+function assertManifestCorrelation(
+    manifest,
+    { comparisonId, deploymentPlanId, mergeManifestId } = {}
+) {
+    if (mergeManifestId && manifest.mergeManifestId !== mergeManifestId) {
+        throw new ApexMergeError(
+            MERGE_ERROR.CORRELATION_MISMATCH,
+            'mergeManifestId does not match manifest.'
+        );
+    }
     if (comparisonId && manifest.comparisonId !== comparisonId) {
         throw new ApexMergeError(
             MERGE_ERROR.CORRELATION_MISMATCH,
@@ -158,13 +191,46 @@ function assertManifestCorrelation(manifest, { comparisonId, deploymentPlanId })
     }
 }
 
+function findManifestArtifact(manifest, artifactId) {
+    if (!manifest || !artifactId) {
+        return null;
+    }
+
+    const targetId = String(artifactId).trim();
+
+    for (const unit of manifest.units || []) {
+        const clsId = unit.artifacts?.cls?.artifactId;
+        const metaId = unit.artifacts?.metaXml?.artifactId;
+
+        if (clsId === targetId) {
+            return {
+                unit,
+                artifactRole: ARTIFACT_ROLE.CLS,
+                descriptor: unit.artifacts.cls
+            };
+        }
+
+        if (metaId === targetId) {
+            return {
+                unit,
+                artifactRole: ARTIFACT_ROLE.META_XML,
+                descriptor: unit.artifacts.metaXml
+            };
+        }
+    }
+
+    return null;
+}
+
 module.exports = {
     MANIFEST_SCHEMA_VERSION,
+    ARTIFACT_ROLE,
     sha256Utf8,
     buildArtifactDescriptor,
     buildApexMergeManifest,
     verifyManifestAgainstRepoPins,
     verifyManifestUnitHashes,
     assertManifestCorrelation,
+    findManifestArtifact,
     generateManifestId
 };
