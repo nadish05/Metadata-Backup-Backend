@@ -15,7 +15,12 @@ function mapMergeError(error) {
             CONFLICT_MARKERS: 422,
             HASH_MISMATCH: 400,
             INVALID_MANIFEST: 400,
-            INVALID_REQUEST: 400
+            INVALID_REQUEST: 400,
+            DUPLICATE_CLASS_IDENTITY: 400,
+            MALFORMED_CLASS_SELECTION: 400,
+            MISSING_THREE_WAY_ARTIFACTS: 422,
+            INVALID_RESOLUTION_STRATEGY: 400,
+            SESSION_SEALED: 409
         };
 
         return {

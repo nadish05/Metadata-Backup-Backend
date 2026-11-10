@@ -6,11 +6,15 @@ const {
 } = require('./apexMergeGit.service');
 const {
     mergeApexClassFull,
-    applyResolvedArtifacts
+    resolveUnitArtifacts,
+    buildConflictSummaries
 } = require('./apexMergeFullClass.service');
 const { assertNoDestinationDrift } = require('./apexMergeDrift.service');
 const { buildApexMergeManifest } = require('./apexMergeManifest.service');
-const { normalizeApexClassSelections } = require('./apexMergePaths.util');
+const {
+    normalizeApexClassSelections,
+    coalesceClassSelectionInput
+} = require('./apexMergePaths.util');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
 const {
     createSessionRecord,
@@ -57,14 +61,97 @@ function requireOpenSession(mergeSessionId, { comparisonId, deploymentPlanId } =
     return session;
 }
 
+function mapClassPreviewResponse(unit) {
+    const conflicts = buildConflictSummaries(unit);
+
+    return {
+        metadataName: unit.metadataName,
+        filePath: unit.filePath,
+        metaXmlPath: unit.metaXmlPath,
+        mergeBaseSha: unit.mergeBaseSha,
+        conflictState: unit.conflictState,
+        drift: unit.drift,
+        hasConflicts: conflicts.length > 0,
+        conflicts,
+        mergedContent: unit.artifacts?.cls?.content ?? '',
+        mergedMetaXml: unit.artifacts?.metaXml?.content ?? '',
+        artifacts: {
+            cls: {
+                conflict: unit.artifacts.cls.conflict,
+                byteLength: Buffer.byteLength(
+                    unit.artifacts.cls.content || '',
+                    'utf8'
+                )
+            },
+            metaXml: {
+                conflict: unit.artifacts.metaXml.conflict,
+                byteLength: Buffer.byteLength(
+                    unit.artifacts.metaXml.content || '',
+                    'utf8'
+                )
+            }
+        },
+        preview: {
+            cls: unit.artifacts.cls.content,
+            metaXml: unit.artifacts.metaXml.content
+        }
+    };
+}
+
+function buildPerClassFocusResponse(classes, focusMetadataName) {
+    if (!focusMetadataName) {
+        return null;
+    }
+
+    const unit = classes.find(
+        (entry) => entry.metadataName === focusMetadataName
+    );
+
+    if (!unit) {
+        throw new ApexMergeError(
+            MERGE_ERROR.INVALID_REQUEST,
+            `metadataName ${focusMetadataName} is not part of this merge session.`
+        );
+    }
+
+    const mapped = mapClassPreviewResponse(unit);
+
+    return {
+        metadataName: mapped.metadataName,
+        hasConflicts: mapped.hasConflicts,
+        conflicts: mapped.conflicts,
+        mergedContent: mapped.mergedContent,
+        mergedMetaXml: mapped.mergedMetaXml,
+        mergedPreview: mapped.mergedContent,
+        conflictState: mapped.conflictState
+    };
+}
+
+function normalizeResolutionRequests(body = {}) {
+    if (Array.isArray(body.resolutions) && body.resolutions.length) {
+        return body.resolutions;
+    }
+
+    if (body.metadataName) {
+        return [
+            {
+                metadataName: body.metadataName,
+                resolutionStrategy: body.resolutionStrategy,
+                resolutions: body.resolutions
+            }
+        ];
+    }
+
+    return [];
+}
+
 async function createMergeSession(body = {}) {
     const {
         repoUrl,
         sourceBranch,
         destinationBranch,
         comparisonId,
-        deploymentPlanId,
-        classes
+        deploymentPlanId
     } = body;
 
     if (!repoUrl || !sourceBranch || !destinationBranch) {
@@ -81,12 +168,14 @@ async function createMergeSession(body = {}) {
         );
     }
 
-    const normalizedClasses = normalizeApexClassSelections(classes || []);
+    const normalizedClasses = normalizeApexClassSelections(
+        coalesceClassSelectionInput(body)
+    );
 
     if (!normalizedClasses.length) {
         throw new ApexMergeError(
             MERGE_ERROR.INVALID_REQUEST,
-            'At least one ApexClass selection is required.'
+            'At least one ApexClass selection is required (classes or eligibleClasses).'
         );
     }
 
@@ -117,6 +206,7 @@ async function createMergeSession(body = {}) {
             mergeBaseSha: null,
             conflictState: 'PENDING',
             drift: null,
+            threeWay: null,
             artifacts: {
                 cls: { content: null, conflict: false },
                 metaXml: { content: null, conflict: false }
@@ -144,7 +234,8 @@ async function previewMergeSession(mergeSessionId, body = {}) {
         refreshToken,
         instanceUrl,
         comparisonId,
-        deploymentPlanId
+        deploymentPlanId,
+        metadataName: focusMetadataName
     } = body;
 
     const mergedClasses = [];
@@ -213,48 +304,33 @@ async function previewMergeSession(mergeSessionId, body = {}) {
         classes: mergedClasses
     });
 
-    return {
+    const classResponses = updated.classes.map(mapClassPreviewResponse);
+    const focus = buildPerClassFocusResponse(
+        updated.classes,
+        focusMetadataName ? String(focusMetadataName).trim() : null
+    );
+
+    const response = {
         success: true,
         mergeSessionId,
         status: updated.status,
         comparisonId: updated.comparisonId,
         deploymentPlanId: updated.deploymentPlanId,
-        classes: updated.classes.map((unit) => ({
-            metadataName: unit.metadataName,
-            filePath: unit.filePath,
-            metaXmlPath: unit.metaXmlPath,
-            mergeBaseSha: unit.mergeBaseSha,
-            conflictState: unit.conflictState,
-            drift: unit.drift,
-            artifacts: {
-                cls: {
-                    conflict: unit.artifacts.cls.conflict,
-                    byteLength: Buffer.byteLength(
-                        unit.artifacts.cls.content || '',
-                        'utf8'
-                    )
-                },
-                metaXml: {
-                    conflict: unit.artifacts.metaXml.conflict,
-                    byteLength: Buffer.byteLength(
-                        unit.artifacts.metaXml.content || '',
-                        'utf8'
-                    )
-                }
-            },
-            preview: {
-                cls: unit.artifacts.cls.content,
-                metaXml: unit.artifacts.metaXml.content
-            }
-        }))
+        classes: classResponses
     };
+
+    if (focus) {
+        Object.assign(response, focus);
+    }
+
+    return response;
 }
 
 function resolveMergeSession(mergeSessionId, body = {}) {
     const session = requireOpenSession(mergeSessionId, body);
-    const resolutions = Array.isArray(body.resolutions) ? body.resolutions : [];
+    const resolutionRequests = normalizeResolutionRequests(body);
     const resolutionByName = new Map(
-        resolutions.map((entry) => [entry.metadataName, entry.resolutions || {}])
+        resolutionRequests.map((entry) => [entry.metadataName, entry])
     );
 
     const nextClasses = session.classes.map((unit) => {
@@ -275,7 +351,7 @@ function resolveMergeSession(mergeSessionId, body = {}) {
             };
         }
 
-        return applyResolvedArtifacts(unit, resolution);
+        return resolveUnitArtifacts(unit, resolution);
     });
 
     const updated = updateSession(mergeSessionId, {
@@ -283,15 +359,41 @@ function resolveMergeSession(mergeSessionId, body = {}) {
         classes: nextClasses
     });
 
-    return {
+    const focusMetadataName = body.metadataName
+        ? String(body.metadataName).trim()
+        : null;
+    const focusUnit = focusMetadataName
+        ? updated.classes.find((unit) => unit.metadataName === focusMetadataName)
+        : null;
+
+    const response = {
         success: true,
         mergeSessionId,
         status: updated.status,
         classes: updated.classes.map((unit) => ({
             metadataName: unit.metadataName,
-            conflictState: unit.conflictState
+            conflictState: unit.conflictState,
+            artifacts: {
+                cls: { sha256: unit.artifacts?.cls?.sha256 || null },
+                metaXml: { sha256: unit.artifacts?.metaXml?.sha256 || null }
+            }
         }))
     };
+
+    if (focusUnit) {
+        const conflicts = buildConflictSummaries(focusUnit);
+        Object.assign(response, {
+            metadataName: focusUnit.metadataName,
+            hasConflicts: conflicts.length > 0,
+            conflicts,
+            mergedContent: focusUnit.artifacts?.cls?.content ?? '',
+            mergedMetaXml: focusUnit.artifacts?.metaXml?.content ?? '',
+            mergedPreview: focusUnit.artifacts?.cls?.content ?? '',
+            conflictState: focusUnit.conflictState
+        });
+    }
+
+    return response;
 }
 
 function sealMergeSession(mergeSessionId, body = {}) {
@@ -339,5 +441,9 @@ module.exports = {
     previewMergeSession,
     resolveMergeSession,
     sealMergeSession,
-    getMergeSession
+    getMergeSession,
+    mapClassPreviewResponse,
+    buildPerClassFocusResponse,
+    normalizeResolutionRequests,
+    coalesceClassSelectionInput
 };

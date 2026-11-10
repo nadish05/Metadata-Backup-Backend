@@ -11,13 +11,23 @@ const execAsync = util.promisify(exec);
 const writeFile = util.promisify(fs.writeFile);
 const mkdir = util.promisify(fs.mkdir);
 
-const { normalizeApexClassSelections } = require('./apexMergePaths.util');
-const { mergeApexClassFull, hasConflictMarkers } = require('./apexMergeFullClass.service');
+const {
+    normalizeApexClassSelections,
+    coalesceClassSelectionInput
+} = require('./apexMergePaths.util');
+const {
+    mergeApexClassFull,
+    hasConflictMarkers,
+    resolveUnitArtifacts,
+    RESOLUTION_STRATEGIES
+} = require('./apexMergeFullClass.service');
 const { buildApexMergeManifest, sha256Utf8 } = require('./apexMergeManifest.service');
 const {
     createSessionRecord,
     clearAllSessions,
     sealSession,
+    setTtlForTests,
+    resetTtlForTests,
     SESSION_STATUS
 } = require('./mergeSession.store');
 const mergeSessionService = require('./mergeSession.service');
@@ -87,6 +97,188 @@ async function initFixtureRepository(fixtureRoot) {
 }
 
 async function main() {
+    await runTest('coalesceClassSelectionInput prefers classes over eligibleClasses', () => {
+        const fromClasses = coalesceClassSelectionInput({
+            classes: [{ metadataName: 'A' }],
+            eligibleClasses: [{ metadataName: 'B' }]
+        });
+        assert.strictEqual(fromClasses.length, 1);
+        assert.strictEqual(fromClasses[0].metadataName, 'A');
+
+        const fromEligible = coalesceClassSelectionInput({
+            eligibleClasses: [{ metadataName: 'Eligible' }]
+        });
+        assert.strictEqual(fromEligible[0].metadataName, 'Eligible');
+    });
+
+    await runTest('normalizeApexClassSelections maps classFilePath to filePath', () => {
+        const customPath =
+            'force-app/main/default/classes/custom/pkg/Weather.cls';
+        const normalized = normalizeApexClassSelections([
+            {
+                metadataType: 'ApexClass',
+                metadataName: 'Weather',
+                classFilePath: customPath
+            }
+        ]);
+
+        assert.strictEqual(normalized.length, 1);
+        assert.strictEqual(normalized[0].filePath, customPath);
+    });
+
+    await runTest('normalizeApexClassSelections rejects duplicate paths for same name', () => {
+        assert.throws(
+            () =>
+                normalizeApexClassSelections([
+                    {
+                        metadataName: 'Dup',
+                        filePath: 'force-app/main/default/classes/Dup.cls'
+                    },
+                    {
+                        metadataName: 'Dup',
+                        classFilePath: 'force-app/main/default/classes/other/Dup.cls'
+                    }
+                ]),
+            (error) => error.code === MERGE_ERROR.DUPLICATE_CLASS_IDENTITY
+        );
+    });
+
+    await runTest('ACCEPT_SOURCE and ACCEPT_TARGET resolve from stored threeWay artifacts', () => {
+        const unit = {
+            metadataName: 'Demo',
+            conflictState: 'UNRESOLVED',
+            threeWay: {
+                cls: {
+                    base: 'base',
+                    source: 'source-cls',
+                    destination: 'dest-cls'
+                },
+                metaXml: {
+                    base: 'meta-base',
+                    source: 'source-meta',
+                    destination: 'dest-meta'
+                }
+            },
+            artifacts: {
+                cls: { content: '<<<<<<<' },
+                metaXml: { content: '' }
+            }
+        };
+
+        const fromSource = resolveUnitArtifacts(unit, {
+            resolutionStrategy: RESOLUTION_STRATEGIES.ACCEPT_SOURCE
+        });
+        assert.strictEqual(fromSource.artifacts.cls.content, 'source-cls');
+        assert.strictEqual(fromSource.artifacts.metaXml.content, 'source-meta');
+        assert.strictEqual(fromSource.conflictState, 'RESOLVED');
+        assert.ok(fromSource.artifacts.cls.sha256);
+
+        const fromTarget = resolveUnitArtifacts(
+            {
+                ...unit,
+                artifacts: { cls: { content: 'conflict' }, metaXml: { content: '' } }
+            },
+            { resolutionStrategy: RESOLUTION_STRATEGIES.ACCEPT_TARGET }
+        );
+        assert.strictEqual(fromTarget.artifacts.cls.content, 'dest-cls');
+        assert.strictEqual(fromTarget.artifacts.metaXml.content, 'dest-meta');
+    });
+
+    await runTest('mapClassPreviewResponse exposes per-class mergedContent and hasConflicts', () => {
+        const { mapClassPreviewResponse } = require('./mergeSession.service');
+        const mapped = mapClassPreviewResponse({
+            metadataName: 'X',
+            filePath: 'force-app/main/default/classes/X.cls',
+            metaXmlPath: 'force-app/main/default/classes/X.cls-meta.xml',
+            mergeBaseSha: 'abc',
+            conflictState: 'UNRESOLVED',
+            drift: { status: 'MATCH' },
+            artifacts: {
+                cls: { content: '<<<<<<<\n', conflict: true },
+                metaXml: { content: '<xml/>', conflict: false }
+            }
+        });
+
+        assert.strictEqual(mapped.mergedContent, '<<<<<<<\n');
+        assert.strictEqual(mapped.hasConflicts, true);
+        assert.strictEqual(mapped.conflicts.length, 1);
+        assert.strictEqual(mapped.preview.cls, mapped.mergedContent);
+    });
+
+    await runTest('buildApexMergeManifest uses units as canonical collection', () => {
+        const session = createSessionRecord({
+            comparisonId: 'cmp-units',
+            deploymentPlanId: 'plan-units',
+            repoUrl: 'https://github.com/example/repo.git',
+            sourceBranch: 'source',
+            destinationBranch: 'destination',
+            gitPins: { sourceHeadSha: 'a', destinationHeadSha: 'b' },
+            classes: [
+                {
+                    metadataName: 'A',
+                    filePath: 'force-app/main/default/classes/A.cls',
+                    metaXmlPath: 'force-app/main/default/classes/A.cls-meta.xml',
+                    mergeMode: 'FULL',
+                    mergeBaseSha: 'base',
+                    conflictState: 'NONE',
+                    artifacts: {
+                        cls: { content: 'class A', conflict: false },
+                        metaXml: { content: '<A/>', conflict: false }
+                    }
+                },
+                {
+                    metadataName: 'B',
+                    filePath: 'force-app/main/default/classes/B.cls',
+                    metaXmlPath: 'force-app/main/default/classes/B.cls-meta.xml',
+                    mergeMode: 'FULL',
+                    mergeBaseSha: 'base',
+                    conflictState: 'RESOLVED',
+                    artifacts: {
+                        cls: { content: 'class B', conflict: false },
+                        metaXml: { content: '<B/>', conflict: false }
+                    }
+                }
+            ]
+        });
+
+        const manifest = buildApexMergeManifest(session);
+        assert.ok(Array.isArray(manifest.units));
+        assert.strictEqual(manifest.units.length, 2);
+        assert.strictEqual(manifest.units[0].artifacts.cls.sha256, sha256Utf8('class A'));
+        assert.ok(!Object.prototype.hasOwnProperty.call(manifest, 'classes'));
+    });
+
+    await runTest('expired sealed session is purged from store', () => {
+        clearAllSessions();
+        setTtlForTests(1, 60 * 60 * 1000);
+
+        const session = createSessionRecord({
+            comparisonId: 'cmp-exp',
+            deploymentPlanId: 'plan-exp',
+            repoUrl: 'https://github.com/example/repo.git',
+            sourceBranch: 'source',
+            destinationBranch: 'destination',
+            gitPins: { sourceHeadSha: 'a', destinationHeadSha: 'b' },
+            classes: []
+        });
+
+        sealSession(session.mergeSessionId, { mergeManifestId: 'manifest_test' });
+        const record = require('./mergeSession.store').getSession(
+            session.mergeSessionId
+        );
+        record.sealedAt = new Date(Date.now() - 10).toISOString();
+        require('./mergeSession.store').updateSession(session.mergeSessionId, record);
+
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                const { getSession } = require('./mergeSession.store');
+                assert.strictEqual(getSession(session.mergeSessionId), null);
+                resetTtlForTests();
+                resolve();
+            }, 5);
+        });
+    });
+
     await runTest('normalizeApexClassSelections collapses cls and meta rows', () => {
         const normalized = normalizeApexClassSelections([
             {
