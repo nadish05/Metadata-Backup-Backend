@@ -8,15 +8,46 @@ const {
     ARTIFACT_ROLE
 } = require('./apexMergeManifest.service');
 const { isSafeArtifactId } = require('./apexMergeArtifactId.service');
+const { OrgLockIdentityError } = require('../deploymentOrgLock/deploymentOrgLock.errors');
+const {
+    resolveVerifiedDestinationOrgId
+} = require('../deploymentOrgLock/destinationOrgIdentity.service');
 const {
     SESSION_STATUS,
     readSessionRaw,
     isSessionExpired,
     purgeSession,
-    getSession
+    patchSessionRaw,
+    computeSessionExpiryMs
 } = require('./mergeSession.store');
 
-function normalizeQuery(value) {
+const DEFAULT_ARTIFACT_HANDOFF_GRANT_MS = 30 * 60 * 1000;
+
+let resolveDestinationOrgIdentity = resolveVerifiedDestinationOrgId;
+
+function setResolveDestinationOrgIdentityForTests(fn) {
+    if (typeof fn === 'function') {
+        resolveDestinationOrgIdentity = fn;
+    }
+}
+
+function resetResolveDestinationOrgIdentityForTests() {
+    resolveDestinationOrgIdentity = resolveVerifiedDestinationOrgId;
+}
+
+function setArtifactHandoffGrantWindowForTests(ms) {
+    if (Number.isFinite(ms)) {
+        artifactHandoffGrantMs = ms;
+    }
+}
+
+function resetArtifactHandoffGrantWindowForTests() {
+    artifactHandoffGrantMs = DEFAULT_ARTIFACT_HANDOFF_GRANT_MS;
+}
+
+let artifactHandoffGrantMs = DEFAULT_ARTIFACT_HANDOFF_GRANT_MS;
+
+function normalizeValue(value) {
     if (value === undefined || value === null) {
         return null;
     }
@@ -25,15 +56,15 @@ function normalizeQuery(value) {
     return trimmed || null;
 }
 
-function requireHandoffCorrelation(query = {}) {
-    const comparisonId = normalizeQuery(query.comparisonId);
-    const deploymentPlanId = normalizeQuery(query.deploymentPlanId);
-    const mergeManifestId = normalizeQuery(query.mergeManifestId);
+function requireHandoffCorrelation(input = {}) {
+    const comparisonId = normalizeValue(input.comparisonId);
+    const deploymentPlanId = normalizeValue(input.deploymentPlanId);
+    const mergeManifestId = normalizeValue(input.mergeManifestId);
 
     if (!comparisonId || !deploymentPlanId || !mergeManifestId) {
         throw new ApexMergeError(
             MERGE_ERROR.INVALID_REQUEST,
-            'comparisonId, deploymentPlanId, and mergeManifestId are required query parameters.'
+            'comparisonId, deploymentPlanId, and mergeManifestId are required.'
         );
     }
 
@@ -67,7 +98,7 @@ function loadSealedSessionForHandoff(mergeSessionId) {
         );
     }
 
-  if (raw.status !== SESSION_STATUS.SEALED || !raw.manifest) {
+    if (raw.status !== SESSION_STATUS.SEALED || !raw.manifest) {
         throw new ApexMergeError(
             MERGE_ERROR.SESSION_NOT_SEALED,
             'Merge session must be sealed before artifacts can be retrieved.',
@@ -83,6 +114,158 @@ function loadSealedSessionForHandoff(mergeSessionId) {
     }
 
     return raw;
+}
+
+function mapIdentityError(error) {
+    if (!(error instanceof OrgLockIdentityError)) {
+        return new ApexMergeError(
+            MERGE_ERROR.DESTINATION_AUTH_FAILED,
+            'Destination org authentication failed.'
+        );
+    }
+
+    const message = String(error.message || '');
+
+    if (message.includes('does not match authenticated org')) {
+        return new ApexMergeError(
+            MERGE_ERROR.ORG_IDENTITY_MISMATCH,
+            'Supplied orgId does not match the authenticated Salesforce organization.',
+            { reason: message }
+        );
+    }
+
+    return new ApexMergeError(
+        MERGE_ERROR.DESTINATION_AUTH_FAILED,
+        'Destination org authentication failed.',
+        { reason: message }
+    );
+}
+
+function buildGrantExpiryIso(session, referenceTime = Date.now()) {
+    const grantWindowExpiry = referenceTime + artifactHandoffGrantMs;
+    const sessionExpiry = computeSessionExpiryMs(session, referenceTime);
+
+    return new Date(Math.min(grantWindowExpiry, sessionExpiry)).toISOString();
+}
+
+function isArtifactHandoffGrantExpired(grant, session, referenceTime = Date.now()) {
+    if (!grant?.authorized) {
+        return true;
+    }
+
+    const grantExpiry = new Date(grant.expiresAt || 0).getTime();
+    if (!Number.isFinite(grantExpiry) || referenceTime >= grantExpiry) {
+        return true;
+    }
+
+    return isSessionExpired(session, referenceTime);
+}
+
+function assertArtifactHandoffGrant(session, correlation) {
+    const grant = session?.artifactHandoff;
+
+    if (!grant?.authorized || isArtifactHandoffGrantExpired(grant, session)) {
+        throw new ApexMergeError(
+            MERGE_ERROR.ARTIFACT_HANDOFF_NOT_AUTHORIZED,
+            'Artifact handoff is not authorized for this merge session.',
+            { mergeSessionId: session.mergeSessionId }
+        );
+    }
+
+    if (
+        grant.mergeSessionId &&
+        grant.mergeSessionId !== session.mergeSessionId
+    ) {
+        throw new ApexMergeError(
+            MERGE_ERROR.ARTIFACT_HANDOFF_NOT_AUTHORIZED,
+            'Artifact handoff grant does not belong to this session.'
+        );
+    }
+
+    if (
+        grant.comparisonId !== correlation.comparisonId ||
+        grant.deploymentPlanId !== correlation.deploymentPlanId ||
+        grant.mergeManifestId !== correlation.mergeManifestId
+    ) {
+        throw new ApexMergeError(
+            MERGE_ERROR.CORRELATION_MISMATCH,
+            'Artifact handoff grant does not match the requested correlation.'
+        );
+    }
+}
+
+function requireOAuthCredentials(body = {}) {
+    const refreshToken = normalizeValue(body.refreshToken);
+    const instanceUrl = normalizeValue(body.instanceUrl);
+    const orgId = normalizeValue(body.orgId);
+
+    if (!refreshToken || !instanceUrl || !orgId) {
+        throw new ApexMergeError(
+            MERGE_ERROR.INVALID_REQUEST,
+            'refreshToken, instanceUrl, and orgId are required.'
+        );
+    }
+
+    return { refreshToken, instanceUrl, orgId };
+}
+
+async function authorizeArtifactHandoff(mergeSessionId, body = {}) {
+    const session = loadSealedSessionForHandoff(mergeSessionId);
+    const correlation = requireHandoffCorrelation(body);
+    const credentials = requireOAuthCredentials(body);
+
+    assertManifestCorrelation(session.manifest, correlation);
+
+    if (session.manifest.mergeSessionId !== session.mergeSessionId) {
+        throw new ApexMergeError(
+            MERGE_ERROR.CORRELATION_MISMATCH,
+            'Manifest mergeSessionId does not match session.'
+        );
+    }
+
+    let verifiedOrgId;
+
+    try {
+        verifiedOrgId = await resolveDestinationOrgIdentity({
+            refreshToken: credentials.refreshToken,
+            instanceUrl: credentials.instanceUrl,
+            requestedOrgId: credentials.orgId
+        });
+    } catch (error) {
+        throw mapIdentityError(error);
+    }
+
+    if (!verifiedOrgId) {
+        throw new ApexMergeError(
+            MERGE_ERROR.DESTINATION_AUTH_FAILED,
+            'Destination org authentication failed.'
+        );
+    }
+
+    const authorizedAt = new Date().toISOString();
+    const expiresAt = buildGrantExpiryIso(session);
+
+    const artifactHandoff = {
+        authorized: true,
+        verifiedOrgId,
+        mergeSessionId: session.mergeSessionId,
+        comparisonId: correlation.comparisonId,
+        deploymentPlanId: correlation.deploymentPlanId,
+        mergeManifestId: correlation.mergeManifestId,
+        authorizedAt,
+        expiresAt
+    };
+
+    patchSessionRaw(mergeSessionId, { artifactHandoff });
+
+    return {
+        success: true,
+        authorized: true,
+        mergeSessionId: session.mergeSessionId,
+        mergeManifestId: correlation.mergeManifestId,
+        verifiedOrgId,
+        expiresAt
+    };
 }
 
 function resolveSessionUnit(session, metadataName) {
@@ -138,9 +321,6 @@ function verifyArtifactIntegrity(content, descriptor, artifactId) {
     return Buffer.from(normalized, 'utf8');
 }
 
-/**
- * Retrieve verified UTF-8 artifact bytes for Salesforce handoff (Phase 1.6a).
- */
 function retrieveSealedMergeArtifact({
     mergeSessionId,
     artifactId,
@@ -158,22 +338,23 @@ function retrieveSealedMergeArtifact({
     }
 
     const session = loadSealedSessionForHandoff(mergeSessionId);
-    const manifest = session.manifest;
-
-    assertManifestCorrelation(manifest, {
+    const correlation = requireHandoffCorrelation({
         comparisonId,
         deploymentPlanId,
         mergeManifestId
     });
 
-    if (manifest.mergeSessionId !== session.mergeSessionId) {
+    assertManifestCorrelation(session.manifest, correlation);
+    assertArtifactHandoffGrant(session, correlation);
+
+    if (session.manifest.mergeSessionId !== session.mergeSessionId) {
         throw new ApexMergeError(
             MERGE_ERROR.CORRELATION_MISMATCH,
             'Manifest mergeSessionId does not match session.'
         );
     }
 
-    const located = findManifestArtifact(manifest, normalizedArtifactId);
+    const located = findManifestArtifact(session.manifest, normalizedArtifactId);
 
     if (!located) {
         throw new ApexMergeError(
@@ -214,25 +395,17 @@ function retrieveSealedMergeArtifact({
     );
 }
 
-function getSealedSessionForHandoff(mergeSessionId, query = {}) {
-    const correlation = requireHandoffCorrelation(query);
-    const session = loadSealedSessionForHandoff(mergeSessionId);
-
-    assertManifestCorrelation(session.manifest, correlation);
-
-    if (session.mergeSessionId !== String(mergeSessionId).trim()) {
-        throw new ApexMergeError(
-            MERGE_ERROR.CORRELATION_MISMATCH,
-            'mergeSessionId does not match session.'
-        );
-    }
-
-    return session;
-}
-
 module.exports = {
+    DEFAULT_ARTIFACT_HANDOFF_GRANT_MS,
+    authorizeArtifactHandoff,
     retrieveSealedMergeArtifact,
-    getSealedSessionForHandoff,
     requireHandoffCorrelation,
-    loadSealedSessionForHandoff
+    loadSealedSessionForHandoff,
+    assertArtifactHandoffGrant,
+    isArtifactHandoffGrantExpired,
+    buildGrantExpiryIso,
+    setResolveDestinationOrgIdentityForTests,
+    resetResolveDestinationOrgIdentityForTests,
+    setArtifactHandoffGrantWindowForTests,
+    resetArtifactHandoffGrantWindowForTests
 };

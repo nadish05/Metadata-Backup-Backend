@@ -22,7 +22,10 @@ function mapMergeError(error) {
             INVALID_RESOLUTION_STRATEGY: 400,
             SESSION_SEALED: 409,
             SESSION_NOT_SEALED: 409,
-            ARTIFACT_NOT_FOUND: 404
+            ARTIFACT_NOT_FOUND: 404,
+            ARTIFACT_HANDOFF_NOT_AUTHORIZED: 403,
+            ORG_IDENTITY_MISMATCH: 403,
+            DESTINATION_AUTH_FAILED: 401
         };
 
         return {
@@ -98,6 +101,19 @@ exports.sealMergeSession = async (req, res) => {
 exports.getMergeSession = async (req, res) => {
     try {
         const result = mergeSessionService.getMergeSession(req.params.id);
+        return res.json(result);
+    } catch (error) {
+        const mapped = mapMergeError(error);
+        return res.status(mapped.httpStatus).json(mapped.body);
+    }
+};
+
+exports.authorizeArtifactHandoff = async (req, res) => {
+    try {
+        const result = await mergeSessionService.authorizeArtifactHandoff(
+            req.params.id,
+            req.body || {}
+        );
         return res.json(result);
     } catch (error) {
         const mapped = mapMergeError(error);

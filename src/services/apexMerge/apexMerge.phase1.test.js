@@ -31,7 +31,20 @@ const {
     SESSION_STATUS
 } = require('./mergeSession.store');
 const mergeSessionService = require('./mergeSession.service');
-const { retrieveSealedMergeArtifact } = require('./apexMergeArtifactHandoff.service');
+const {
+    retrieveSealedMergeArtifact,
+    authorizeArtifactHandoff,
+    buildGrantExpiryIso,
+    setResolveDestinationOrgIdentityForTests,
+    resetResolveDestinationOrgIdentityForTests,
+    setArtifactHandoffGrantWindowForTests,
+    resetArtifactHandoffGrantWindowForTests
+} = require('./apexMergeArtifactHandoff.service');
+const { OrgLockIdentityError } = require('../deploymentOrgLock/deploymentOrgLock.errors');
+const {
+    computeSessionExpiryMs,
+    patchSessionRaw
+} = require('./mergeSession.store');
 const { getSession } = require('./mergeSession.store');
 const { assertNoDestinationDrift } = require('./apexMergeDrift.service');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
@@ -447,7 +460,9 @@ async function main() {
     });
 
     function buildSealedHandoffFixture(overrides = {}) {
-        clearAllSessions();
+        if (overrides.clearSessions !== false) {
+            clearAllSessions();
+        }
 
         const clsContent =
             overrides.clsContent ||
@@ -499,6 +514,53 @@ async function main() {
         };
     }
 
+    const DEFAULT_HANDOFF_ORG = '00D000000000001AAA';
+
+    function mockDestinationOAuth({
+        verifiedOrgId = DEFAULT_HANDOFF_ORG,
+        failWith = null
+    } = {}) {
+        if (failWith) {
+            setResolveDestinationOrgIdentityForTests(async () => {
+                throw failWith;
+            });
+            return;
+        }
+
+        setResolveDestinationOrgIdentityForTests(async ({ requestedOrgId }) => {
+            return verifiedOrgId || requestedOrgId;
+        });
+    }
+
+    function buildAuthorizeBody(fixture, overrides = {}) {
+        return {
+            refreshToken: 'refresh-token-mock',
+            instanceUrl: 'https://destination.example.my.salesforce.com',
+            orgId: DEFAULT_HANDOFF_ORG,
+            comparisonId: fixture.query.comparisonId,
+            deploymentPlanId: fixture.query.deploymentPlanId,
+            mergeManifestId: fixture.query.mergeManifestId,
+            ...overrides
+        };
+    }
+
+    async function authorizeHandoffFixture(fixture, overrides = {}) {
+        mockDestinationOAuth(overrides.oauth || {});
+        const body = buildAuthorizeBody(fixture, overrides.body);
+        const result = await authorizeArtifactHandoff(fixture.mergeSessionId, body);
+
+        if (overrides.expectReject) {
+            throw new Error('Expected authorizeArtifactHandoff to reject');
+        }
+
+        return result;
+    }
+
+    function teardownHandoffOAuthMocks() {
+        resetResolveDestinationOrgIdentityForTests();
+        resetArtifactHandoffGrantWindowForTests();
+    }
+
     await runTest('sealed manifest includes stable artifact IDs for cls and metaXml', () => {
         const { manifest } = buildSealedHandoffFixture();
         const unit = manifest.units[0];
@@ -513,9 +575,11 @@ async function main() {
         assert.match(unit.artifacts.metaXml.artifactId, /_Demo_metaXml$/);
     });
 
-    await runTest('handoff returns exact UTF-8 bytes with matching hash and length', () => {
+    await runTest('handoff returns exact UTF-8 bytes with matching hash and length', async () => {
+        const fixture = buildSealedHandoffFixture();
         const { mergeSessionId, manifest, clsContent, metaContent, query } =
-            buildSealedHandoffFixture();
+            fixture;
+        await authorizeHandoffFixture(fixture);
         const clsId = manifest.units[0].artifacts.cls.artifactId;
         const metaId = manifest.units[0].artifacts.metaXml.artifactId;
 
@@ -540,10 +604,13 @@ async function main() {
             clsBytes.length,
             manifest.units[0].artifacts.cls.byteLength
         );
+        teardownHandoffOAuthMocks();
     });
 
-    await runTest('handoff rejects unknown artifact ID', () => {
-        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+    await runTest('handoff rejects unknown artifact ID', async () => {
+        const fixture = buildSealedHandoffFixture();
+        const { mergeSessionId, manifest, query } = fixture;
+        await authorizeHandoffFixture(fixture);
 
         assert.throws(
             () =>
@@ -554,10 +621,13 @@ async function main() {
                 }),
             (error) => error.code === MERGE_ERROR.ARTIFACT_NOT_FOUND
         );
+        teardownHandoffOAuthMocks();
     });
 
-    await runTest('handoff rejects unknown session', () => {
-        const { manifest, query } = buildSealedHandoffFixture();
+    await runTest('handoff rejects unknown session', async () => {
+        const fixture = buildSealedHandoffFixture();
+        const { manifest, query } = fixture;
+        await authorizeHandoffFixture(fixture);
 
         assert.throws(
             () =>
@@ -568,10 +638,13 @@ async function main() {
                 }),
             (error) => error.code === MERGE_ERROR.SESSION_NOT_FOUND
         );
+        teardownHandoffOAuthMocks();
     });
 
-    await runTest('handoff rejects expired sealed session', () => {
-        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+    await runTest('handoff rejects expired sealed session', async () => {
+        const fixture = buildSealedHandoffFixture();
+        const { mergeSessionId, manifest, query } = fixture;
+        await authorizeHandoffFixture(fixture);
         setTtlForTests(1, 60 * 60 * 1000);
 
         require('./mergeSession.store').patchSessionRaw(mergeSessionId, {
@@ -589,6 +662,7 @@ async function main() {
         );
 
         resetTtlForTests();
+        teardownHandoffOAuthMocks();
     });
 
     await runTest('handoff rejects unsealed session', () => {
@@ -631,8 +705,10 @@ async function main() {
         );
     });
 
-    await runTest('handoff rejects correlation mismatches', () => {
-        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+    await runTest('handoff rejects correlation mismatches', async () => {
+        const fixture = buildSealedHandoffFixture();
+        const { mergeSessionId, manifest, query } = fixture;
+        await authorizeHandoffFixture(fixture);
         const artifactId = manifest.units[0].artifacts.cls.artifactId;
 
         const cases = [
@@ -655,10 +731,13 @@ async function main() {
                 (error) => error.code === MERGE_ERROR.CORRELATION_MISMATCH
             );
         }
+        teardownHandoffOAuthMocks();
     });
 
-    await runTest('handoff rejects tampered in-memory artifact bytes', () => {
-        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+    await runTest('handoff rejects tampered in-memory artifact bytes', async () => {
+        const fixture = buildSealedHandoffFixture();
+        const { mergeSessionId, manifest, query } = fixture;
+        await authorizeHandoffFixture(fixture);
         const artifactId = manifest.units[0].artifacts.cls.artifactId;
 
         const live = getSession(mergeSessionId);
@@ -675,14 +754,16 @@ async function main() {
                 }),
             (error) => error.code === MERGE_ERROR.HASH_MISMATCH
         );
+        teardownHandoffOAuthMocks();
     });
 
-    await runTest('handoff cannot read artifacts from another sealed session', () => {
+    await runTest('handoff cannot read artifacts from another sealed session', async () => {
         const first = buildSealedHandoffFixture({
             comparisonId: 'cmp-a',
             deploymentPlanId: 'plan-a'
         });
         const second = buildSealedHandoffFixture({
+            clearSessions: false,
             comparisonId: 'cmp-b',
             deploymentPlanId: 'plan-b',
             classes: [
@@ -702,6 +783,9 @@ async function main() {
             ]
         });
 
+        await authorizeHandoffFixture(first);
+        await authorizeHandoffFixture(second);
+
         assert.throws(
             () =>
                 retrieveSealedMergeArtifact({
@@ -713,6 +797,349 @@ async function main() {
                 }),
             (error) => error.code === MERGE_ERROR.ARTIFACT_NOT_FOUND
         );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('artifact handoff authorize succeeds with valid OAuth and matching org', async () => {
+        const fixture = buildSealedHandoffFixture();
+
+        const result = await authorizeHandoffFixture(fixture);
+
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(result.authorized, true);
+        assert.strictEqual(result.mergeSessionId, fixture.mergeSessionId);
+        assert.strictEqual(result.mergeManifestId, fixture.manifest.mergeManifestId);
+        assert.strictEqual(result.verifiedOrgId, DEFAULT_HANDOFF_ORG);
+        assert.ok(result.expiresAt);
+
+        const session = getSession(fixture.mergeSessionId);
+        assert.strictEqual(session.artifactHandoff.authorized, true);
+        assert.strictEqual(session.artifactHandoff.verifiedOrgId, DEFAULT_HANDOFF_ORG);
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('artifact handoff authorize rejects invalid refresh token', async () => {
+        const fixture = buildSealedHandoffFixture();
+        mockDestinationOAuth({
+            failWith: new OrgLockIdentityError(
+                'Destination org identity verification failed: unable to authenticate.'
+            )
+        });
+
+        await assert.rejects(
+            () => authorizeArtifactHandoff(fixture.mergeSessionId, buildAuthorizeBody(fixture)),
+            (error) => error.code === MERGE_ERROR.DESTINATION_AUTH_FAILED
+        );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('artifact handoff authorize rejects revoked refresh token', async () => {
+        const fixture = buildSealedHandoffFixture();
+        mockDestinationOAuth({
+            failWith: new OrgLockIdentityError(
+                'Destination org identity verification failed: unable to authenticate.'
+            )
+        });
+
+        await assert.rejects(
+            () =>
+                authorizeArtifactHandoff(fixture.mergeSessionId, {
+                    ...buildAuthorizeBody(fixture),
+                    refreshToken: 'revoked-token'
+                }),
+            (error) => error.code === MERGE_ERROR.DESTINATION_AUTH_FAILED
+        );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('artifact handoff authorize rejects userinfo failure', async () => {
+        const fixture = buildSealedHandoffFixture();
+        mockDestinationOAuth({
+            failWith: new OrgLockIdentityError(
+                'Destination org identity verification failed: identity lookup failed.'
+            )
+        });
+
+        await assert.rejects(
+            () => authorizeArtifactHandoff(fixture.mergeSessionId, buildAuthorizeBody(fixture)),
+            (error) => error.code === MERGE_ERROR.DESTINATION_AUTH_FAILED
+        );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('artifact handoff authorize rejects org identity mismatch', async () => {
+        const fixture = buildSealedHandoffFixture();
+        mockDestinationOAuth({
+            failWith: new OrgLockIdentityError(
+                'Destination org identity verification failed: request orgId does not match authenticated org.'
+            )
+        });
+
+        await assert.rejects(
+            () => authorizeArtifactHandoff(fixture.mergeSessionId, buildAuthorizeBody(fixture)),
+            (error) => error.code === MERGE_ERROR.ORG_IDENTITY_MISMATCH
+        );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('artifact handoff authorize rejects missing refresh token', async () => {
+        const fixture = buildSealedHandoffFixture();
+
+        await assert.rejects(
+            () =>
+                authorizeArtifactHandoff(fixture.mergeSessionId, {
+                    ...buildAuthorizeBody(fixture),
+                    refreshToken: ''
+                }),
+            (error) => error.code === MERGE_ERROR.INVALID_REQUEST
+        );
+    });
+
+    await runTest('artifact handoff authorize rejects missing instance URL', async () => {
+        const fixture = buildSealedHandoffFixture();
+
+        await assert.rejects(
+            () =>
+                authorizeArtifactHandoff(fixture.mergeSessionId, {
+                    ...buildAuthorizeBody(fixture),
+                    instanceUrl: ''
+                }),
+            (error) => error.code === MERGE_ERROR.INVALID_REQUEST
+        );
+    });
+
+    await runTest('artifact handoff authorize rejects missing org ID', async () => {
+        const fixture = buildSealedHandoffFixture();
+
+        await assert.rejects(
+            () =>
+                authorizeArtifactHandoff(fixture.mergeSessionId, {
+                    ...buildAuthorizeBody(fixture),
+                    orgId: ''
+                }),
+            (error) => error.code === MERGE_ERROR.INVALID_REQUEST
+        );
+    });
+
+    await runTest('artifact handoff authorize rejects wrong correlation IDs', async () => {
+        const fixture = buildSealedHandoffFixture();
+        mockDestinationOAuth();
+
+        const cases = [
+            { comparisonId: 'wrong-cmp' },
+            { deploymentPlanId: 'wrong-plan' },
+            {
+                mergeManifestId:
+                    'manifest_00000000-0000-4000-8000-000000000099'
+            }
+        ];
+
+        for (const patch of cases) {
+            await assert.rejects(
+                () =>
+                    authorizeArtifactHandoff(
+                        fixture.mergeSessionId,
+                        buildAuthorizeBody(fixture, patch)
+                    ),
+                (error) => error.code === MERGE_ERROR.CORRELATION_MISMATCH
+            );
+        }
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('artifact handoff authorize rejects unsealed session', async () => {
+        clearAllSessions();
+        const session = createSessionRecord({
+            comparisonId: 'cmp-open-auth',
+            deploymentPlanId: 'plan-open-auth',
+            repoUrl: 'https://github.com/example/repo.git',
+            sourceBranch: 'source',
+            destinationBranch: 'destination',
+            gitPins: { sourceHeadSha: 'a', destinationHeadSha: 'b' },
+            classes: [
+                {
+                    metadataName: 'Open',
+                    filePath: 'force-app/main/default/classes/Open.cls',
+                    metaXmlPath: 'force-app/main/default/classes/Open.cls-meta.xml',
+                    mergeMode: 'FULL',
+                    mergeBaseSha: 'base',
+                    conflictState: 'NONE',
+                    artifacts: {
+                        cls: { content: 'public class Open {}', conflict: false },
+                        metaXml: { content: '<xml/>', conflict: false }
+                    }
+                }
+            ]
+        });
+
+        const manifest = buildApexMergeManifest(session);
+        mockDestinationOAuth();
+
+        await assert.rejects(
+            () =>
+                authorizeArtifactHandoff(session.mergeSessionId, {
+                    refreshToken: 'rt',
+                    instanceUrl: 'https://x.salesforce.com',
+                    orgId: DEFAULT_HANDOFF_ORG,
+                    comparisonId: manifest.comparisonId,
+                    deploymentPlanId: manifest.deploymentPlanId,
+                    mergeManifestId: manifest.mergeManifestId
+                }),
+            (error) => error.code === MERGE_ERROR.SESSION_NOT_SEALED
+        );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('handoff GET rejects missing authorization grant', () => {
+        const { mergeSessionId, manifest, query } = buildSealedHandoffFixture();
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId,
+                    artifactId: manifest.units[0].artifacts.cls.artifactId,
+                    ...query
+                }),
+            (error) => error.code === MERGE_ERROR.ARTIFACT_HANDOFF_NOT_AUTHORIZED
+        );
+    });
+
+    await runTest('handoff GET rejects expired authorization grant', async () => {
+        const fixture = buildSealedHandoffFixture();
+        await authorizeHandoffFixture(fixture);
+
+        patchSessionRaw(fixture.mergeSessionId, {
+            artifactHandoff: {
+                ...getSession(fixture.mergeSessionId).artifactHandoff,
+                expiresAt: new Date(Date.now() - 1000).toISOString()
+            }
+        });
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId: fixture.mergeSessionId,
+                    artifactId: fixture.manifest.units[0].artifacts.cls.artifactId,
+                    ...fixture.query
+                }),
+            (error) => error.code === MERGE_ERROR.ARTIFACT_HANDOFF_NOT_AUTHORIZED
+        );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('handoff GET succeeds with valid grant', async () => {
+        const fixture = buildSealedHandoffFixture();
+        await authorizeHandoffFixture(fixture);
+
+        const bytes = retrieveSealedMergeArtifact({
+            mergeSessionId: fixture.mergeSessionId,
+            artifactId: fixture.manifest.units[0].artifacts.cls.artifactId,
+            ...fixture.query
+        });
+
+        assert.strictEqual(bytes.toString('utf8'), fixture.clsContent);
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('handoff grant on one session cannot authorize GET on another', async () => {
+        const first = buildSealedHandoffFixture({ comparisonId: 'cmp-x' });
+        const second = buildSealedHandoffFixture({
+            clearSessions: false,
+            comparisonId: 'cmp-y'
+        });
+
+        await authorizeHandoffFixture(first);
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId: second.mergeSessionId,
+                    artifactId: first.manifest.units[0].artifacts.cls.artifactId,
+                    ...second.query
+                }),
+            (error) => error.code === MERGE_ERROR.ARTIFACT_HANDOFF_NOT_AUTHORIZED
+        );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('handoff GET with different manifest rejects grant correlation', async () => {
+        const fixture = buildSealedHandoffFixture();
+        await authorizeHandoffFixture(fixture);
+
+        assert.throws(
+            () =>
+                retrieveSealedMergeArtifact({
+                    mergeSessionId: fixture.mergeSessionId,
+                    artifactId: fixture.manifest.units[0].artifacts.cls.artifactId,
+                    ...fixture.query,
+                    mergeManifestId:
+                        'manifest_00000000-0000-4000-8000-000000000099'
+                }),
+            (error) => error.code === MERGE_ERROR.CORRELATION_MISMATCH
+        );
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('handoff GET with different comparison or plan rejects grant', async () => {
+        const fixture = buildSealedHandoffFixture();
+        await authorizeHandoffFixture(fixture);
+        const artifactId = fixture.manifest.units[0].artifacts.cls.artifactId;
+
+        for (const patch of [
+            { comparisonId: 'other-cmp' },
+            { deploymentPlanId: 'other-plan' }
+        ]) {
+            assert.throws(
+                () =>
+                    retrieveSealedMergeArtifact({
+                        mergeSessionId: fixture.mergeSessionId,
+                        artifactId,
+                        ...fixture.query,
+                        ...patch
+                    }),
+                (error) => error.code === MERGE_ERROR.CORRELATION_MISMATCH
+            );
+        }
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('handoff grant expiry does not exceed merge session expiry', () => {
+        const fixture = buildSealedHandoffFixture();
+        const session = getSession(fixture.mergeSessionId);
+        setArtifactHandoffGrantWindowForTests(60 * 60 * 1000);
+
+        const grantExpiry = buildGrantExpiryIso(session);
+        const sessionExpiryMs = computeSessionExpiryMs(session);
+
+        assert.ok(new Date(grantExpiry).getTime() <= sessionExpiryMs);
+        teardownHandoffOAuthMocks();
+    });
+
+    await runTest('repeated authorize replaces grant for new verified org', async () => {
+        const fixture = buildSealedHandoffFixture();
+        const otherOrg = '00D000000000002AAA';
+
+        mockDestinationOAuth({ verifiedOrgId: DEFAULT_HANDOFF_ORG });
+        await authorizeArtifactHandoff(fixture.mergeSessionId, buildAuthorizeBody(fixture));
+
+        mockDestinationOAuth({ verifiedOrgId: otherOrg });
+        await authorizeArtifactHandoff(fixture.mergeSessionId, {
+            ...buildAuthorizeBody(fixture),
+            orgId: otherOrg
+        });
+
+        assert.strictEqual(
+            getSession(fixture.mergeSessionId).artifactHandoff.verifiedOrgId,
+            otherOrg
+        );
+
+        const bytes = retrieveSealedMergeArtifact({
+            mergeSessionId: fixture.mergeSessionId,
+            artifactId: fixture.manifest.units[0].artifacts.cls.artifactId,
+            ...fixture.query
+        });
+        assert.ok(bytes.length > 0);
+        teardownHandoffOAuthMocks();
     });
 
     await runTest('multiple classes expose distinct artifact IDs', () => {

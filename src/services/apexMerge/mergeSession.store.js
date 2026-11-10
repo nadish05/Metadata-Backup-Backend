@@ -51,6 +51,27 @@ function createSessionRecord(session) {
     return record;
 }
 
+function computeSessionExpiryMs(session, referenceTime = Date.now()) {
+    if (!session) {
+        return referenceTime;
+    }
+
+    const createdMs = new Date(session.createdAt).getTime();
+    const sealedMs = session.sealedAt
+        ? new Date(session.sealedAt).getTime()
+        : null;
+
+    const maxAgeExpiry = Number.isFinite(createdMs)
+        ? createdMs + maxAgeMs
+        : referenceTime + maxAgeMs;
+    const sealedExpiry =
+        session.status === SESSION_STATUS.SEALED && sealedMs !== null
+            ? sealedMs + ttlMs
+            : maxAgeExpiry;
+
+    return Math.min(maxAgeExpiry, sealedExpiry);
+}
+
 function isSessionExpired(session, referenceTime = Date.now()) {
     if (!session) {
         return true;
@@ -183,6 +204,9 @@ module.exports = {
     patchSessionRaw,
     isSessionExpired,
     purgeSession,
+    computeSessionExpiryMs,
+    getSessionTtlMs: () => ttlMs,
+    getSessionMaxAgeMs: () => maxAgeMs,
     setTtlForTests,
     resetTtlForTests
 };

@@ -437,7 +437,8 @@ function getMergeSession(mergeSessionId) {
 }
 
 const {
-    retrieveSealedMergeArtifact
+    retrieveSealedMergeArtifact,
+    authorizeArtifactHandoff
 } = require('./apexMergeArtifactHandoff.service');
 
 module.exports = {
@@ -446,6 +447,7 @@ module.exports = {
     resolveMergeSession,
     sealMergeSession,
     getMergeSession,
+    authorizeArtifactHandoff,
     retrieveSealedMergeArtifact,
     mapClassPreviewResponse,
     buildPerClassFocusResponse,

@@ -11,6 +11,10 @@ router.get('/apex/sessions/:id', mergeController.getMergeSession);
 router.post('/apex/sessions/:id/preview', mergeController.previewMergeSession);
 router.post('/apex/sessions/:id/resolve', mergeController.resolveMergeSession);
 router.post('/apex/sessions/:id/seal', mergeController.sealMergeSession);
+router.post(
+    '/apex/sessions/:id/artifact-handoff/authorize',
+    mergeController.authorizeArtifactHandoff
+);
 router.get(
     '/apex/sessions/:id/artifacts/:artifactId',
     mergeController.getMergeSessionArtifact
