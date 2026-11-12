@@ -5,16 +5,18 @@ const {
 } = require('./metadata.controller');
 
 const {
-    setStatus
-} = require('../status.store');
-
-const {
+    setStatus,
     getStatus
 } = require('../status.store');
 
 const {
     cleanupRetrievalResources
 } = require('../services/retrievalCleanup.service');
+
+const {
+    publishOrgMigrationSnapshot,
+    logMigrationFailure
+} = require('../services/gitMigration/gitMigrationFacade.service');
 
 const RETRIEVAL_CLI_ALIAS = 'temporg';
 
@@ -134,46 +136,12 @@ async function runMigration(
     console.log('Metadata retrieved');
     setStatus('Metadata retrieved');
 
-    console.log('Initializing Git...');
-    setStatus('Initializing Git');
-
-    await execAsync(
-        `cd ${projectPath} && git init`
-    );
-
-    console.log('Adding files...');
-    setStatus('Adding files');
-    await execAsync(
-        `cd ${projectPath} && git add .`
-    );
-
-    console.log('Creating commit...');
-    setStatus('Creating commit');
-
-    await execAsync(
-        `cd ${projectPath} && git config user.email "backup@system.com" && ` +
-        `git config user.name "Salesforce Backup Bot" && ` +
-        `git commit -m "Salesforce Metadata Backup"`
-    );
-
-    console.log('Pushing to GitHub...');
-    setStatus('Pushing to GitHub');
-
-    const githubToken =
-    process.env.GITHUB_TOKEN;
-
-    const authenticatedUrl =
-    repoUrl.replace(
-        'https://',
-        `https://${githubToken}@`
-    );
-
-    await execAsync(
-        `cd ${projectPath} && ` +
-        `git remote add origin ${authenticatedUrl} && ` +
-        `git checkout -B ${targetBranch} && ` +
-        `git push -u origin ${targetBranch} --force`
-    );
+    setStatus('Publishing Git snapshot');
+    await publishOrgMigrationSnapshot({
+        repoUrl,
+        branchName: targetBranch,
+        snapshotProjectPath: projectPath
+    });
 
     console.log('Push completed');
     setStatus('Push completed');
@@ -181,11 +149,7 @@ async function runMigration(
     
 } catch(error) {
 
-    console.error(
-        'BACKGROUND MIGRATION ERROR:',
-        error
-    );
-
+    logMigrationFailure(error, repoUrl);
     setStatus('Migration failed');
 
 } finally {
@@ -219,10 +183,7 @@ exports.migrateToGitHub = async (req, res) => {
             repoUrl,
             branchName
         ).catch(error => {
-            console.error(
-                'RUN MIGRATION FAILED:',
-                error
-            );
+            logMigrationFailure(error, req.body?.repoUrl);
         });
 
         return res.json({
@@ -265,4 +226,3 @@ exports.getMigrationStatus = async (req, res) => {
     }
 
 };
- 

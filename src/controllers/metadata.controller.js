@@ -26,6 +26,12 @@ const {
 const {
     runFlowVersionRetrievalExtension
 } = require('../services/retrieval/flowVersionRetrieval.service');
+const {
+    isSharedHistoryEnabled
+} = require('../services/gitMigration/gitMigrationFacade.service');
+const {
+    assertLegacyPublishAllowed
+} = require('../services/gitMigration/gitMigrationLegacyGuard.service');
 
 const RETRIEVAL_CLI_ALIAS = 'temporg';
 
@@ -1788,64 +1794,73 @@ console.timeEnd('retrieve');
  
 console.log('Metadata retrieval completed');
 
-// STEP 6 - GIT INIT
+if (!isSharedHistoryEnabled()) {
+    const retrieveAllRepoUrl =
+        req.body?.repoUrl ||
+        'https://github.com/nadish05/New-salesforce-Backup.git';
 
-console.log('Initializing Git...');
+    await assertLegacyPublishAllowed({
+        repoUrl: retrieveAllRepoUrl,
+        branchName: 'main'
+    });
 
-await execAsync(
-  `cd ${workspace}/backup-project && git init`
-);
+    console.log('Initializing Git...');
 
-await execAsync(
-  `cd ${workspace}/backup-project && git config user.email "backup@system.com"`
-);
+    await execAsync(
+        `cd ${workspace}/backup-project && git init`
+    );
 
-await execAsync(
-  `cd ${workspace}/backup-project && git config user.name "Metadata Backup"`
-);
+    await execAsync(
+        `cd ${workspace}/backup-project && git config user.email "backup@system.com"`
+    );
 
-console.log('Git initialized');
+    await execAsync(
+        `cd ${workspace}/backup-project && git config user.name "Metadata Backup"`
+    );
 
-// STEP 7 - COMMIT
+    console.log('Git initialized');
 
-console.log('Adding files...');
+    console.log('Adding files...');
 
-await execAsync(
-  `cd ${workspace}/backup-project && git add .`
-);
+    await execAsync(
+        `cd ${workspace}/backup-project && git add .`
+    );
 
-console.log('Creating commit...');
+    console.log('Creating commit...');
 
-await execAsync(
-  `cd ${workspace}/backup-project && git commit -m "Metadata Backup"`
-);
+    await execAsync(
+        `cd ${workspace}/backup-project && git commit -m "Metadata Backup"`
+    );
 
-console.log('Commit completed');
+    console.log('Commit completed');
 
-const githubToken = process.env.GITHUB_TOKEN;
+    const githubToken = process.env.GITHUB_TOKEN;
 
-const authenticatedRepoUrl =
-`https://${githubToken}@github.com/nadish05/New-salesforce-Backup.git`;
+    const authenticatedRepoUrl =
+        `https://${githubToken}@github.com/nadish05/New-salesforce-Backup.git`;
 
-console.log('Adding GitHub remote...');
+    console.log('Adding GitHub remote...');
 
-await execAsync(
-  `cd ${workspace}/backup-project && git branch -M main`
-);
+    await execAsync(
+        `cd ${workspace}/backup-project && git branch -M main`
+    );
 
-await execAsync(
-  `cd ${workspace}/backup-project && git remote add origin ${authenticatedRepoUrl}`
-);
+    await execAsync(
+        `cd ${workspace}/backup-project && git remote add origin ${authenticatedRepoUrl}`
+    );
 
-console.log('Pushing to GitHub...');
+    console.log('Pushing to GitHub...');
 
-await execAsync(
-  `cd ${workspace}/backup-project && git push origin main --force`
-);
+    await execAsync(
+        `cd ${workspace}/backup-project && git push origin main --force`
+    );
 
-console.log('GitHub push completed');
-
-
+    console.log('GitHub push completed');
+} else {
+    console.log(
+        'Shared-history mode: skipping retrieveAllMetadata Git publish (main preserved).'
+    );
+}
 
 // STEP 8 - FILE COUNT
 

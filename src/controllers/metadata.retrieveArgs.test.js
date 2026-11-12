@@ -772,7 +772,9 @@ async function main() {
         const retrieveCallIndex = githubSource.indexOf(
             'retrieveMetadataInternal('
         );
-        const gitAddIndex = githubSource.indexOf('git add .');
+        const publishIndex = githubSource.indexOf(
+            'publishOrgMigrationSnapshot('
+        );
         const secondRetrieveIndex = controllerSource.indexOf(
             'await runPostFirstRetrieveStandardValueSetRetrieval('
         );
@@ -781,7 +783,10 @@ async function main() {
         );
 
         assert.ok(retrieveCallIndex >= 0, 'expected retrieveMetadataInternal call');
-        assert.ok(gitAddIndex > retrieveCallIndex, 'git add must follow retrieve');
+        assert.ok(
+            publishIndex > retrieveCallIndex,
+            'publishOrgMigrationSnapshot must follow retrieve'
+        );
         assert.ok(
             secondRetrieveIndex >= 0,
             'expected post-first-retrieve StandardValueSet retrieve'
