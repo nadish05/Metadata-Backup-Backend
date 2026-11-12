@@ -118,6 +118,22 @@ async function remotePreflight(repoUrl) {
     return { clonePath, repoId };
 }
 
+function parseLsRemoteBranchLine(stdout) {
+    const line = String(stdout || '').trim();
+
+    if (!line) {
+        return { status: REF_STATUS.ABSENT, sha: null };
+    }
+
+    const sha = line.split(/\s+/)[0];
+
+    if (!/^[0-9a-f]{40}$/i.test(sha)) {
+        return { status: REF_STATUS.INVALID, sha: null };
+    }
+
+    return { status: REF_STATUS.PRESENT, sha };
+}
+
 async function lsRemoteHasBranch(repoUrl, branchName) {
     const authenticatedUrl = getAuthenticatedRepoUrl(repoUrl);
     const ref = `refs/heads/${branchName}`;
@@ -126,19 +142,8 @@ async function lsRemoteHasBranch(repoUrl, branchName) {
         const result = await execAsync(
             `git ls-remote ${shellQuote(authenticatedUrl)} ${shellQuote(ref)}`
         );
-        const line = String(result.stdout || '').trim();
 
-        if (!line) {
-            return { status: REF_STATUS.ABSENT, sha: null };
-        }
-
-        const sha = line.split(/\s+/)[0];
-
-        if (!/^[0-9a-f]{40}$/i.test(sha)) {
-            return { status: REF_STATUS.INVALID, sha: null };
-        }
-
-        return { status: REF_STATUS.PRESENT, sha };
+        return parseLsRemoteBranchLine(result.stdout);
     } catch (error) {
         throw mapRemoteFailure(error, {
             stage: 'ls_remote',
@@ -189,36 +194,15 @@ async function resolveRemoteBranchRef(clonePath, branchName) {
 }
 
 async function lsRemoteHasBranchFromClone(clonePath, branchName) {
-    let remoteUrl;
+    const ref = `refs/heads/${branchName}`;
 
     try {
-        const remote = await runGit(clonePath, 'remote get-url origin');
-        remoteUrl = remote.stdout.trim();
-    } catch (error) {
-        return {
-            status: REF_STATUS.LOOKUP_FAILED,
-            sha: null,
-            error: new GitMigrationError(
-                GIT_MIGRATION_ERROR.GIT_REF_LOOKUP_FAILED,
-                'Unable to read origin URL for ref lookup.'
-            )
-        };
-    }
+        const result = await runGit(
+            clonePath,
+            `ls-remote ${shellQuote('origin')} ${shellQuote(ref)}`
+        );
 
-    if (!remoteUrl) {
-        return {
-            status: REF_STATUS.LOOKUP_FAILED,
-            sha: null,
-            error: new GitMigrationError(
-                GIT_MIGRATION_ERROR.GIT_REPOSITORY_INVALID,
-                'Origin remote URL is missing.'
-            )
-        };
-    }
-
-    try {
-        const ls = await module.exports.lsRemoteHasBranch(remoteUrl, branchName);
-        return ls;
+        return parseLsRemoteBranchLine(result.stdout);
     } catch (error) {
         if (error instanceof GitMigrationError) {
             return {
@@ -231,7 +215,10 @@ async function lsRemoteHasBranchFromClone(clonePath, branchName) {
         return {
             status: REF_STATUS.LOOKUP_FAILED,
             sha: null,
-            error: mapRemoteFailure(error)
+            error: mapRemoteFailure(error, {
+                stage: 'ls_remote',
+                command: 'git ls-remote origin'
+            })
         };
     }
 }
@@ -251,5 +238,6 @@ module.exports = {
     cleanupMigrationClone,
     createMigrationClone,
     lsRemoteHasBranch,
+    lsRemoteHasBranchFromClone,
     mapRemoteFailure
 };

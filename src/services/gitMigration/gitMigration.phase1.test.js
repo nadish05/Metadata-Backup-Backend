@@ -467,18 +467,31 @@ async function main() {
             'git update-ref -d refs/remotes/origin/orphanGym'
         );
 
-        const remote = require('./gitMigrationRemote.service');
-        const originalLs = remote.lsRemoteHasBranch;
+        const shellPath = require.resolve('./gitMigration.shell');
+        const remotePath = require.resolve('./gitMigrationRemote.service');
+        delete require.cache[shellPath];
+        delete require.cache[remotePath];
 
-        remote.lsRemoteHasBranch = async () => {
-            throw new GitMigrationError(
-                GIT_MIGRATION_ERROR.GIT_REMOTE_FETCH_FAILED,
-                'Git remote fetch failed.'
-            );
+        const shell = require('./gitMigration.shell');
+        const origRunGit = shell.runGit;
+
+        shell.runGit = async (cwd, args, options) => {
+            if (String(args).startsWith('ls-remote')) {
+                const err = new Error('ls-remote failed');
+                err.code = 128;
+                err.stderr = 'fatal: simulated ls-remote failure';
+                throw err;
+            }
+
+            return origRunGit(cwd, args, options);
         };
 
+        const {
+            resolveRemoteBranchRef: resolveRefFresh
+        } = require('./gitMigrationRemote.service');
+
         try {
-            const ref = await resolveRemoteBranchRef(clonePath, 'orphanGym');
+            const ref = await resolveRefFresh(clonePath, 'orphanGym');
             assert.strictEqual(ref.status, REF_STATUS.LOOKUP_FAILED);
             assert.ok(ref.error instanceof GitMigrationError);
             assert.strictEqual(
@@ -486,7 +499,9 @@ async function main() {
                 GIT_MIGRATION_ERROR.GIT_REMOTE_FETCH_FAILED
             );
         } finally {
-            remote.lsRemoteHasBranch = originalLs;
+            shell.runGit = origRunGit;
+            delete require.cache[shellPath];
+            delete require.cache[remotePath];
             await cleanupMigrationClone(clonePath);
         }
     });
