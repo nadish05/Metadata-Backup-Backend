@@ -12,6 +12,7 @@ const {
 const { publishSharedOrgSnapshot } = require('./gitMigrationPublish.service');
 const { assertLegacyPublishAllowed } = require('./gitMigrationLegacyGuard.service');
 const { publishLegacyOrgSnapshot } = require('./gitMigrationLegacyPublish.service');
+const { formatGitDiagnosticForLog } = require('./gitMigration.diagnostics');
 
 async function publishOrgMigrationSnapshot({
     repoUrl,
@@ -55,6 +56,15 @@ function logMigrationFailure(error, repoUrl) {
             error.code,
             error.message
         );
+
+        const diagnostic = formatGitDiagnosticForLog(
+            error.details?.gitDiagnostic
+        );
+
+        if (diagnostic) {
+            console.error('GIT_MIGRATION_DIAG', repoId, JSON.stringify(diagnostic));
+        }
+
         return;
     }
 

@@ -20,6 +20,10 @@ const {
     execAsync,
     shellQuote
 } = require('./gitMigration.shell');
+const {
+    buildGitExecDiagnostic,
+    sanitizeGitOutput
+} = require('./gitMigration.diagnostics');
 
 const REF_STATUS = Object.freeze({
     PRESENT: 'PRESENT',
@@ -28,27 +32,35 @@ const REF_STATUS = Object.freeze({
     INVALID: 'INVALID'
 });
 
-function mapRemoteFailure(error) {
+function mapRemoteFailure(error, context = {}) {
     const kind = classifyExecError(error);
+    const gitDiagnostic = buildGitExecDiagnostic(error, context);
+    const cause = sanitizeGitOutput(error?.stderr || error?.message || '');
+    const details = {
+        cause,
+        gitDiagnostic
+    };
 
     if (kind === 'auth') {
         return new GitMigrationError(
             GIT_MIGRATION_ERROR.GIT_REMOTE_AUTH_FAILED,
-            'Git remote authentication failed.'
+            'Git remote authentication failed.',
+            details
         );
     }
 
     if (kind === 'network') {
         return new GitMigrationError(
             GIT_MIGRATION_ERROR.GIT_REMOTE_NETWORK_FAILED,
-            'Git remote network request failed.'
+            'Git remote network request failed.',
+            details
         );
     }
 
     return new GitMigrationError(
         GIT_MIGRATION_ERROR.GIT_REMOTE_FETCH_FAILED,
         'Git remote fetch failed.',
-        { cause: error.stderr || error.message }
+        details
     );
 }
 
@@ -75,14 +87,20 @@ async function createMigrationClone(repoUrl) {
             );
         }
 
-        throw mapRemoteFailure(error);
+        throw mapRemoteFailure(error, {
+            stage: 'clone',
+            command: 'git clone'
+        });
     }
 
     try {
         await runGit(clonePath, 'fetch --all');
     } catch (error) {
         await rm(clonePath, { recursive: true, force: true }).catch(() => {});
-        throw mapRemoteFailure(error);
+        throw mapRemoteFailure(error, {
+            stage: 'fetch_all',
+            command: 'git fetch --all'
+        });
     }
 
     try {
@@ -122,7 +140,10 @@ async function lsRemoteHasBranch(repoUrl, branchName) {
 
         return { status: REF_STATUS.PRESENT, sha };
     } catch (error) {
-        throw mapRemoteFailure(error);
+        throw mapRemoteFailure(error, {
+            stage: 'ls_remote',
+            command: 'git ls-remote'
+        });
     }
 }
 
@@ -229,5 +250,6 @@ module.exports = {
     resolveRemoteBranchRef,
     cleanupMigrationClone,
     createMigrationClone,
-    lsRemoteHasBranch
+    lsRemoteHasBranch,
+    mapRemoteFailure
 };
