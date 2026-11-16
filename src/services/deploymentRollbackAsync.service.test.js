@@ -7,7 +7,9 @@ const path = require('path');
 
 const {
     createDeploymentRollbackAsyncService,
-    getDefaultRollbackOperationStore
+    getDefaultRollbackOperationStore,
+    INCOMPLETE_SALESFORCE_CONTEXT_CODE,
+    resolveRollbackOperationStoreForRequest
 } = require('./deploymentRollbackAsync.service');
 const {
     createRollbackOperationService
@@ -24,7 +26,9 @@ const {
 const { ROLLBACK_CODE } = require('./deploymentSnapshot/snapshotRestore.errors');
 const {
     getSharedRollbackOperationStore,
-    resetSharedRollbackOperationStoreForTests
+    getSalesforceInlineRollbackOperationStore,
+    resetSharedRollbackOperationStoreForTests,
+    resetSalesforceInlineRollbackOperationStoreForTests
 } = require('./deploymentSnapshot/rollbackOperation.resolver');
 const {
     STORAGE_MODE_ENV,
@@ -59,6 +63,32 @@ async function waitForRelease() {
 
 let releaseExecution;
 
+const SNAPSHOT_INLINE = 'snapshot_sf_inline_async';
+const DEST_INLINE = '00DSFINLINE';
+
+function buildSalesforceMediatedStartPayload(snapshotId = SNAPSHOT_INLINE) {
+    return {
+        historyId: 'history_sf_inline_async',
+        refreshToken: 'token',
+        instanceUrl: 'https://example.my.salesforce.com',
+        snapshotId,
+        orgId: DEST_INLINE,
+        snapshotExport: {
+            snapshotId,
+            destinationOrgId: DEST_INLINE,
+            status: 'SEALED',
+            rollbackEligible: true,
+            members: []
+        },
+        artifacts: {
+            [`snapshots/${snapshotId}/destination-before/ApexClass/Test`]: {
+                contentBase64: Buffer.from('test').toString('base64'),
+                size: 4
+            }
+        }
+    };
+}
+
 function restoreEnv(previous) {
     Object.entries(previous).forEach(([key, value]) => {
         if (value === undefined) {
@@ -68,6 +98,7 @@ function restoreEnv(previous) {
         }
     });
     resetSharedRollbackOperationStoreForTests();
+    resetSalesforceInlineRollbackOperationStoreForTests();
 }
 
 async function main() {
@@ -84,6 +115,77 @@ async function main() {
     delete process.env[STORAGE_MODE_ENV];
     delete process.env[DURABLE_ROOT_ENV];
     resetSharedRollbackOperationStoreForTests();
+    resetSalesforceInlineRollbackOperationStoreForTests();
+
+    const inlineStore = getSalesforceInlineRollbackOperationStore();
+    let sfExecuteStoreAccessor = null;
+    let sfExecuteClaimed = false;
+    const sfProductionService = createDeploymentRollbackAsyncService({
+        executeRollback: async (args) => {
+            sfExecuteStoreAccessor = args.rollbackOperationStore;
+            const operationStore = args.rollbackOperationStore();
+            const claimService = createRollbackOperationService({
+                getStore: () => operationStore
+            });
+            await claimService.claimOperation({
+                operationId: args.operationId,
+                destinationOrgId: args.orgId,
+                snapshotId: args.snapshotId
+            });
+            sfExecuteClaimed = true;
+            return {
+                body: {
+                    success: true,
+                    operationId: args.operationId,
+                    operationStatus: ROLLBACK_OPERATION_STATUS.SUCCEEDED,
+                    manualRollbackRequired: true,
+                    partialSuccess: true,
+                    manualRollbackItems: [
+                        {
+                            metadataType: 'RecordType',
+                            metadataName: 'Opportunity.X',
+                            reasonCode: 'RECORDTYPE_DELETE_UNSUPPORTED'
+                        }
+                    ]
+                }
+            };
+        }
+    });
+    const sfStartPayload = buildSalesforceMediatedStartPayload();
+    assert.strictEqual(
+        resolveRollbackOperationStoreForRequest(sfStartPayload),
+        inlineStore,
+        'Salesforce-mediated start must resolve to inline store'
+    );
+    const sfStart = await sfProductionService.startRollback(sfStartPayload);
+    assert.strictEqual(sfStart.success, true);
+    assert.strictEqual(sfStart.accepted, true);
+    assert.strictEqual(sfStart.status, ROLLBACK_OPERATION_STATUS.IN_PROGRESS);
+    assert.ok(sfStart.operationId);
+    assert.strictEqual(sfExecuteStoreAccessor(), inlineStore);
+    const sfStatus = await waitForStatus(
+        sfProductionService,
+        sfStart.operationId,
+        ROLLBACK_OPERATION_STATUS.SUCCEEDED
+    );
+    assert.strictEqual(sfStatus.operationId, sfStart.operationId);
+    assert.strictEqual(sfExecuteClaimed, true);
+    assert.strictEqual(sfStatus.result.partialSuccess, true);
+    assert.strictEqual(sfStatus.result.manualRollbackItems.length, 1);
+    const sfDuplicate = await sfProductionService.startRollback(sfStartPayload);
+    assert.strictEqual(sfDuplicate.operationId, sfStart.operationId);
+
+    const partialExportOnly = await createDeploymentRollbackAsyncService().startRollback(
+        {
+            ...buildSalesforceMediatedStartPayload('snapshot_partial'),
+            artifacts: undefined
+        }
+    );
+    assert.strictEqual(partialExportOnly.httpStatus, 400);
+    assert.strictEqual(
+        partialExportOnly.body.code,
+        INCOMPLETE_SALESFORCE_CONTEXT_CODE
+    );
 
     const unavailableStart = await createDeploymentRollbackAsyncService().startRollback(
         {
@@ -151,6 +253,16 @@ async function main() {
         sharedStart.operationId
     );
     assert.strictEqual(sharedCompleted.resultCode, 'ROLLBACK_SUCCEEDED');
+
+    const defaultStatusService = createDeploymentRollbackAsyncService();
+    const durablePolled = await defaultStatusService.getRollbackStatus(
+        sharedStart.operationId
+    );
+    assert.strictEqual(durablePolled.found, true);
+    assert.strictEqual(
+        durablePolled.body.status,
+        ROLLBACK_OPERATION_STATUS.SUCCEEDED
+    );
 
     const persistedShared = await sharedStore.findByOperationId(
         sharedStart.operationId

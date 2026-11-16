@@ -389,6 +389,7 @@ const defaultService = createDeploymentRollbackService();
 
 module.exports = {
     INPUT_CODE,
+    hasSalesforceRollbackContext,
     createDeploymentRollbackService,
     executeRollback: defaultService.executeRollback,
     buildRollbackApiVersionDiagnostic,

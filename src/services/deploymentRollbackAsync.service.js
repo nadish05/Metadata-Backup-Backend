@@ -5,12 +5,25 @@
  *
  * The rollback engine remains responsible for validation, execution,
  * terminal state transitions, and result construction.
+ *
+ * Salesforce-mediated async (snapshotExport + artifacts) uses the process-local
+ * inline operation store. Other async clients require the shared durable store.
+ *
+ * Inline store limitations:
+ * - Operation state is lost when the Node process restarts.
+ * - Different backend instances do not share operation state.
+ * - Start, execution, and polling must reach the same instance.
  */
 
-const deploymentRollbackService = require('./deploymentRollback.service');
 const deploymentHistoryService = require('./deploymentHistory.service');
 const {
+    INPUT_CODE,
+    hasSalesforceRollbackContext,
+    executeRollback: defaultExecuteRollback
+} = require('./deploymentRollback.service');
+const {
     getSharedRollbackOperationStore,
+    getSalesforceInlineRollbackOperationStore,
     UNAVAILABLE_MESSAGE
 } = require('./deploymentSnapshot/rollbackOperation.resolver');
 const { RollbackOperationPersistenceError } = require('./deploymentSnapshot/rollbackOperation.errors');
@@ -29,9 +42,21 @@ const { orgIdsMatch } = require('./deploymentOrgLock/destinationOrgIdentity.serv
 const { sanitizeHistoryRecord } = require('./deploymentHistory.sanitize');
 
 const ASYNC_ERROR_CODE = 'ROLLBACK_ASYNC_ERROR';
+const INCOMPLETE_SALESFORCE_CONTEXT_CODE =
+    'ROLLBACK_SALESFORCE_CONTEXT_INCOMPLETE';
 
 function text(value) {
     return value === undefined || value === null ? '' : String(value).trim();
+}
+
+function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasPartialSalesforceRollbackContext(request = {}) {
+    const hasExport = isPlainObject(request.snapshotExport);
+    const hasArtifacts = isPlainObject(request.artifacts);
+    return hasExport !== hasArtifacts;
 }
 
 function startRejected(code, message, httpStatus = 400) {
@@ -52,16 +77,51 @@ function getDefaultRollbackOperationStore() {
     return getSharedRollbackOperationStore();
 }
 
+function resolveRollbackOperationStoreForRequest(request, dependencyGetStore) {
+    if (typeof dependencyGetStore === 'function') {
+        return dependencyGetStore(request);
+    }
+
+    if (hasSalesforceRollbackContext(request)) {
+        return getSalesforceInlineRollbackOperationStore();
+    }
+
+    return getSharedRollbackOperationStore();
+}
+
+async function resolveStoreForOperationLookup(operationId, dependencyGetStore) {
+    if (typeof dependencyGetStore === 'function') {
+        return dependencyGetStore();
+    }
+
+    const inlineStore = getSalesforceInlineRollbackOperationStore();
+    const inlineOperation = await inlineStore.findByOperationId(operationId);
+    if (inlineOperation) {
+        return inlineStore;
+    }
+
+    const sharedStore = getSharedRollbackOperationStore();
+    const sharedOperation = await sharedStore.findByOperationId(operationId);
+    if (sharedOperation) {
+        return sharedStore;
+    }
+
+    return null;
+}
+
 function createDeploymentRollbackAsyncService(dependencies = {}) {
     const executeRollback =
-        dependencies.executeRollback ||
-        deploymentRollbackService.executeRollback;
+        dependencies.executeRollback || defaultExecuteRollback;
     const historyService =
         dependencies.historyService || deploymentHistoryService;
-    const resolveStore = dependencies.getStore || getDefaultRollbackOperationStore;
-    const operationService =
-        dependencies.rollbackOperationService ||
-        createRollbackOperationService({ getStore: resolveStore });
+    const dependencyGetStore = dependencies.getStore;
+
+    function createOperationServiceForStore(store) {
+        return (
+            dependencies.rollbackOperationService ||
+            createRollbackOperationService({ getStore: () => store })
+        );
+    }
 
     async function validateStartRequest(request) {
         const historyId = text(request.historyId);
@@ -115,6 +175,31 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
             );
         }
 
+        if (hasPartialSalesforceRollbackContext(request)) {
+            return startRejected(
+                INCOMPLETE_SALESFORCE_CONTEXT_CODE,
+                'snapshotExport and artifacts are both required for Salesforce-mediated rollback.'
+            );
+        }
+
+        if (hasSalesforceRollbackContext(request)) {
+            const exportSnapshotId = text(request.snapshotExport.snapshotId);
+
+            if (!exportSnapshotId) {
+                return startRejected(
+                    INPUT_CODE.SNAPSHOT_ID_REQUIRED,
+                    'snapshotExport.snapshotId is required.'
+                );
+            }
+
+            if (exportSnapshotId !== snapshotId) {
+                return startRejected(
+                    INPUT_CODE.SNAPSHOT_EXPORT_MISMATCH,
+                    'snapshotId does not match snapshotExport.snapshotId.'
+                );
+            }
+        }
+
         return {
             request,
             historyId,
@@ -127,10 +212,11 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
         request,
         destinationOrgId,
         snapshotId,
-        scopeKey
+        scopeKey,
+        store,
+        operationService
     }) {
-        return resolveStore().withExclusiveScope(scopeKey, async (previous) => {
-            const store = resolveStore();
+        return store.withExclusiveScope(scopeKey, async (previous) => {
             const records = await store.findByDestinationAndSnapshot(
                 destinationOrgId,
                 snapshotId
@@ -179,17 +265,17 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
         });
     }
 
-    async function persistFinalResult(operationId, result) {
-        await resolveStore().updateOperation(operationId, {
+    async function persistFinalResult(store, operationId, result) {
+        await store.updateOperation(operationId, {
             finalResult: sanitizeHistoryRecord(result),
             updatedAt: new Date().toISOString()
         });
     }
 
-    async function markAsyncFailure(operationId, error) {
+    async function markAsyncFailure(store, operationService, operationId, error) {
         const message =
             error?.message || 'Unable to execute destination rollback.';
-        const current = await resolveStore().findByOperationId(operationId);
+        const current = await store.findByOperationId(operationId);
 
         if (
             current &&
@@ -225,16 +311,24 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
             operationId,
             operationStatus: ROLLBACK_OPERATION_STATUS.FAILED
         };
-        await persistFinalResult(operationId, result);
+        await persistFinalResult(store, operationId, result);
     }
 
-    function launch(request, operationId) {
+    function createStoreAccessor(store) {
+        return function rollbackOperationStoreAccessor() {
+            return store;
+        };
+    }
+
+    function launch(request, operationId, store, operationService) {
+        const storeAccessor = createStoreAccessor(store);
+
         Promise.resolve()
             .then(() =>
                 executeRollback({
                     ...request,
                     operationId,
-                    rollbackOperationStore: resolveStore
+                    rollbackOperationStore: storeAccessor
                 })
             )
             .then(async (result) => {
@@ -243,7 +337,7 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
                     ...body,
                     operationId: body.operationId || operationId
                 };
-                const operation = await resolveStore().findByOperationId(operationId);
+                const operation = await store.findByOperationId(operationId);
                 if (
                     operation &&
                     operation.status === ROLLBACK_OPERATION_STATUS.IN_PROGRESS
@@ -268,23 +362,26 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
                     });
                 }
 
-            const authoritative = await resolveStore().findByOperationId(
-                operationId
-            );
-            if (
-                authoritative &&
-                [
-                    ROLLBACK_OPERATION_STATUS.SUCCEEDED,
-                    ROLLBACK_OPERATION_STATUS.FAILED,
-                    ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT
-                ].includes(authoritative.status) &&
-                !authoritative.finalResult
-            ) {
-                await persistFinalResult(operationId, finalResult);
-            }
+                const authoritative = await store.findByOperationId(operationId);
+                if (
+                    authoritative &&
+                    [
+                        ROLLBACK_OPERATION_STATUS.SUCCEEDED,
+                        ROLLBACK_OPERATION_STATUS.FAILED,
+                        ROLLBACK_OPERATION_STATUS.UNKNOWN_RESULT
+                    ].includes(authoritative.status) &&
+                    !authoritative.finalResult
+                ) {
+                    await persistFinalResult(store, operationId, finalResult);
+                }
             })
             .catch((error) => {
-                void markAsyncFailure(operationId, error).catch((persistError) => {
+                void markAsyncFailure(
+                    store,
+                    operationService,
+                    operationId,
+                    error
+                ).catch((persistError) => {
                     console.error('ASYNC ROLLBACK ERROR PERSISTENCE ERROR');
                     console.error(persistError);
                 });
@@ -297,6 +394,12 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
             return validated;
         }
 
+        const store = resolveRollbackOperationStoreForRequest(
+            validated.request,
+            dependencyGetStore
+        );
+        const operationService = createOperationServiceForStore(store);
+
         const scopeKey = buildRollbackScopeKey(
             validated.destinationOrgId,
             validated.snapshotId
@@ -306,10 +409,12 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
 
         try {
             reservation = await reserveOperation({
-                request,
+                request: validated.request,
                 destinationOrgId: validated.destinationOrgId,
                 snapshotId: validated.snapshotId,
-                scopeKey
+                scopeKey,
+                store,
+                operationService
             });
         } catch (error) {
             const persistenceFailure =
@@ -356,7 +461,12 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
             };
         }
 
-        launch(request, reservation.operation.operationId);
+        launch(
+            validated.request,
+            reservation.operation.operationId,
+            store,
+            operationService
+        );
 
         return {
             success: true,
@@ -372,7 +482,15 @@ function createDeploymentRollbackAsyncService(dependencies = {}) {
             return { found: false };
         }
 
-        const operation = await resolveStore().findByOperationId(normalizedId);
+        const store = await resolveStoreForOperationLookup(
+            normalizedId,
+            dependencyGetStore
+        );
+        if (!store) {
+            return { found: false };
+        }
+
+        const operation = await store.findByOperationId(normalizedId);
         if (!operation) {
             return { found: false };
         }
@@ -416,8 +534,12 @@ const defaultService = createDeploymentRollbackAsyncService();
 
 module.exports = {
     ASYNC_ERROR_CODE,
+    INCOMPLETE_SALESFORCE_CONTEXT_CODE,
     createDeploymentRollbackAsyncService,
     getDefaultRollbackOperationStore,
+    hasPartialSalesforceRollbackContext,
+    resolveRollbackOperationStoreForRequest,
+    resolveStoreForOperationLookup,
     startRollback: defaultService.startRollback,
     getRollbackStatus: defaultService.getRollbackStatus
 };
