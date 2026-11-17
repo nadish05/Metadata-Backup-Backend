@@ -628,6 +628,103 @@ async function main() {
         );
     });
 
+    await runTest(
+        'Phase 6.0 partial resolution keeps implementation fields on remaining conflicts',
+        () => {
+            const base = clsWithMethods([
+                methodBody('methodA()', 'base-a'),
+                methodBody('methodB()', 'base-b')
+            ]);
+            const source = clsWithMethods([
+                methodBody('methodA()', 'source-a'),
+                methodBody('methodB()', 'source-b')
+            ]);
+            const destination = clsWithMethods([
+                methodBody('methodA()', 'destination-a'),
+                methodBody('methodB()', 'destination-b')
+            ]);
+
+            let unit = buildMethodPreviewUnit({
+                metadataName: 'WeatherService',
+                filePath: 'force-app/main/default/classes/WeatherService.cls',
+                metaXmlPath:
+                    'force-app/main/default/classes/WeatherService.cls-meta.xml',
+                mergeBaseSha: 'base-sha',
+                clsThreeWay: { base, source, destination },
+                metaMerge: { content: metaXml, conflict: false }
+            });
+            unit.artifacts.metaXml = { content: metaXml, conflict: false };
+
+            const methodAKey = 'methodA()';
+            const methodBKey = 'methodB()';
+
+            let methodA = inventoryByKey(unit.methodMerge, methodAKey);
+            let methodB = inventoryByKey(unit.methodMerge, methodBKey);
+
+            assert.strictEqual(methodA.status, METHOD_STATUS.CONFLICT);
+            assert.strictEqual(methodB.status, METHOD_STATUS.CONFLICT);
+            assert.strictEqual(
+                methodA.baseImplementation,
+                rootMethodSlice(base, methodAKey)
+            );
+            assert.strictEqual(
+                methodA.sourceImplementation,
+                rootMethodSlice(source, methodAKey)
+            );
+            assert.strictEqual(
+                methodA.destinationImplementation,
+                rootMethodSlice(destination, methodAKey)
+            );
+            assert.strictEqual(
+                methodB.baseImplementation,
+                rootMethodSlice(base, methodBKey)
+            );
+            assert.strictEqual(
+                methodB.sourceImplementation,
+                rootMethodSlice(source, methodBKey)
+            );
+            assert.strictEqual(
+                methodB.destinationImplementation,
+                rootMethodSlice(destination, methodBKey)
+            );
+
+            unit = resolveMethodMergeUnit(unit, {
+                methodResolutions: [
+                    {
+                        methodKey: methodAKey,
+                        strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                    }
+                ]
+            });
+
+            methodA = inventoryByKey(unit.methodMerge, methodAKey);
+            methodB = inventoryByKey(unit.methodMerge, methodBKey);
+
+            assert.strictEqual(methodA.status, METHOD_STATUS.RESOLVED);
+            assert.strictEqual(methodA.sourceImplementation, undefined);
+            assert.strictEqual(methodA.destinationImplementation, undefined);
+            assert.strictEqual(methodA.baseImplementation, undefined);
+
+            assert.strictEqual(methodB.status, METHOD_STATUS.CONFLICT);
+            assert.strictEqual(
+                methodB.baseImplementation,
+                rootMethodSlice(base, methodBKey)
+            );
+            assert.strictEqual(
+                methodB.sourceImplementation,
+                rootMethodSlice(source, methodBKey)
+            );
+            assert.strictEqual(
+                methodB.destinationImplementation,
+                rootMethodSlice(destination, methodBKey)
+            );
+
+            assert.strictEqual(unit.conflictState, 'UNRESOLVED');
+            assert.strictEqual(unit.methodMerge.conflictCount, 1);
+            assert.strictEqual(unit.methodMerge.resolved, false);
+        }
+    );
+
     await runTest('Phase 6.0 resolved methods drop implementation exposure fields', () => {
         const { base, source, destination } = buildWeatherThreeWay();
         const preview = buildMethodPreviewUnit({
