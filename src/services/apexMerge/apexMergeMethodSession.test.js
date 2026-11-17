@@ -12,6 +12,11 @@ const {
     METHOD_RESOLUTION_STRATEGY
 } = require('./apexMergeMethodSession.service');
 const {
+    METHOD_STATUS,
+    indexRootCallableMembers
+} = require('./apexMergeMethodMerge.service');
+const { parseApexClassSource } = require('./apexClassParser.service');
+const {
     resolveUnitArtifacts,
     RESOLUTION_STRATEGIES
 } = require('./apexMergeFullClass.service');
@@ -43,6 +48,16 @@ function methodBody(name, debugValue) {
     return `    public static void ${name} {
         System.debug('${debugValue}');
     }`;
+}
+
+function inventoryByKey(methodMerge, key) {
+    return methodMerge.methods.find((entry) => entry.methodKey === key);
+}
+
+function rootMethodSlice(classSource, methodKey) {
+    const parsed = parseApexClassSource(classSource);
+    const members = indexRootCallableMembers(parsed);
+    return members.get(methodKey)?.sourceText ?? null;
 }
 
 function buildWeatherThreeWay() {
@@ -474,6 +489,171 @@ async function main() {
         assert.strictEqual(response.mergeMode, 'METHOD');
         assert.strictEqual(response.resolved, true);
         assert.ok(response.mergedContent.includes("System.debug('destination');"));
+    });
+
+    await runTest('Phase 6.0 conflicting method exposes branch implementations', () => {
+        const { base, source, destination } = buildWeatherThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        const conflict = inventoryByKey(preview.methodMerge, 'getWeather()');
+        assert.strictEqual(conflict.status, METHOD_STATUS.CONFLICT);
+        assert.strictEqual(
+            conflict.baseImplementation,
+            rootMethodSlice(base, 'getWeather()')
+        );
+        assert.strictEqual(
+            conflict.sourceImplementation,
+            rootMethodSlice(source, 'getWeather()')
+        );
+        assert.strictEqual(
+            conflict.destinationImplementation,
+            rootMethodSlice(destination, 'getWeather()')
+        );
+        assert.ok(conflict.sourceImplementation.includes("System.debug('source');"));
+    });
+
+    await runTest('Phase 6.0 non-conflicting methods omit implementation fields', () => {
+        const { base, source, destination } = buildWeatherThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        const forecast = inventoryByKey(preview.methodMerge, 'getForecast()');
+        assert.strictEqual(forecast.status, METHOD_STATUS.AUTO_INCLUDED);
+        assert.strictEqual(forecast.sourceImplementation, undefined);
+        assert.strictEqual(forecast.destinationImplementation, undefined);
+        assert.strictEqual(forecast.baseImplementation, undefined);
+    });
+
+    await runTest('Phase 6.0 baseImplementation is null when method absent from Base', () => {
+        const base = clsWithMethods([]);
+        const source = clsWithMethods([methodBody('getWeather()', 'source-new')]);
+        const destination = clsWithMethods([
+            methodBody('getWeather()', 'destination-new')
+        ]);
+
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        const conflict = inventoryByKey(preview.methodMerge, 'getWeather()');
+        assert.strictEqual(conflict.status, METHOD_STATUS.CONFLICT);
+        assert.strictEqual(conflict.basePresent, false);
+        assert.strictEqual(conflict.baseImplementation, null);
+        assert.ok(conflict.sourceImplementation.includes('source-new'));
+        assert.ok(conflict.destinationImplementation.includes('destination-new'));
+    });
+
+    await runTest('Phase 6.0 missing branch implementation is null on deletion conflict', () => {
+        const { base, source, destination } = buildWeatherThreeWay();
+        const sourceDeleted = clsWithMethods([
+            methodBody('getForecast()', 'base-forecast'),
+            methodBody('getTemperature()', 'source-temp')
+        ]);
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source: sourceDeleted, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        const conflict = inventoryByKey(preview.methodMerge, 'getWeather()');
+        assert.strictEqual(conflict.status, METHOD_STATUS.CONFLICT);
+        assert.strictEqual(conflict.sourcePresent, false);
+        assert.strictEqual(conflict.sourceImplementation, null);
+        assert.ok(
+            conflict.destinationImplementation.includes("System.debug('destination');")
+        );
+    });
+
+    await runTest('Phase 6.0 multiple conflicts each expose correct implementations', () => {
+        const sourceForecast = methodBody('getForecast()', 'source-forecast');
+        const destForecast = methodBody('getForecast()', 'dest-forecast');
+        const { base, source, destination } = buildWeatherThreeWay();
+        const conflictSource = clsWithMethods([
+            methodBody('getWeather()', 'source'),
+            sourceForecast,
+            methodBody('getTemperature()', 'source-temp')
+        ]);
+        const conflictDestination = clsWithMethods([
+            methodBody('getWeather()', 'destination'),
+            destForecast,
+            methodBody('getHumidity()', 'dest-humidity')
+        ]);
+
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: {
+                base,
+                source: conflictSource,
+                destination: conflictDestination
+            },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        const weather = inventoryByKey(preview.methodMerge, 'getWeather()');
+        const forecast = inventoryByKey(preview.methodMerge, 'getForecast()');
+        assert.strictEqual(weather.status, METHOD_STATUS.CONFLICT);
+        assert.strictEqual(forecast.status, METHOD_STATUS.CONFLICT);
+        assert.ok(weather.sourceImplementation.includes("System.debug('source');"));
+        assert.ok(
+            forecast.destinationImplementation.includes('dest-forecast')
+        );
+    });
+
+    await runTest('Phase 6.0 resolved methods drop implementation exposure fields', () => {
+        const { base, source, destination } = buildWeatherThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+        preview.artifacts.metaXml = { content: metaXml, conflict: false };
+
+        const resolved = resolveMethodMergeUnit(preview, {
+            methodResolutions: [
+                {
+                    methodKey: 'getWeather()',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                }
+            ]
+        });
+
+        const weather = inventoryByKey(resolved.methodMerge, 'getWeather()');
+        assert.strictEqual(weather.status, METHOD_STATUS.RESOLVED);
+        assert.strictEqual(weather.sourceImplementation, undefined);
+        assert.strictEqual(resolved.conflictState, 'RESOLVED');
     });
 
     await runTest('existing FULL and METHOD regression tests pass', () => {

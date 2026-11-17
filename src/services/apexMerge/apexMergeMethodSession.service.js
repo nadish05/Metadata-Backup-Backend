@@ -56,16 +56,45 @@ function shouldUseMethodMode(requestMode, focusMetadataName, unitMetadataName) {
     return focusMetadataName === unitMetadataName;
 }
 
-function mapMethodInventoryForClient(methods = []) {
-    return methods.map((entry) => ({
-        methodKey: entry.methodKey,
-        basePresent: entry.basePresent,
-        sourcePresent: entry.sourcePresent,
-        destinationPresent: entry.destinationPresent,
-        status: entry.status,
-        resolution: entry.resolution ?? null,
-        included: entry.included !== false
-    }));
+function implementationTextFromMap(memberMap, methodKey) {
+    if (!memberMap || !memberMap.has(methodKey)) {
+        return null;
+    }
+
+    const member = memberMap.get(methodKey);
+    return member?.sourceText ?? null;
+}
+
+function mapMethodInventoryForClient(methods = [], implementationMaps = null) {
+    const baseMap = implementationMaps?.base;
+    const sourceMap = implementationMaps?.source;
+    const destinationMap = implementationMaps?.destination;
+
+    return methods.map((entry) => {
+        const item = {
+            methodKey: entry.methodKey,
+            basePresent: entry.basePresent,
+            sourcePresent: entry.sourcePresent,
+            destinationPresent: entry.destinationPresent,
+            status: entry.status,
+            resolution: entry.resolution ?? null,
+            included: entry.included !== false
+        };
+
+        if (entry.status === METHOD_STATUS.CONFLICT && implementationMaps) {
+            item.baseImplementation = entry.basePresent
+                ? implementationTextFromMap(baseMap, entry.methodKey)
+                : null;
+            item.sourceImplementation = entry.sourcePresent
+                ? implementationTextFromMap(sourceMap, entry.methodKey)
+                : null;
+            item.destinationImplementation = entry.destinationPresent
+                ? implementationTextFromMap(destinationMap, entry.methodKey)
+                : null;
+        }
+
+        return item;
+    });
 }
 
 function buildMethodConflictSummaries(metadataName, methodMerge) {
@@ -85,7 +114,10 @@ function buildMethodConflictSummaries(metadataName, methodMerge) {
 
 function buildMethodMergeState(mergeResult) {
     return {
-        methods: mapMethodInventoryForClient(mergeResult.methods),
+        methods: mapMethodInventoryForClient(
+            mergeResult.methods,
+            mergeResult.maps
+        ),
         conflictCount: mergeResult.conflictCount,
         resolved: mergeResult.resolved === true,
         composeSuccess: mergeResult.composeSuccess === true,
@@ -313,7 +345,10 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
     ).length;
 
     const methodMerge = {
-        methods: mapMethodInventoryForClient(comparison.methods),
+        methods: mapMethodInventoryForClient(
+            comparison.methods,
+            comparison.maps
+        ),
         conflictCount,
         resolved: conflictCount === 0,
         composeSuccess: false,
@@ -405,6 +440,7 @@ module.exports = {
     normalizeMergeMode,
     shouldUseMethodMode,
     mapMethodInventoryForClient,
+    implementationTextFromMap,
     buildMethodConflictSummaries,
     buildMethodMergeState,
     runMethodMergeComparison,
