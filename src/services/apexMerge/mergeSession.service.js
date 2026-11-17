@@ -23,6 +23,18 @@ const {
     sealSession,
     SESSION_STATUS
 } = require('./mergeSession.store');
+const {
+    previewApexClassMethod,
+    resolveMethodMergeUnit,
+    validateMethodUnitForSeal,
+    shouldUseMethodMode,
+    buildMethodConflictSummaries,
+    METHOD_MERGE_MODE
+} = require('./apexMergeMethodSession.service');
+const {
+    publishMethodMergeSession,
+    resolveInputMergePins
+} = require('./apexMergePublish.service');
 
 function assertCorrelation(session, { comparisonId, deploymentPlanId }) {
     if (comparisonId && session.comparisonId !== comparisonId) {
@@ -62,18 +74,28 @@ function requireOpenSession(mergeSessionId, { comparisonId, deploymentPlanId } =
 }
 
 function mapClassPreviewResponse(unit) {
-    const conflicts = buildConflictSummaries(unit);
+    const isMethodMode = unit.mergeMode === METHOD_MERGE_MODE;
+    const conflicts = isMethodMode
+        ? buildMethodConflictSummaries(unit.metadataName, unit.methodMerge)
+        : buildConflictSummaries(unit);
+    const hasConflicts = isMethodMode
+        ? (unit.methodMerge?.conflictCount ?? 0) > 0
+        : conflicts.length > 0;
+    const mergedContent = isMethodMode
+        ? unit.artifacts?.cls?.content ?? null
+        : unit.artifacts?.cls?.content ?? '';
 
-    return {
+    const mapped = {
         metadataName: unit.metadataName,
         filePath: unit.filePath,
         metaXmlPath: unit.metaXmlPath,
+        mergeMode: unit.mergeMode || 'FULL',
         mergeBaseSha: unit.mergeBaseSha,
         conflictState: unit.conflictState,
         drift: unit.drift,
-        hasConflicts: conflicts.length > 0,
+        hasConflicts,
         conflicts,
-        mergedContent: unit.artifacts?.cls?.content ?? '',
+        mergedContent,
         mergedMetaXml: unit.artifacts?.metaXml?.content ?? '',
         artifacts: {
             cls: {
@@ -96,6 +118,14 @@ function mapClassPreviewResponse(unit) {
             metaXml: unit.artifacts.metaXml.content
         }
     };
+
+    if (isMethodMode) {
+        mapped.methods = unit.methodMerge?.methods ?? [];
+        mapped.conflictCount = unit.methodMerge?.conflictCount ?? 0;
+        mapped.resolved = unit.methodMerge?.resolved === true;
+    }
+
+    return mapped;
 }
 
 function buildPerClassFocusResponse(classes, focusMetadataName) {
@@ -116,8 +146,9 @@ function buildPerClassFocusResponse(classes, focusMetadataName) {
 
     const mapped = mapClassPreviewResponse(unit);
 
-    return {
+    const focus = {
         metadataName: mapped.metadataName,
+        mergeMode: mapped.mergeMode,
         hasConflicts: mapped.hasConflicts,
         conflicts: mapped.conflicts,
         mergedContent: mapped.mergedContent,
@@ -125,6 +156,14 @@ function buildPerClassFocusResponse(classes, focusMetadataName) {
         mergedPreview: mapped.mergedContent,
         conflictState: mapped.conflictState
     };
+
+    if (mapped.mergeMode === METHOD_MERGE_MODE) {
+        focus.methods = mapped.methods;
+        focus.conflictCount = mapped.conflictCount;
+        focus.resolved = mapped.resolved;
+    }
+
+    return focus;
 }
 
 function normalizeResolutionRequests(body = {}) {
@@ -132,11 +171,21 @@ function normalizeResolutionRequests(body = {}) {
         return body.resolutions;
     }
 
+    if (body.metadataName && Array.isArray(body.methodResolutions)) {
+        return [
+            {
+                metadataName: body.metadataName,
+                methodResolutions: body.methodResolutions
+            }
+        ];
+    }
+
     if (body.metadataName) {
         return [
             {
                 metadataName: body.metadataName,
                 resolutionStrategy: body.resolutionStrategy,
+                methodResolutions: body.methodResolutions,
                 resolutions: body.resolutions
             }
         ];
@@ -199,6 +248,11 @@ async function createMergeSession(body = {}) {
             ...gitPins,
             recordedAt: new Date().toISOString()
         },
+        inputMergePins: {
+            sourceHeadSha: gitPins.sourceHeadSha,
+            destinationHeadSha: gitPins.destinationHeadSha
+        },
+        publish: null,
         classes: normalizedClasses.map((item) => ({
             metadataName: item.metadataName,
             filePath: item.filePath,
@@ -235,8 +289,12 @@ async function previewMergeSession(mergeSessionId, body = {}) {
         instanceUrl,
         comparisonId,
         deploymentPlanId,
-        metadataName: focusMetadataName
+        metadataName: focusMetadataName,
+        mode: requestMode
     } = body;
+    const trimmedFocus = focusMetadataName
+        ? String(focusMetadataName).trim()
+        : null;
 
     const mergedClasses = [];
 
@@ -278,13 +336,27 @@ async function previewMergeSession(mergeSessionId, body = {}) {
             });
             unit.drift = drift;
 
-            const mergeResult = await mergeApexClassFull({
-                repoPath,
-                sourceBranch: session.sourceBranch,
-                destinationBranch: session.destinationBranch,
-                metadataName: unit.metadataName,
-                filePath: unit.filePath
-            });
+            const useMethodMode = shouldUseMethodMode(
+                requestMode,
+                trimmedFocus,
+                unit.metadataName
+            );
+
+            const mergeResult = useMethodMode
+                ? await previewApexClassMethod({
+                      repoPath,
+                      sourceBranch: session.sourceBranch,
+                      destinationBranch: session.destinationBranch,
+                      metadataName: unit.metadataName,
+                      filePath: unit.filePath
+                  })
+                : await mergeApexClassFull({
+                      repoPath,
+                      sourceBranch: session.sourceBranch,
+                      destinationBranch: session.destinationBranch,
+                      metadataName: unit.metadataName,
+                      filePath: unit.filePath
+                  });
 
             const nextUnit = {
                 ...unit,
@@ -336,6 +408,27 @@ function resolveMergeSession(mergeSessionId, body = {}) {
     const nextClasses = session.classes.map((unit) => {
         const resolution = resolutionByName.get(unit.metadataName);
 
+        if (unit.mergeMode === METHOD_MERGE_MODE) {
+            if (!resolution) {
+                if (unit.conflictState === 'UNRESOLVED') {
+                    throw new ApexMergeError(
+                        MERGE_ERROR.UNRESOLVED_CONFLICT,
+                        `Missing METHOD resolution for ${unit.metadataName}.`
+                    );
+                }
+
+                return {
+                    ...unit,
+                    conflictState:
+                        unit.conflictState === 'PENDING'
+                            ? 'NONE'
+                            : unit.conflictState
+                };
+            }
+
+            return resolveMethodMergeUnit(unit, resolution);
+        }
+
         if (unit.conflictState === 'UNRESOLVED' && !resolution) {
             throw new ApexMergeError(
                 MERGE_ERROR.UNRESOLVED_CONFLICT,
@@ -381,23 +474,95 @@ function resolveMergeSession(mergeSessionId, body = {}) {
     };
 
     if (focusUnit) {
-        const conflicts = buildConflictSummaries(focusUnit);
-        Object.assign(response, {
+        const isMethodMode = focusUnit.mergeMode === METHOD_MERGE_MODE;
+        const conflicts = isMethodMode
+            ? buildMethodConflictSummaries(
+                  focusUnit.metadataName,
+                  focusUnit.methodMerge
+              )
+            : buildConflictSummaries(focusUnit);
+        const resolveBody = {
             metadataName: focusUnit.metadataName,
-            hasConflicts: conflicts.length > 0,
+            mergeMode: focusUnit.mergeMode || 'FULL',
+            hasConflicts: isMethodMode
+                ? (focusUnit.methodMerge?.conflictCount ?? 0) > 0
+                : conflicts.length > 0,
             conflicts,
-            mergedContent: focusUnit.artifacts?.cls?.content ?? '',
+            mergedContent: isMethodMode
+                ? focusUnit.artifacts?.cls?.content ?? null
+                : focusUnit.artifacts?.cls?.content ?? '',
             mergedMetaXml: focusUnit.artifacts?.metaXml?.content ?? '',
             mergedPreview: focusUnit.artifacts?.cls?.content ?? '',
             conflictState: focusUnit.conflictState
-        });
+        };
+
+        if (isMethodMode) {
+            resolveBody.methods = focusUnit.methodMerge?.methods ?? [];
+            resolveBody.conflictCount =
+                focusUnit.methodMerge?.conflictCount ?? 0;
+            resolveBody.resolved = focusUnit.methodMerge?.resolved === true;
+        }
+
+        Object.assign(response, resolveBody);
     }
 
     return response;
 }
 
+function normalizePublishMetadataNames(body = {}) {
+    if (Array.isArray(body.metadataNames) && body.metadataNames.length) {
+        return body.metadataNames.map((name) => String(name || '').trim());
+    }
+
+    if (body.metadataName) {
+        return [String(body.metadataName).trim()];
+    }
+
+    throw new ApexMergeError(
+        MERGE_ERROR.INVALID_REQUEST,
+        'metadataNames is required for publish.'
+    );
+}
+
+async function publishMergeSession(mergeSessionId, body = {}) {
+    const session = requireOpenSession(mergeSessionId, body);
+    const metadataNames = normalizePublishMetadataNames(body);
+
+    const publishResult = await publishMethodMergeSession(
+        session,
+        metadataNames
+    );
+
+    const updated = updateSession(mergeSessionId, {
+        publish: {
+            publishState: publishResult.publishState,
+            publishedCommitSha: publishResult.publishedCommitSha,
+            publishedAt: publishResult.publishedAt,
+            publishedClasses: publishResult.publishedClasses
+        }
+    });
+
+    const inputMergePins =
+        updated.inputMergePins || resolveInputMergePins(updated);
+
+    return {
+        success: true,
+        mergeSessionId,
+        publishState: publishResult.publishState,
+        publishedCommitSha: publishResult.publishedCommitSha,
+        publishedAt: publishResult.publishedAt,
+        publishedClasses: publishResult.publishedClasses,
+        inputMergePins
+    };
+}
+
 function sealMergeSession(mergeSessionId, body = {}) {
     const session = requireOpenSession(mergeSessionId, body);
+
+    for (const unit of session.classes || []) {
+        validateMethodUnitForSeal(unit);
+    }
+
     const manifest = buildApexMergeManifest(session);
     const sealed = sealSession(mergeSessionId, manifest);
 
@@ -426,6 +591,8 @@ function getMergeSession(mergeSessionId) {
         comparisonId: session.comparisonId,
         deploymentPlanId: session.deploymentPlanId,
         gitPins: session.gitPins,
+        inputMergePins: session.inputMergePins || resolveInputMergePins(session),
+        publish: session.publish || null,
         sealedAt: session.sealedAt,
         classes: (session.classes || []).map((unit) => ({
             metadataName: unit.metadataName,
@@ -445,6 +612,7 @@ module.exports = {
     createMergeSession,
     previewMergeSession,
     resolveMergeSession,
+    publishMergeSession,
     sealMergeSession,
     getMergeSession,
     authorizeArtifactHandoff,

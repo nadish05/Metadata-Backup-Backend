@@ -25,7 +25,18 @@ function mapMergeError(error) {
             ARTIFACT_NOT_FOUND: 404,
             ARTIFACT_HANDOFF_NOT_AUTHORIZED: 403,
             ORG_IDENTITY_MISMATCH: 403,
-            DESTINATION_AUTH_FAILED: 401
+            DESTINATION_AUTH_FAILED: 401,
+            PARSE_FAILED: 400,
+            METHOD_STRUCTURAL_CONFLICT: 422,
+            METHOD_UNRESOLVED_CONFLICT: 422,
+            METHOD_COMPOSE_FAILED: 422,
+            METHOD_DUPLICATE_IDENTITY: 400,
+            UNKNOWN_METHOD_KEY: 400,
+            PUBLISH_NOT_ELIGIBLE: 422,
+            PUBLISH_SOURCE_BRANCH_CHANGED: 409,
+            PUBLISH_DESTINATION_BRANCH_CHANGED: 409,
+            PUBLISH_PUSH_REJECTED: 409,
+            PUBLISH_ALREADY_SATISFIED: 200
         };
 
         return {
@@ -75,6 +86,19 @@ exports.previewMergeSession = async (req, res) => {
 exports.resolveMergeSession = async (req, res) => {
     try {
         const result = mergeSessionService.resolveMergeSession(
+            req.params.id,
+            req.body || {}
+        );
+        return res.json(result);
+    } catch (error) {
+        const mapped = mapMergeError(error);
+        return res.status(mapped.httpStatus).json(mapped.body);
+    }
+};
+
+exports.publishMergeSession = async (req, res) => {
+    try {
+        const result = await mergeSessionService.publishMergeSession(
             req.params.id,
             req.body || {}
         );

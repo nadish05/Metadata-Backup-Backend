@@ -8,6 +8,7 @@
   },
   "type": "commonjs",
   "dependencies": {
+    "@apexdevtools/apex-parser": "^5.3.0",
     "@google/genai": "^2.8.0",
     "axios": "^1.16.1",
     "cors": "^2.8.6",

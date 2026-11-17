@@ -1,0 +1,182 @@
+'use strict';
+
+const { parseApexClassSource } = require('./apexClassParser.service');
+const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
+
+function normalizeBodyText(text) {
+    return String(text || '').replace(/\r\n/g, '\n').trim();
+}
+
+function findRootClassClosingBraceIndex(sourceText, classDeclarationStart) {
+    let depth = 0;
+    let started = false;
+    const startIndex = Math.max(0, Number(classDeclarationStart) || 0);
+
+    for (let index = startIndex; index < sourceText.length; index += 1) {
+        const character = sourceText[index];
+
+        if (character === '{') {
+            depth += 1;
+            started = true;
+        } else if (character === '}') {
+            depth -= 1;
+
+            if (started && depth === 0) {
+                return index;
+            }
+        }
+    }
+
+    return -1;
+}
+
+function rootQualifiedName(parsed) {
+    return parsed.primaryClassName;
+}
+
+function rootCallableMembers(parsed) {
+    const qn = rootQualifiedName(parsed);
+    return parsed.methods.filter(
+        (member) =>
+            member.declaringClassQualifiedName === qn &&
+            (member.kind === 'method' || member.kind === 'constructor')
+    );
+}
+
+/**
+ * Compose final Apex class from Source shell and selected method source slices.
+ *
+ * @param {object} params
+ * @param {string} params.sourceText
+ * @param {object} params.sourceParse
+ * @param {Map<string, string>} params.selectedMethodTextByKey
+ * @param {string[]} params.appendMethodTexts
+ * @returns {string}
+ */
+function composeMethodMergedClass({
+    sourceText,
+    sourceParse,
+    selectedMethodTextByKey,
+    removedMethodKeys = new Set(),
+    appendMethodTexts = []
+}) {
+    const root = sourceParse.classes.find((entry) => entry.isRoot);
+
+    if (!root) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            'Root class not found in Source parse result.'
+        );
+    }
+
+    let result = String(sourceText);
+    const rootMembers = rootCallableMembers(sourceParse);
+    const sortedForSplice = [...rootMembers].sort(
+        (left, right) => right.sourceRange.start - left.sourceRange.start
+    );
+
+    for (const member of sortedForSplice) {
+        const key = member.identityKey;
+
+        if (removedMethodKeys.has(key)) {
+            result =
+                result.slice(0, member.sourceRange.start) +
+                result.slice(member.sourceRange.end);
+            continue;
+        }
+
+        if (!selectedMethodTextByKey.has(key)) {
+            continue;
+        }
+
+        const selected = selectedMethodTextByKey.get(key);
+
+        if (normalizeBodyText(selected) !== normalizeBodyText(member.sourceText)) {
+            result =
+                result.slice(0, member.sourceRange.start) +
+                selected +
+                result.slice(member.sourceRange.end);
+        }
+    }
+
+    if (appendMethodTexts.length) {
+        const closingBraceIndex = findRootClassClosingBraceIndex(
+            result,
+            root.classDeclaration.start
+        );
+
+        if (closingBraceIndex < 0 || result[closingBraceIndex] !== '}') {
+            throw new ApexMergeError(
+                MERGE_ERROR.METHOD_COMPOSE_FAILED,
+                'Unable to locate root class closing brace for method append.'
+            );
+        }
+
+        const padding =
+            appendMethodTexts.length === 1 ? '\n    ' : '\n    ';
+        const injection =
+            padding +
+            appendMethodTexts.join('\n\n    ') +
+            (appendMethodTexts.length ? '\n' : '');
+
+        result =
+            result.slice(0, closingBraceIndex) +
+            injection +
+            result.slice(closingBraceIndex);
+    }
+
+    return result;
+}
+
+/**
+ * Reparse composed source and verify duplicate-free root callable identities.
+ *
+ * @param {string} composedSource
+ * @param {Set<string>} expectedMethodKeys
+ * @returns {object}
+ */
+function validateComposedMethodMerge(composedSource, expectedMethodKeys) {
+    let parsed;
+
+    try {
+        parsed = parseApexClassSource(composedSource);
+    } catch (error) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            `Composed Apex failed parse validation: ${error.message}`,
+            { cause: error }
+        );
+    }
+
+    const members = rootCallableMembers(parsed);
+    const seen = new Set();
+
+    for (const member of members) {
+        if (seen.has(member.identityKey)) {
+            throw new ApexMergeError(
+                MERGE_ERROR.METHOD_DUPLICATE_IDENTITY,
+                `Duplicate method identity in composed class: ${member.identityKey}`
+            );
+        }
+
+        seen.add(member.identityKey);
+    }
+
+    for (const key of expectedMethodKeys) {
+        if (!seen.has(key)) {
+            throw new ApexMergeError(
+                MERGE_ERROR.METHOD_COMPOSE_FAILED,
+                `Expected method missing from composed class: ${key}`
+            );
+        }
+    }
+
+    return parsed;
+}
+
+module.exports = {
+    composeMethodMergedClass,
+    validateComposedMethodMerge,
+    normalizeBodyText,
+    rootCallableMembers
+};
