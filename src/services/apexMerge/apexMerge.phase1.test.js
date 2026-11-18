@@ -48,6 +48,8 @@ const {
 const { getSession } = require('./mergeSession.store');
 const { assertNoDestinationDrift } = require('./apexMergeDrift.service');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
+const { previewApexClassMethod } = require('./apexMergeMethodSession.service');
+const { METHOD_STATUS } = require('./apexMergeMethodMerge.service');
 
 function runTest(name, fn) {
     return Promise.resolve()
@@ -109,6 +111,82 @@ async function initFixtureRepository(fixtureRoot) {
     );
 
     return { clsPath, metaPath };
+}
+
+async function initAbsentClassAtMergeBaseFixture(fixtureRoot) {
+    const clsPath = 'force-app/main/default/classes/AbsentBaseDemo.cls';
+    const metaPath = 'force-app/main/default/classes/AbsentBaseDemo.cls-meta.xml';
+    const metaXml =
+        '<?xml version="1.0"?>\n<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">\n    <apiVersion>59.0</apiVersion>\n</ApexClass>\n';
+
+    await mkdir(path.join(fixtureRoot, path.dirname(clsPath)), {
+        recursive: true
+    });
+
+    const runGit = async (command) => {
+        await execAsync(`cd ${JSON.stringify(fixtureRoot)} && ${command}`);
+    };
+
+    await runGit('git init');
+    await runGit('git config user.email "merge@test.local"');
+    await runGit('git config user.name "Merge Test"');
+    await runGit('git config core.autocrlf false');
+    await runGit('git config core.eol lf');
+
+    await writeFile(path.join(fixtureRoot, 'README.md'), '# common-ancestor\n', 'utf8');
+    await runGit('git add .');
+    await runGit('git commit -m "ancestor without apex class"');
+    await runGit('git branch destination');
+    await runGit('git checkout -b source');
+
+    await writeFile(
+        path.join(fixtureRoot, clsPath),
+        [
+            'public class AbsentBaseDemo {',
+            '    public static String fromSource() {',
+            "        return 'source';",
+            '    }',
+            '    public static String shared() {',
+            "        return 'same';",
+            '    }',
+            '}',
+            ''
+        ].join('\n'),
+        'utf8'
+    );
+    await writeFile(path.join(fixtureRoot, metaPath), metaXml, 'utf8');
+    await runGit('git add .');
+    await runGit('git commit -m "source apex"');
+
+    await runGit('git checkout destination');
+    await mkdir(path.join(fixtureRoot, path.dirname(clsPath)), {
+        recursive: true
+    });
+    await writeFile(
+        path.join(fixtureRoot, clsPath),
+        [
+            'public class AbsentBaseDemo {',
+            '    public static String fromDest() {',
+            "        return 'destination';",
+            '    }',
+            '    public static String shared() {',
+            "        return 'same';",
+            '    }',
+            '}',
+            ''
+        ].join('\n'),
+        'utf8'
+    );
+    await writeFile(path.join(fixtureRoot, metaPath), metaXml, 'utf8');
+    await runGit('git add .');
+    await runGit('git commit -m "destination apex"');
+
+    await runGit('git update-ref refs/remotes/origin/source refs/heads/source');
+    await runGit(
+        'git update-ref refs/remotes/origin/destination refs/heads/destination'
+    );
+
+    return { clsPath, metaPath, metadataName: 'AbsentBaseDemo' };
 }
 
 async function main() {
@@ -325,6 +403,54 @@ async function main() {
         assert.match(result.artifacts.cls.content, /fromSource/);
         assert.match(result.artifacts.cls.content, /base\(\)/);
         assert.ok(result.artifacts.metaXml.content.includes('<apiVersion>'));
+    });
+
+    await runTest('FULL merge succeeds when apex class is absent at merge-base commit', async () => {
+        const fixtureRoot = path.join(
+            os.tmpdir(),
+            `apex-merge-absent-base-${Date.now()}`
+        );
+        const { clsPath, metadataName } =
+            await initAbsentClassAtMergeBaseFixture(fixtureRoot);
+
+        const result = await mergeApexClassFull({
+            repoPath: fixtureRoot,
+            sourceBranch: 'source',
+            destinationBranch: 'destination',
+            metadataName,
+            filePath: clsPath
+        });
+
+        assert.strictEqual(result.threeWay.cls.base, '');
+        assert.ok(result.artifacts.cls.content.length > 0);
+        assert.match(result.artifacts.cls.content, /fromSource/);
+        assert.match(result.artifacts.cls.content, /fromDest/);
+    });
+
+    await runTest('METHOD preview succeeds when apex class is absent at merge-base commit', async () => {
+        const fixtureRoot = path.join(
+            os.tmpdir(),
+            `apex-method-absent-base-${Date.now()}`
+        );
+        const { clsPath, metadataName } =
+            await initAbsentClassAtMergeBaseFixture(fixtureRoot);
+
+        const unit = await previewApexClassMethod({
+            repoPath: fixtureRoot,
+            sourceBranch: 'source',
+            destinationBranch: 'destination',
+            metadataName,
+            filePath: clsPath
+        });
+
+        assert.strictEqual(unit.threeWay.cls.base, '');
+        assert.strictEqual(unit.methodMerge.conflictCount, 0);
+        assert.ok(unit.artifacts.cls.content);
+        const fromSource = unit.methodMerge.methods.find(
+            (entry) => entry.methodKey === 'fromSource()'
+        );
+        assert.strictEqual(fromSource.status, METHOD_STATUS.AUTO_INCLUDED);
+        assert.strictEqual(fromSource.basePresent, false);
     });
 
     await runTest('conflict markers are detected', () => {

@@ -93,6 +93,31 @@ function collectStructuralSnapshot(parsed) {
     };
 }
 
+function isAbsentClassContent(content) {
+    return !String(content ?? '').trim();
+}
+
+function listStructuralMismatches(left, right) {
+    const mismatches = [];
+
+    if (left.className !== right.className) {
+        mismatches.push('class name');
+    }
+
+    const compareFields = ['classShellHeader', 'fields', 'properties', 'innerClasses'];
+
+    for (const field of compareFields) {
+        const leftValue = JSON.stringify(left[field]);
+        const rightValue = JSON.stringify(right[field]);
+
+        if (leftValue !== rightValue) {
+            mismatches.push(field);
+        }
+    }
+
+    return mismatches;
+}
+
 function assertStructuralCompatibility(baseParsed, sourceParsed, destParsed) {
     const base = collectStructuralSnapshot(baseParsed);
     const source = collectStructuralSnapshot(sourceParsed);
@@ -127,6 +152,22 @@ function assertStructuralCompatibility(baseParsed, sourceParsed, destParsed) {
                 ', '
             )}.`,
             { mismatches, base, source, destination: dest }
+        );
+    }
+}
+
+function assertStructuralCompatibilityWithoutBase(sourceParsed, destParsed) {
+    const source = collectStructuralSnapshot(sourceParsed);
+    const dest = collectStructuralSnapshot(destParsed);
+    const mismatches = listStructuralMismatches(source, dest);
+
+    if (mismatches.length) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT,
+            `Unsupported class-level structural differences for METHOD merge: ${mismatches.join(
+                ', '
+            )}.`,
+            { mismatches, base: null, source, destination: dest }
         );
     }
 }
@@ -362,13 +403,21 @@ function compareApexMethodMerge({
     sourceContent,
     destinationContent
 }) {
-    const baseParsed = parseSide('base', baseContent);
+    const baseAbsent = isAbsentClassContent(baseContent);
     const sourceParsed = parseSide('source', sourceContent);
     const destinationParsed = parseSide('destination', destinationContent);
 
-    assertStructuralCompatibility(baseParsed, sourceParsed, destinationParsed);
+    let baseParsed = null;
+    let baseMap = new Map();
 
-    const baseMap = indexRootCallableMembers(baseParsed);
+    if (baseAbsent) {
+        assertStructuralCompatibilityWithoutBase(sourceParsed, destinationParsed);
+    } else {
+        baseParsed = parseSide('base', baseContent);
+        assertStructuralCompatibility(baseParsed, sourceParsed, destinationParsed);
+        baseMap = indexRootCallableMembers(baseParsed);
+    }
+
     const sourceMap = indexRootCallableMembers(sourceParsed);
     const destMap = indexRootCallableMembers(destinationParsed);
     const methods = buildMethodInventory(baseMap, sourceMap, destMap);
@@ -382,6 +431,7 @@ function compareApexMethodMerge({
         resolved: conflictCount === 0,
         composeSuccess: false,
         composedSource: null,
+        baseClassAbsent: baseAbsent,
         parses: {
             base: baseParsed,
             source: sourceParsed,
@@ -482,6 +532,8 @@ module.exports = {
     composeApexMethodMerge,
     executeApexMethodMerge,
     assertStructuralCompatibility,
+    assertStructuralCompatibilityWithoutBase,
+    isAbsentClassContent,
     buildMethodInventory,
     indexRootCallableMembers,
     collectStructuralSnapshot

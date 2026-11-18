@@ -502,6 +502,288 @@ ${SHELL_FOOTER}`;
         );
     });
 
+    const METHOD_MERGE_NO_CONFLICT_SOURCE = `public with sharing class MethodMergeNoConflictDemo {
+
+    public static String getGreeting() {
+        return 'Hello from Source Org';
+    }
+
+    public static Decimal calculateDiscount(Decimal amount) {
+        return amount * 0.10;
+    }
+
+    public static String getStatus() {
+        return 'INITIAL';
+    }
+
+    public static String getSourceMessage() {
+        return 'This method was added in Source Org';
+    }
+}
+`;
+
+    const METHOD_MERGE_NO_CONFLICT_DESTINATION = `public with sharing class MethodMergeNoConflictDemo {
+
+    public static String getGreeting() {
+        return 'Hello';
+    }
+
+    public static Decimal calculateDiscount(Decimal amount) {
+        return amount * 0.15;
+    }
+
+    public static String getStatus() {
+        return 'INITIAL';
+    }
+
+    public static String getDestinationMessage() {
+        return 'This method was added in Destination Org';
+    }
+}
+`;
+
+    const METHOD_MERGE_CONFLICT_SOURCE = `public with sharing class MethodMergeConflictDemo {
+
+    public static String getGreeting() {
+        return 'Hello';
+    }
+
+    public static String getStatus() {
+        return 'SOURCE_STATUS';
+    }
+
+    public static String getSourceOnly() {
+        return 'source';
+    }
+}
+`;
+
+    const METHOD_MERGE_CONFLICT_DESTINATION = `public with sharing class MethodMergeConflictDemo {
+
+    public static String getGreeting() {
+        return 'Hello';
+    }
+
+    public static String getStatus() {
+        return 'DESTINATION_STATUS';
+    }
+
+    public static String getDestinationOnly() {
+        return 'destination';
+    }
+}
+`;
+
+    await runTest('absent base class: compareApexMethodMerge does not parse empty base', () => {
+        const result = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: METHOD_MERGE_NO_CONFLICT_SOURCE,
+            destinationContent: METHOD_MERGE_NO_CONFLICT_DESTINATION
+        });
+
+        assert.strictEqual(result.baseClassAbsent, true);
+        assert.strictEqual(result.parses.base, null);
+        assert.strictEqual(result.maps.base.size, 0);
+        assert.ok(result.methods.length > 0);
+    });
+
+    await runTest('absent base: branch-specific methods are AUTO_INCLUDED', () => {
+        const result = compareApexMethodMerge({
+            baseContent: '   ',
+            sourceContent: METHOD_MERGE_NO_CONFLICT_SOURCE,
+            destinationContent: METHOD_MERGE_NO_CONFLICT_DESTINATION
+        });
+
+        const sourceOnly = inventoryByKey(result, 'getSourceMessage()');
+        const destOnly = inventoryByKey(result, 'getDestinationMessage()');
+
+        assert.strictEqual(sourceOnly.status, METHOD_STATUS.AUTO_INCLUDED);
+        assert.strictEqual(sourceOnly.basePresent, false);
+        assert.strictEqual(destOnly.status, METHOD_STATUS.AUTO_INCLUDED);
+        assert.strictEqual(destOnly.basePresent, false);
+    });
+
+    await runTest('absent base: identical method in source and destination is AUTO_INCLUDED', () => {
+        const result = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: METHOD_MERGE_NO_CONFLICT_SOURCE,
+            destinationContent: METHOD_MERGE_NO_CONFLICT_DESTINATION
+        });
+
+        const statusMethod = inventoryByKey(result, 'getStatus()');
+        assert.strictEqual(statusMethod.status, METHOD_STATUS.AUTO_INCLUDED);
+        assert.strictEqual(statusMethod.basePresent, false);
+    });
+
+    await runTest('absent base: same method with different bodies is CONFLICT', () => {
+        const result = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: METHOD_MERGE_NO_CONFLICT_SOURCE,
+            destinationContent: METHOD_MERGE_NO_CONFLICT_DESTINATION
+        });
+
+        const greeting = inventoryByKey(result, 'getGreeting()');
+        const discount = inventoryByKey(result, 'calculateDiscount(Decimal)');
+
+        assert.strictEqual(greeting.status, METHOD_STATUS.CONFLICT);
+        assert.strictEqual(discount.status, METHOD_STATUS.CONFLICT);
+    });
+
+    await runTest('absent base: independently added methods with identical bodies merge cleanly', () => {
+        const sharedHeader = 'public class SharedAbsentBaseDemo {\n';
+        const sharedFooter = '\n}';
+        const sharedMethod = `    public static String sharedOnly() {
+        return 'same';
+    }`;
+        const source = `${sharedHeader}${sharedMethod}${sharedFooter}`;
+        const destination = `${sharedHeader}${sharedMethod}${sharedFooter}`;
+
+        const merged = executeApexMethodMerge({
+            baseContent: '',
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(merged.conflictCount, 0);
+        assert.strictEqual(merged.composeSuccess, true);
+        assert.ok(merged.composedSource.includes('sharedOnly'));
+    });
+
+    await runTest('absent base conflict demo: getStatus is CONFLICT with basePresent false', () => {
+        const result = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: METHOD_MERGE_CONFLICT_SOURCE,
+            destinationContent: METHOD_MERGE_CONFLICT_DESTINATION
+        });
+
+        const status = inventoryByKey(result, 'getStatus()');
+        const greeting = inventoryByKey(result, 'getGreeting()');
+
+        assert.strictEqual(status.status, METHOD_STATUS.CONFLICT);
+        assert.strictEqual(status.basePresent, false);
+        assert.strictEqual(greeting.status, METHOD_STATUS.AUTO_INCLUDED);
+    });
+
+    await runTest('absent base conflict resolution ACCEPT_SOURCE and ACCEPT_TARGET', () => {
+        const comparison = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: METHOD_MERGE_CONFLICT_SOURCE,
+            destinationContent: METHOD_MERGE_CONFLICT_DESTINATION
+        });
+
+        applyMethodResolutions(
+            comparison.methods,
+            [{ methodKey: 'getStatus()', strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE }],
+            comparison.maps.source,
+            comparison.maps.destination
+        );
+
+        const resolvedSource = composeApexMethodMerge(
+            comparison,
+            METHOD_MERGE_CONFLICT_SOURCE
+        );
+        assert.ok(resolvedSource.composedSource.includes('SOURCE_STATUS'));
+
+        const comparisonTarget = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: METHOD_MERGE_CONFLICT_SOURCE,
+            destinationContent: METHOD_MERGE_CONFLICT_DESTINATION
+        });
+
+        applyMethodResolutions(
+            comparisonTarget.methods,
+            [{ methodKey: 'getStatus()', strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_TARGET }],
+            comparisonTarget.maps.source,
+            comparisonTarget.maps.destination
+        );
+
+        const resolvedTarget = composeApexMethodMerge(
+            comparisonTarget,
+            METHOD_MERGE_CONFLICT_SOURCE
+        );
+        assert.ok(resolvedTarget.composedSource.includes('DESTINATION_STATUS'));
+    });
+
+    await runTest('absent base: structural mismatch between source and destination fails closed', () => {
+        const source = `public class ShellMismatch {\n    private Integer v = 1;\n}`;
+        const dest = `public class ShellMismatch {\n    private Integer v = 2;\n}`;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: '',
+                    sourceContent: source,
+                    destinationContent: dest
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT
+        );
+    });
+
+    await runTest('absent base: method missing from non-empty base class keeps basePresent false semantics', () => {
+        const base = buildClass([baseWeather, sharedForecast]);
+        const source = buildClass([baseWeather, sharedForecast, sourceTemperature]);
+        const destination = buildClass([baseWeather, sharedForecast]);
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        const item = inventoryByKey(result, 'getTemperature()');
+        assert.strictEqual(item.basePresent, false);
+        assert.strictEqual(item.status, METHOD_STATUS.AUTO_INCLUDED);
+    });
+
+    await runTest('non-empty base METHOD merge remains unchanged', () => {
+        const base = buildClass([baseWeather, sharedForecast]);
+        const source = buildClass([sourceWeather, sharedForecast]);
+        const destination = buildClass([destWeather, sharedForecast]);
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.baseClassAbsent, false);
+        assert.ok(result.parses.base);
+        assert.strictEqual(
+            inventoryByKey(result, 'getWeather()').status,
+            METHOD_STATUS.CONFLICT
+        );
+    });
+
+    await runTest('absent base no-conflict scenario composes valid Apex when shared methods match', () => {
+        const header = 'public with sharing class MethodMergeComposeDemo {\n\n';
+        const footer = '\n}';
+        const shared = `    public static String getStatus() {
+        return 'INITIAL';
+    }`;
+        const sourceOnly = `    public static String getSourceMessage() {
+        return 'source';
+    }`;
+        const destOnly = `    public static String getDestinationMessage() {
+        return 'destination';
+    }`;
+        const source = `${header}${shared}\n${sourceOnly}${footer}`;
+        const destination = `${header}${shared}\n${destOnly}${footer}`;
+
+        const merged = executeApexMethodMerge({
+            baseContent: '',
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(merged.conflictCount, 0);
+        assert.strictEqual(merged.composeSuccess, true);
+        parseApexClassSource(merged.composedSource);
+        assert.ok(merged.composedSource.includes('getSourceMessage'));
+        assert.ok(merged.composedSource.includes('getDestinationMessage'));
+    });
+
     await runTest('existing FULL merge regression tests continue passing', () => {
         const phase1TestPath = path.join(__dirname, 'apexMerge.phase1.test.js');
         execSync(`node ${JSON.stringify(phase1TestPath)}`, {
