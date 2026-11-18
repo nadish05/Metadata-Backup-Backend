@@ -28,6 +28,32 @@ const PUBLISH_STATE = Object.freeze({
     PUBLISHED: 'PUBLISHED'
 });
 
+const GIT_PUBLISH_USER_EMAIL = 'backup@system.com';
+const GIT_PUBLISH_USER_NAME = 'Salesforce Backup Bot';
+
+function sanitizeGitStderr(stderr) {
+    return String(stderr || '')
+        .replace(/https?:\/\/[^@\s]+@/gi, 'https://***@')
+        .replace(/x-access-token:[^@\s]+@/gi, 'x-access-token:***@')
+        .slice(0, 2000);
+}
+
+function logMethodPublishGitFailure(code, message, cause) {
+    console.error(
+        JSON.stringify({
+            event: 'apex_merge_method_publish_git_failure',
+            code,
+            message,
+            gitStderr: sanitizeGitStderr(cause)
+        })
+    );
+}
+
+async function configureLocalGitIdentity(repoPath, git = runGit) {
+    await git(repoPath, `config user.email ${shellQuote(GIT_PUBLISH_USER_EMAIL)}`);
+    await git(repoPath, `config user.name ${shellQuote(GIT_PUBLISH_USER_NAME)}`);
+}
+
 function sha256Utf8(content) {
     return crypto
         .createHash('sha256')
@@ -369,6 +395,8 @@ async function publishMethodMergeInRepo({
         await writeFile(absoluteCls, unit.clsContent, 'utf8');
     }
 
+    await configureLocalGitIdentity(repoPath, git);
+
     const stagedPaths = publishUnits
         .map((unit) => shellQuote(unit.filePath.replace(/\\/g, '/')))
         .join(' ');
@@ -390,6 +418,12 @@ async function publishMethodMergeInRepo({
                 { cause: error.stderr || error.message }
             );
         }
+
+        logMethodPublishGitFailure(
+            MERGE_ERROR.GIT_ERROR,
+            'Git commit failed.',
+            error.stderr || error.message
+        );
 
         throw new ApexMergeError(MERGE_ERROR.GIT_ERROR, 'Git commit failed.', {
             cause: error.stderr || error.message
@@ -451,6 +485,12 @@ async function publishMethodMergeInRepo({
                 }))
             };
         }
+
+        logMethodPublishGitFailure(
+            MERGE_ERROR.PUBLISH_PUSH_REJECTED,
+            'Git push to Source branch was rejected.',
+            error.stderr || error.message
+        );
 
         throw new ApexMergeError(
             MERGE_ERROR.PUBLISH_PUSH_REJECTED,
@@ -532,13 +572,18 @@ async function publishMethodMergeSession(session, metadataNames) {
 
 module.exports = {
     PUBLISH_STATE,
+    GIT_PUBLISH_USER_EMAIL,
+    GIT_PUBLISH_USER_NAME,
     sha256Utf8,
     resolveInputMergePins,
     selectPublishUnits,
     publishMethodMergeInRepo,
     publishMethodMergeSession,
     assertImmutableBranchPins,
+    configureLocalGitIdentity,
     runGit,
     normalizeBranchRef,
-    getAuthenticatedRepoUrl
+    getAuthenticatedRepoUrl,
+    sanitizeGitStderr,
+    logMethodPublishGitFailure
 };

@@ -260,6 +260,81 @@ async function main() {
         assert.strictEqual(remoteCls.content, composedCls);
     });
 
+    await runTest(
+        'METHOD publish succeeds when ephemeral clone has no preconfigured Git identity',
+        async () => {
+            const root = path.join(os.tmpdir(), `apex-publish-no-identity-${Date.now()}`);
+            const fixture = await initPublishRepository(root);
+            const unsetGit = async (command) => {
+                await execAsync(
+                    `cd ${JSON.stringify(fixture.clonePath)} && ${command}`
+                );
+            };
+
+            for (const key of ['user.email', 'user.name']) {
+                try {
+                    await unsetGit(`git config --local --unset-all ${key}`);
+                } catch (error) {
+                    // absent in fresh clones
+                }
+            }
+
+            const beforeMeta = await readFile(
+                path.join(fixture.clonePath, fixture.metaPath),
+                'utf8'
+            );
+
+            const result = await publishMethodMergeInRepo({
+                repoPath: fixture.clonePath,
+                sourceBranch: 'source',
+                destinationBranch: 'destination',
+                inputMergePins: {
+                    sourceHeadSha: fixture.sourceHeadSha,
+                    destinationHeadSha: fixture.destinationHeadSha
+                },
+                publishUnits: [
+                    {
+                        metadataName: 'WeatherService',
+                        filePath: fixture.clsPath,
+                        metaXmlPath: fixture.metaPath,
+                        clsContent: composedCls,
+                        clsSha256: sha256Utf8(composedCls)
+                    }
+                ]
+            });
+
+            assert.strictEqual(result.publishState, PUBLISH_STATE.PUBLISHED);
+            assert.ok(result.publishedCommitSha);
+
+            const remoteCls = await showBlobAtRef(
+                fixture.clonePath,
+                'origin/source',
+                fixture.clsPath
+            );
+            assert.strictEqual(remoteCls.content, composedCls);
+
+            const destinationHead = await revParseOriginHead(
+                fixture.clonePath,
+                'destination'
+            );
+            assert.strictEqual(destinationHead, fixture.destinationHeadSha);
+
+            const destCls = await showBlobAtRef(
+                fixture.clonePath,
+                'origin/destination',
+                fixture.clsPath
+            );
+            assert.ok(destCls.content.includes("System.debug('destination');"));
+
+            const afterMeta = await showBlobAtRef(
+                fixture.clonePath,
+                result.publishedCommitSha,
+                fixture.metaPath
+            );
+            assert.strictEqual(afterMeta.content, beforeMeta);
+        }
+    );
+
     await runTest('destination branch remains unchanged after publish', async () => {
         const root = path.join(os.tmpdir(), `apex-publish-dest-${Date.now()}`);
         const fixture = await initPublishRepository(root);
