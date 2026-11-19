@@ -4,15 +4,23 @@ const assert = require('assert');
 const { execSync } = require('child_process');
 const path = require('path');
 
-const { parseApexClassSource } = require('./apexClassParser.service');
+const {
+    parseApexClassSource,
+    reconstructOuterClassDeclaration,
+    OUTER_ACCESS,
+    OUTER_SHARING
+} = require('./apexClassParser.service');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
 const {
     METHOD_STATUS,
     METHOD_RESOLUTION_STRATEGY,
+    DECLARATION_STATUS,
+    DECLARATION_RESOLUTION_SIDE,
     compareApexMethodMerge,
     executeApexMethodMerge,
     composeApexMethodMerge,
-    applyMethodResolutions
+    applyMethodResolutions,
+    applyDeclarationResolutions
 } = require('./apexMergeMethodMerge.service');
 
 const SHELL_HEADER = `/**
@@ -30,6 +38,39 @@ function buildClass(methodBlocks) {
     return `${SHELL_HEADER}${methodBlocks.map((block) => `\n${block}`).join('\n')}${SHELL_FOOTER}`;
 }
 
+function sharingPhrase(sharing) {
+    if (sharing === OUTER_SHARING.WITH) {
+        return 'with sharing ';
+    }
+
+    if (sharing === OUTER_SHARING.WITHOUT) {
+        return 'without sharing ';
+    }
+
+    if (sharing === OUTER_SHARING.INHERITED) {
+        return 'inherited sharing ';
+    }
+
+    return '';
+}
+
+function buildClassWithOuterDeclaration(access, sharing, methodBlocks) {
+    const header = `/**
+ * Method merge fixture shell.
+ */
+${access} ${sharingPhrase(sharing)}class WeatherMergeLab {
+    private static Integer cacheVersion = 1;
+`;
+
+    return `${header}${methodBlocks.map((block) => `\n${block}`).join('\n')}${SHELL_FOOTER}`;
+}
+
+function buildMinimalClass(access, sharing, bodyLines = []) {
+    const header = `${access} ${sharingPhrase(sharing)}class ShellMismatch {\n`;
+    const body = bodyLines.map((line) => `    ${line}\n`).join('');
+    return `${header}${body}}`;
+}
+
 function methodBlock(signature, bodyLine) {
     return `    public static void ${signature} {
         ${bodyLine}
@@ -38,6 +79,25 @@ function methodBlock(signature, bodyLine) {
 
 function inventoryByKey(inventory, key) {
     return inventory.methods.find((entry) => entry.methodKey === key);
+}
+
+function assertOuterDeclaration(classSource, access, sharing) {
+    const parsed = parseApexClassSource(classSource);
+
+    assert.strictEqual(parsed.outerDeclaration.access, access);
+    assert.strictEqual(parsed.outerDeclaration.sharing, sharing);
+}
+
+function composeWithDeclarationResolutions(comparison, sourceContent, declarationResolutions) {
+    if (declarationResolutions?.length) {
+        applyDeclarationResolutions(
+            comparison.declarations,
+            declarationResolutions,
+            comparison.declarationInventories
+        );
+    }
+
+    return composeApexMethodMerge(comparison, sourceContent);
 }
 
 function runTest(name, fn) {
@@ -364,27 +424,6 @@ ${SHELL_FOOTER}`;
         assert.ok(merged.composedSource.includes('public class WeatherMergeLab'));
     });
 
-    await runTest('unsupported class-level structural conflict fails closed', () => {
-        const base = buildClass([baseWeather]);
-        const source = buildClass([sourceWeather]);
-        const destinationShell = SHELL_HEADER.replace(
-            'cacheVersion = 1',
-            'cacheVersion = 2'
-        ) + sourceWeather + SHELL_FOOTER;
-
-        assert.throws(
-            () =>
-                compareApexMethodMerge({
-                    baseContent: base,
-                    sourceContent: source,
-                    destinationContent: destinationShell
-                }),
-            (error) =>
-                error instanceof ApexMergeError &&
-                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT
-        );
-    });
-
     await runTest('invalid composed Apex fails METHOD_COMPOSE_FAILED validation', () => {
         const base = buildClass([baseWeather]);
         const source = buildClass([sourceWeather]);
@@ -704,6 +743,713 @@ ${SHELL_FOOTER}`;
         assert.ok(resolvedTarget.composedSource.includes('DESTINATION_STATUS'));
     });
 
+    await runTest('declaration three-way: divergent sharing conflicts while access auto-resolves', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.INHERITED,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.declarationConflictCount, 1);
+        assert.strictEqual(
+            result.declarations.access.status,
+            DECLARATION_STATUS.AUTO_RESOLVED
+        );
+        assert.strictEqual(result.declarations.access.selectedValue, OUTER_ACCESS.PUBLIC);
+        assert.strictEqual(
+            result.declarations.sharing.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+        assert.strictEqual(result.declarations.sharing.selectedValue, null);
+        assert.strictEqual(
+            inventoryByKey(result, 'getWeather()').status,
+            METHOD_STATUS.AUTO_INCLUDED
+        );
+    });
+
+    await runTest('declaration three-way access: source-only change auto-selects source', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(
+            result.declarations.access.status,
+            DECLARATION_STATUS.AUTO_RESOLVED
+        );
+        assert.strictEqual(result.declarations.access.selectedValue, OUTER_ACCESS.GLOBAL);
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
+    await runTest('declaration three-way access: destination-only change auto-selects destination', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.declarations.access.selectedValue, OUTER_ACCESS.GLOBAL);
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
+    await runTest('declaration three-way access: identical side changes auto-resolve', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const side = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: side,
+            destinationContent: side
+        });
+
+        assert.strictEqual(result.declarations.access.selectedValue, OUTER_ACCESS.GLOBAL);
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
+    await runTest('declaration three-way access: divergent changes conflict', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = `/**
+ * Method merge fixture shell.
+ */
+class WeatherMergeLab {
+    private static Integer cacheVersion = 1;
+${method}
+}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(
+            result.declarations.access.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+        assert.strictEqual(result.declarationConflictCount, 1);
+    });
+
+    await runTest('declaration three-way sharing: source-only change auto-selects source', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(
+            result.declarations.sharing.selectedValue,
+            OUTER_SHARING.WITHOUT
+        );
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
+    await runTest('declaration three-way sharing: destination-only change auto-selects destination', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.INHERITED,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(
+            result.declarations.sharing.selectedValue,
+            OUTER_SHARING.INHERITED
+        );
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
+    await runTest('declaration three-way sharing: identical side changes auto-resolve', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const side = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: side,
+            destinationContent: side
+        });
+
+        assert.strictEqual(
+            result.declarations.sharing.selectedValue,
+            OUTER_SHARING.WITHOUT
+        );
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
+    await runTest('declaration three-way sharing: omitted to with transition on one side', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const omittedHeader = `/**
+ * Method merge fixture shell.
+ */
+public class WeatherMergeLab {
+    private static Integer cacheVersion = 1;
+`;
+        const base = `${omittedHeader}${method}${SHELL_FOOTER}`;
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = `${omittedHeader}${method}${SHELL_FOOTER}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(
+            result.declarations.sharing.selectedValue,
+            OUTER_SHARING.WITH
+        );
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
+    await runTest('declaration: access conflicts while sharing auto-resolves', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = `/**
+ * Method merge fixture shell.
+ */
+class WeatherMergeLab {
+    private static Integer cacheVersion = 1;
+${method}
+}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.declarationConflictCount, 1);
+        assert.strictEqual(
+            result.declarations.access.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+        assert.strictEqual(
+            result.declarations.sharing.status,
+            DECLARATION_STATUS.AUTO_RESOLVED
+        );
+    });
+
+    await runTest('absent base declaration: identical access and sharing auto-resolve', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.baseClassAbsent, true);
+        assert.strictEqual(result.declarationConflictCount, 0);
+        assert.strictEqual(
+            result.declarations.access.selectedValue,
+            OUTER_ACCESS.PUBLIC
+        );
+        assert.strictEqual(
+            result.declarations.sharing.selectedValue,
+            OUTER_SHARING.WITHOUT
+        );
+    });
+
+    await runTest('absent base declaration: different access only conflicts', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.declarationConflictCount, 1);
+        assert.strictEqual(
+            result.declarations.access.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+        assert.strictEqual(
+            result.declarations.sharing.status,
+            DECLARATION_STATUS.AUTO_RESOLVED
+        );
+    });
+
+    await runTest('absent base declaration: different sharing only conflicts', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.INHERITED,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.declarationConflictCount, 1);
+        assert.strictEqual(
+            result.declarations.sharing.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+    });
+
+    await runTest('absent base declaration: both access and sharing conflict', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.INHERITED,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.declarationConflictCount, 2);
+    });
+
+    await runTest('structural guard: different root fields still fail closed', () => {
+        const base = buildClass([baseWeather]);
+        const source = buildClass([sourceWeather]);
+        const destinationShell = SHELL_HEADER.replace(
+            'cacheVersion = 1',
+            'cacheVersion = 2'
+        ) + sourceWeather + SHELL_FOOTER;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destinationShell
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT
+        );
+    });
+
+    await runTest('structural guard: different extends clause fails closed', () => {
+        const method = methodBlock('getWeather()', "System.debug('x');");
+        const make = (extendsClause) =>
+            `public class ExtendsLab ${extendsClause} {\n${method}\n}`;
+        const base = make('extends BaseOne');
+        const source = make('extends BaseOne');
+        const destination = make('extends BaseTwo');
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT
+        );
+    });
+
+    await runTest('structural guard: different implements clause fails closed', () => {
+        const method = methodBlock('getWeather()', "System.debug('x');");
+        const make = (implementsClause) =>
+            `public class ImplementsLab ${implementsClause} {\n${method}\n}`;
+        const base = make('implements IOne');
+        const source = make('implements IOne');
+        const destination = make('implements IOne, ITwo');
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT
+        );
+    });
+
+    await runTest('structural guard: class annotation difference fails closed', () => {
+        const method = methodBlock('getWeather()', "System.debug('x');");
+        const base = `@IsTest\npublic class AnnotatedLab {\n${method}\n}`;
+        const source = `@IsTest\npublic class AnnotatedLab {\n${method}\n}`;
+        const destination = `@SuppressWarnings('PMD')\npublic class AnnotatedLab {\n${method}\n}`;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT
+        );
+    });
+
+    await runTest('structural guard: nested class body difference fails closed', () => {
+        const method = methodBlock('getWeather()', "System.debug('x');");
+        const nestedA = '    private class Inner { Integer a = 1; }\n';
+        const nestedB = '    private class Inner { Integer a = 2; }\n';
+        const header = 'public with sharing class NestedLab {\n';
+        const base = `${header}${nestedA}${method}\n}`;
+        const source = `${header}${nestedA}${method}\n}`;
+        const destination = `${header}${nestedB}${method}\n}`;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT
+        );
+    });
+
+    await runTest('omitted access: sharing-only drift reaches declaration comparison', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const bodyShell = `    private static Integer cacheVersion = 1;
+`;
+        const make = (sharingPhrase) =>
+            `/**
+ * Method merge fixture shell.
+ */
+${sharingPhrase}class WeatherMergeLab {
+${bodyShell}${method}
+}`;
+        const base = make('with sharing ');
+        const source = make('without sharing ');
+        const destination = make('inherited sharing ');
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(
+            result.declarations.access.status,
+            DECLARATION_STATUS.AUTO_RESOLVED
+        );
+        assert.strictEqual(
+            result.declarations.access.selectedValue,
+            OUTER_ACCESS.UNSPECIFIED
+        );
+        assert.strictEqual(
+            result.declarations.sharing.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+        assert.strictEqual(result.declarationConflictCount, 1);
+    });
+
+    await runTest('declaration: both attributes conflict with omitted access', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const bodyShell = `    private static Integer cacheVersion = 1;
+`;
+        const base = `/**
+ * Method merge fixture shell.
+ */
+public with sharing class WeatherMergeLab {
+${bodyShell}${method}
+}`;
+        const source = `/**
+ * Method merge fixture shell.
+ */
+global without sharing class WeatherMergeLab {
+${bodyShell}${method}
+}`;
+        const destination = `/**
+ * Method merge fixture shell.
+ */
+inherited sharing class WeatherMergeLab {
+${bodyShell}${method}
+}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.declarationConflictCount, 2);
+        assert.strictEqual(
+            result.declarations.access.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+        assert.strictEqual(
+            result.declarations.sharing.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+    });
+
+    await runTest('non-mergeable header still fails structural when extends differs', () => {
+        const method = methodBlock('getWeather()', "System.debug('x');");
+        const base = `public with sharing class ExtLab extends BaseOne {\n${method}\n}`;
+        const source = `public without sharing class ExtLab extends BaseOne {\n${method}\n}`;
+        const destination = `public inherited sharing class ExtLab extends BaseTwo {\n${method}\n}`;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT
+        );
+    });
+
+    await runTest('outer sharing drift alone no longer fails structural guard', () => {
+        const method = methodBlock('getWeather()', "System.debug('x');");
+        const nested = '    private class Inner { }\n';
+        const base = `public with sharing class NestedLab {\n${nested}${method}\n}`;
+        const source = `public without sharing class NestedLab {\n${nested}${method}\n}`;
+        const destination = `public inherited sharing class NestedLab {\n${nested}${method}\n}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(
+            result.declarations.sharing.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+        assert.strictEqual(
+            result.declarations.access.status,
+            DECLARATION_STATUS.AUTO_RESOLVED
+        );
+    });
+
+    await runTest('declaration inventory feeds reconstruct helper without composing merge output', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        const rebuilt = reconstructOuterClassDeclaration(source, {
+            access: result.declarations.access.selectedValue,
+            sharing: result.declarations.sharing.selectedValue
+        });
+
+        assert.ok(rebuilt.includes('without sharing'));
+        parseApexClassSource(rebuilt);
+    });
+
+    await runTest('method conflict count unchanged when only declaration attributes differ', () => {
+        const method = methodBlock('getWeather()', "System.debug('same');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.conflictCount, 0);
+        assert.strictEqual(
+            inventoryByKey(result, 'getWeather()').status,
+            METHOD_STATUS.AUTO_INCLUDED
+        );
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
     await runTest('absent base: structural mismatch between source and destination fails closed', () => {
         const source = `public class ShellMismatch {\n    private Integer v = 1;\n}`;
         const dest = `public class ShellMismatch {\n    private Integer v = 2;\n}`;
@@ -782,6 +1528,311 @@ ${SHELL_FOOTER}`;
         parseApexClassSource(merged.composedSource);
         assert.ok(merged.composedSource.includes('getSourceMessage'));
         assert.ok(merged.composedSource.includes('getDestinationMessage'));
+    });
+
+    await runTest('Phase 3: automatic sharing selection appears in composed cls', () => {
+        const method = methodBlock('getWeather()', "System.debug('same');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const merged = executeApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.ok(merged.composeSuccess);
+        assertOuterDeclaration(
+            merged.composedSource,
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT
+        );
+        assert.ok(merged.composedSource.includes('without sharing'));
+    });
+
+    await runTest('Phase 3: automatic access selection appears in composed cls', () => {
+        const method = methodBlock('getWeather()', "System.debug('same');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+
+        const merged = executeApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.ok(merged.composeSuccess);
+        assertOuterDeclaration(
+            merged.composedSource,
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITH
+        );
+    });
+
+    await runTest('Phase 3: WeatherService combined sharing conflict resolved to SOURCE', () => {
+        const method = methodBlock('getWeather()', "System.debug('shared');");
+        const shell = `    private static Integer cacheVersion = 1;
+`;
+        const base = `public with sharing class WeatherService {
+${shell}${method}
+}`;
+        const source = `global without sharing class WeatherService {
+${shell}${method}
+}`;
+        const destination = `public inherited sharing class WeatherService {
+${shell}${method}
+}`;
+
+        const comparison = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(
+            comparison.declarations.access.selectedValue,
+            OUTER_ACCESS.GLOBAL
+        );
+        assert.strictEqual(
+            comparison.declarations.sharing.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+
+        const merged = composeWithDeclarationResolutions(comparison, source, [
+            {
+                conflictKey: 'declaration:sharing',
+                side: DECLARATION_RESOLUTION_SIDE.SOURCE
+            }
+        ]);
+
+        assert.ok(merged.composeSuccess);
+        assert.ok(merged.composedSource.includes('global without sharing class WeatherService'));
+        assertOuterDeclaration(
+            merged.composedSource,
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.WITHOUT
+        );
+    });
+
+    await runTest('Phase 3: sharing conflict resolved to DESTINATION in composed cls', () => {
+        const method = methodBlock('getWeather()', "System.debug('same');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.INHERITED,
+            [method]
+        );
+
+        let comparison = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        comparison = composeWithDeclarationResolutions(comparison, source, [
+            {
+                conflictKey: 'declaration:sharing',
+                side: DECLARATION_RESOLUTION_SIDE.DESTINATION
+            }
+        ]);
+
+        assertOuterDeclaration(
+            comparison.composedSource,
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.INHERITED
+        );
+        assert.ok(comparison.composedSource.includes('inherited sharing'));
+    });
+
+    await runTest('Phase 3: independent access and sharing conflict resolutions in composed cls', () => {
+        const method = methodBlock('getWeather()', "System.debug('same');");
+        const shell = `    private static Integer cacheVersion = 1;
+`;
+        const base = `public with sharing class WeatherMergeLab {
+${shell}${method}
+    private class Helper {
+        public Integer value;
+    }
+}`;
+        const source = `global without sharing class WeatherMergeLab {
+${shell}${method}
+    private class Helper {
+        public Integer value;
+    }
+}`;
+        const destination = `inherited sharing class WeatherMergeLab {
+${shell}${method}
+    private class Helper {
+        public Integer value;
+    }
+}`;
+
+        let comparison = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        comparison = composeWithDeclarationResolutions(comparison, source, [
+            {
+                conflictKey: 'declaration:access',
+                side: DECLARATION_RESOLUTION_SIDE.SOURCE
+            },
+            {
+                conflictKey: 'declaration:sharing',
+                side: DECLARATION_RESOLUTION_SIDE.DESTINATION
+            }
+        ]);
+
+        assertOuterDeclaration(
+            comparison.composedSource,
+            OUTER_ACCESS.GLOBAL,
+            OUTER_SHARING.INHERITED
+        );
+        assert.ok(comparison.composedSource.includes('private class Helper'));
+    });
+
+    await runTest('Phase 3: absent base identical declarations compose with selected values', () => {
+        const method = methodBlock('getWeather()', "System.debug('same');");
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+
+        const merged = executeApexMethodMerge({
+            baseContent: '',
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.ok(merged.composeSuccess);
+        assertOuterDeclaration(
+            merged.composedSource,
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT
+        );
+    });
+
+    await runTest('Phase 3: unresolved declaration conflict blocks composition', () => {
+        const method = methodBlock('getWeather()', "System.debug('same');");
+        const base = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITH,
+            [method]
+        );
+        const source = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.WITHOUT,
+            [method]
+        );
+        const destination = buildClassWithOuterDeclaration(
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.INHERITED,
+            [method]
+        );
+
+        const comparison = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.throws(
+            () => composeApexMethodMerge(comparison, source),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.DECLARATION_UNRESOLVED_CONFLICT
+        );
+    });
+
+    await runTest('Phase 3: unsupported selected access fails composition closed', () => {
+        const method = methodBlock('getWeather()', "System.debug('same');");
+        const source = `private class PrivateOnly {
+${method}
+}`;
+        const destination = `private class PrivateOnly {
+${method}
+}`;
+
+        const comparison = compareApexMethodMerge({
+            baseContent: '',
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.throws(
+            () => composeApexMethodMerge(comparison, source),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_COMPOSE_FAILED
+        );
+    });
+
+    await runTest('Phase 3: merged methods preserved with declaration reconstruction', () => {
+        const base = buildClass([baseWeather, sharedForecast]);
+        const source = buildClass([sourceWeather, sharedForecast]);
+        const destination = buildClass([destWeather, sharedForecast]);
+
+        const merged = executeApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination,
+            resolutions: [
+                {
+                    methodKey: 'getWeather()',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_TARGET
+                }
+            ]
+        });
+
+        assert.ok(merged.composeSuccess);
+        assert.ok(merged.composedSource.includes("System.debug('destination');"));
+        assertOuterDeclaration(
+            merged.composedSource,
+            OUTER_ACCESS.PUBLIC,
+            OUTER_SHARING.OMITTED
+        );
     });
 
     await runTest('existing FULL merge regression tests continue passing', () => {

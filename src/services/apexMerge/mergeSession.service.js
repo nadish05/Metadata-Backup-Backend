@@ -28,7 +28,7 @@ const {
     resolveMethodMergeUnit,
     validateMethodUnitForSeal,
     shouldUseMethodMode,
-    buildMethodConflictSummaries,
+    buildMethodConflictSummariesAll,
     METHOD_MERGE_MODE
 } = require('./apexMergeMethodSession.service');
 const {
@@ -76,10 +76,11 @@ function requireOpenSession(mergeSessionId, { comparisonId, deploymentPlanId } =
 function mapClassPreviewResponse(unit) {
     const isMethodMode = unit.mergeMode === METHOD_MERGE_MODE;
     const conflicts = isMethodMode
-        ? buildMethodConflictSummaries(unit.metadataName, unit.methodMerge)
+        ? buildMethodConflictSummariesAll(unit.metadataName, unit.methodMerge)
         : buildConflictSummaries(unit);
     const hasConflicts = isMethodMode
-        ? (unit.methodMerge?.conflictCount ?? 0) > 0
+        ? (unit.methodMerge?.conflictCount ?? 0) > 0 ||
+          (unit.methodMerge?.declarationConflictCount ?? 0) > 0
         : conflicts.length > 0;
     const mergedContent = isMethodMode
         ? unit.artifacts?.cls?.content ?? null
@@ -123,6 +124,11 @@ function mapClassPreviewResponse(unit) {
         mapped.methods = unit.methodMerge?.methods ?? [];
         mapped.conflictCount = unit.methodMerge?.conflictCount ?? 0;
         mapped.resolved = unit.methodMerge?.resolved === true;
+        mapped.declarations = unit.methodMerge?.declarations ?? null;
+        mapped.declarationConflictCount =
+            unit.methodMerge?.declarationConflictCount ?? 0;
+        mapped.declarationsResolved =
+            unit.methodMerge?.declarationsResolved === true;
     }
 
     return mapped;
@@ -161,6 +167,9 @@ function buildPerClassFocusResponse(classes, focusMetadataName) {
         focus.methods = mapped.methods;
         focus.conflictCount = mapped.conflictCount;
         focus.resolved = mapped.resolved;
+        focus.declarations = mapped.declarations;
+        focus.declarationConflictCount = mapped.declarationConflictCount;
+        focus.declarationsResolved = mapped.declarationsResolved;
     }
 
     return focus;
@@ -171,11 +180,16 @@ function normalizeResolutionRequests(body = {}) {
         return body.resolutions;
     }
 
-    if (body.metadataName && Array.isArray(body.methodResolutions)) {
+    if (
+        body.metadataName &&
+        (Array.isArray(body.methodResolutions) ||
+            Array.isArray(body.declarationResolutions))
+    ) {
         return [
             {
                 metadataName: body.metadataName,
-                methodResolutions: body.methodResolutions
+                methodResolutions: body.methodResolutions || [],
+                declarationResolutions: body.declarationResolutions || []
             }
         ];
     }
@@ -186,6 +200,7 @@ function normalizeResolutionRequests(body = {}) {
                 metadataName: body.metadataName,
                 resolutionStrategy: body.resolutionStrategy,
                 methodResolutions: body.methodResolutions,
+                declarationResolutions: body.declarationResolutions,
                 resolutions: body.resolutions
             }
         ];
@@ -476,7 +491,7 @@ function resolveMergeSession(mergeSessionId, body = {}) {
     if (focusUnit) {
         const isMethodMode = focusUnit.mergeMode === METHOD_MERGE_MODE;
         const conflicts = isMethodMode
-            ? buildMethodConflictSummaries(
+            ? buildMethodConflictSummariesAll(
                   focusUnit.metadataName,
                   focusUnit.methodMerge
               )
@@ -485,7 +500,8 @@ function resolveMergeSession(mergeSessionId, body = {}) {
             metadataName: focusUnit.metadataName,
             mergeMode: focusUnit.mergeMode || 'FULL',
             hasConflicts: isMethodMode
-                ? (focusUnit.methodMerge?.conflictCount ?? 0) > 0
+                ? (focusUnit.methodMerge?.conflictCount ?? 0) > 0 ||
+                  (focusUnit.methodMerge?.declarationConflictCount ?? 0) > 0
                 : conflicts.length > 0,
             conflicts,
             mergedContent: isMethodMode
@@ -501,6 +517,11 @@ function resolveMergeSession(mergeSessionId, body = {}) {
             resolveBody.conflictCount =
                 focusUnit.methodMerge?.conflictCount ?? 0;
             resolveBody.resolved = focusUnit.methodMerge?.resolved === true;
+            resolveBody.declarations = focusUnit.methodMerge?.declarations ?? null;
+            resolveBody.declarationConflictCount =
+                focusUnit.methodMerge?.declarationConflictCount ?? 0;
+            resolveBody.declarationsResolved =
+                focusUnit.methodMerge?.declarationsResolved === true;
         }
 
         Object.assign(response, resolveBody);

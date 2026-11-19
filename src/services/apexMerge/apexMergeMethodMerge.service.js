@@ -1,10 +1,11 @@
 'use strict';
 
-const { parseApexClassSource } = require('./apexClassParser.service');
+const { parseApexClassSource, OUTER_ACCESS } = require('./apexClassParser.service');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
 const {
     composeMethodMergedClass,
-    validateComposedMethodMerge,
+    applyOuterDeclarationToComposedClass,
+    validateComposedDeclarationMerge,
     normalizeBodyText,
     rootCallableMembers
 } = require('./apexMergeMethodComposer.service');
@@ -22,6 +23,27 @@ const METHOD_RESOLUTION_STRATEGY = Object.freeze({
     ACCEPT_SOURCE: 'ACCEPT_SOURCE',
     ACCEPT_TARGET: 'ACCEPT_TARGET'
 });
+
+const DECLARATION_STATUS = Object.freeze({
+    AUTO_RESOLVED: 'AUTO_RESOLVED',
+    CONFLICT: 'CONFLICT',
+    RESOLVED: 'RESOLVED'
+});
+
+const DECLARATION_RESOLUTION_SIDE = Object.freeze({
+    SOURCE: 'SOURCE',
+    DESTINATION: 'DESTINATION'
+});
+
+const DECLARATION_ATTRIBUTE = Object.freeze({
+    ACCESS: 'access',
+    SHARING: 'sharing'
+});
+
+const KNOWN_DECLARATION_CONFLICT_KEYS = new Set([
+    'declaration:access',
+    'declaration:sharing'
+]);
 
 function normalizeStructuralText(text) {
     return String(text || '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
@@ -49,21 +71,365 @@ function indexRootCallableMembers(parsed) {
     return map;
 }
 
-function extractClassShellHeader(parsed) {
-    const root = parsed.classes.find((entry) => entry.isRoot);
+function extractNonMergeableHeaderFingerprint(parsed) {
+    const outer = parsed.outerDeclaration;
 
-    if (!root) {
-        return '';
+    if (!outer || !outer.nonMergeableHeaderText) {
+        throw new ApexMergeError(
+            MERGE_ERROR.PARSE_FAILED,
+            'Non-mergeable outer declaration header fingerprint is missing.'
+        );
     }
 
-    const declarationText = root.classDeclaration?.text || '';
-    const openBraceIndex = declarationText.indexOf('{');
+    return normalizeStructuralText(outer.nonMergeableHeaderText);
+}
 
-    if (openBraceIndex < 0) {
-        return normalizeStructuralText(declarationText);
+function buildDeclarationInventory(parsed) {
+    const outer = parsed.outerDeclaration;
+
+    if (!outer) {
+        throw new ApexMergeError(
+            MERGE_ERROR.PARSE_FAILED,
+            'Outer class declaration inventory is missing from parse result.'
+        );
     }
 
-    return normalizeStructuralText(declarationText.slice(0, openBraceIndex + 1));
+    return {
+        access: outer.access,
+        sharing: outer.sharing,
+        headerText: outer.headerText,
+        headerRange: outer.headerRange,
+        accessSourceRange: outer.accessSourceRange,
+        sharingSourceRange: outer.sharingSourceRange,
+        nonMergeableHeaderFingerprint: extractNonMergeableHeaderFingerprint(parsed)
+    };
+}
+
+function declarationConflictKey(attribute) {
+    return `declaration:${attribute}`;
+}
+
+function compareDeclarationAttribute({
+    attribute,
+    baseValue,
+    sourceValue,
+    destinationValue,
+    baseAbsent
+}) {
+    const entry = {
+        attribute,
+        conflictKey: declarationConflictKey(attribute),
+        baseValue: baseAbsent ? null : baseValue,
+        sourceValue,
+        destinationValue,
+        selectedValue: null,
+        status: DECLARATION_STATUS.CONFLICT
+    };
+
+    if (baseAbsent) {
+        if (sourceValue === destinationValue) {
+            entry.status = DECLARATION_STATUS.AUTO_RESOLVED;
+            entry.selectedValue = sourceValue;
+        }
+
+        return entry;
+    }
+
+    if (sourceValue === destinationValue) {
+        entry.status = DECLARATION_STATUS.AUTO_RESOLVED;
+        entry.selectedValue = sourceValue;
+        return entry;
+    }
+
+    if (sourceValue === baseValue) {
+        entry.status = DECLARATION_STATUS.AUTO_RESOLVED;
+        entry.selectedValue = destinationValue;
+        return entry;
+    }
+
+    if (destinationValue === baseValue) {
+        entry.status = DECLARATION_STATUS.AUTO_RESOLVED;
+        entry.selectedValue = sourceValue;
+        return entry;
+    }
+
+    return entry;
+}
+
+function mapDeclarationsForClient(declarations = {}) {
+    const mapEntry = (entry) => {
+        if (!entry) {
+            return null;
+        }
+
+        return {
+            attribute: entry.attribute,
+            conflictKey: entry.conflictKey,
+            baseValue: entry.baseValue,
+            sourceValue: entry.sourceValue,
+            destinationValue: entry.destinationValue,
+            selectedValue: entry.selectedValue,
+            status: entry.status,
+            resolution: entry.resolution ?? null
+        };
+    };
+
+    return {
+        access: mapEntry(declarations.access),
+        sharing: mapEntry(declarations.sharing)
+    };
+}
+
+function countDeclarationConflicts(declarations = {}) {
+    return [declarations.access, declarations.sharing].filter(
+        (entry) => entry?.status === DECLARATION_STATUS.CONFLICT
+    ).length;
+}
+
+function declarationValueForSide(inventories, attribute, side) {
+    const branchInventory =
+        side === DECLARATION_RESOLUTION_SIDE.SOURCE
+            ? inventories?.source
+            : inventories?.destination;
+
+    if (!branchInventory) {
+        throw new ApexMergeError(
+            MERGE_ERROR.MISSING_THREE_WAY_ARTIFACTS,
+            `Missing declaration inventory for ${side}.`,
+            { side, attribute }
+        );
+    }
+
+    if (attribute === DECLARATION_ATTRIBUTE.ACCESS) {
+        return branchInventory.access;
+    }
+
+    if (attribute === DECLARATION_ATTRIBUTE.SHARING) {
+        return branchInventory.sharing;
+    }
+
+    throw new ApexMergeError(
+        MERGE_ERROR.INVALID_REQUEST,
+        `Unknown declaration attribute: ${attribute}.`,
+        { attribute }
+    );
+}
+
+function assertResolvableDeclarationKeys(declarations, declarationResolutions) {
+    for (const resolution of declarationResolutions || []) {
+        if (!KNOWN_DECLARATION_CONFLICT_KEYS.has(resolution.conflictKey)) {
+            throw new ApexMergeError(
+                MERGE_ERROR.UNKNOWN_DECLARATION_CONFLICT_KEY,
+                `Unknown declaration conflictKey: ${resolution.conflictKey}.`,
+                { conflictKey: resolution.conflictKey }
+            );
+        }
+
+        const attribute =
+            resolution.conflictKey === 'declaration:access'
+                ? DECLARATION_ATTRIBUTE.ACCESS
+                : DECLARATION_ATTRIBUTE.SHARING;
+        const entry = declarations?.[attribute];
+
+        if (!entry) {
+            throw new ApexMergeError(
+                MERGE_ERROR.UNKNOWN_DECLARATION_CONFLICT_KEY,
+                `Declaration conflictKey is not part of the current comparison: ${resolution.conflictKey}.`,
+                { conflictKey: resolution.conflictKey }
+            );
+        }
+    }
+}
+
+function assertDeclarationResolutionTargetsAreConflicts(
+    declarations,
+    declarationResolutions
+) {
+    const byKey = new Map(
+        [declarations?.access, declarations?.sharing]
+            .filter(Boolean)
+            .map((entry) => [entry.conflictKey, entry])
+    );
+
+    for (const resolution of declarationResolutions || []) {
+        const entry = byKey.get(resolution.conflictKey);
+
+        if (
+            entry.status !== DECLARATION_STATUS.CONFLICT &&
+            entry.status !== DECLARATION_STATUS.RESOLVED
+        ) {
+            throw new ApexMergeError(
+                MERGE_ERROR.INVALID_REQUEST,
+                `Declaration ${resolution.conflictKey} is not in conflict and cannot be resolved.`,
+                {
+                    conflictKey: resolution.conflictKey,
+                    status: entry.status
+                }
+            );
+        }
+    }
+}
+
+function resolveSelectedDeclarationValues(declarations) {
+    const accessEntry = declarations?.access;
+    const sharingEntry = declarations?.sharing;
+
+    if (!accessEntry || !sharingEntry) {
+        throw new ApexMergeError(
+            MERGE_ERROR.PARSE_FAILED,
+            'Declaration comparison is missing access or sharing entries.'
+        );
+    }
+
+    const entries = [
+        { attribute: DECLARATION_ATTRIBUTE.ACCESS, entry: accessEntry },
+        { attribute: DECLARATION_ATTRIBUTE.SHARING, entry: sharingEntry }
+    ];
+
+    for (const { attribute, entry } of entries) {
+        if (entry.status === DECLARATION_STATUS.CONFLICT) {
+            throw new ApexMergeError(
+                MERGE_ERROR.DECLARATION_UNRESOLVED_CONFLICT,
+                `Declaration attribute "${attribute}" is unresolved.`,
+                { attribute, declarations }
+            );
+        }
+
+        if (
+            entry.status !== DECLARATION_STATUS.AUTO_RESOLVED &&
+            entry.status !== DECLARATION_STATUS.RESOLVED
+        ) {
+            throw new ApexMergeError(
+                MERGE_ERROR.METHOD_COMPOSE_FAILED,
+                `Declaration attribute "${attribute}" has unsupported status "${entry.status}".`,
+                { attribute, entry }
+            );
+        }
+
+        if (entry.selectedValue == null && attribute === DECLARATION_ATTRIBUTE.ACCESS) {
+            throw new ApexMergeError(
+                MERGE_ERROR.METHOD_COMPOSE_FAILED,
+                `Declaration attribute "${attribute}" is missing selectedValue.`,
+                { attribute, entry }
+            );
+        }
+
+        if (entry.selectedValue == null && attribute === DECLARATION_ATTRIBUTE.SHARING) {
+            throw new ApexMergeError(
+                MERGE_ERROR.METHOD_COMPOSE_FAILED,
+                `Declaration attribute "${attribute}" is missing selectedValue.`,
+                { attribute, entry }
+            );
+        }
+    }
+
+    const access = accessEntry.selectedValue;
+    const sharing = sharingEntry.selectedValue;
+    const allowedAccess = new Set([
+        OUTER_ACCESS.PUBLIC,
+        OUTER_ACCESS.GLOBAL,
+        OUTER_ACCESS.UNSPECIFIED
+    ]);
+
+    if (!allowedAccess.has(access)) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            `Unsupported outer access selected for composition: ${access}`,
+            { access, sharing }
+        );
+    }
+
+    return { access, sharing };
+}
+
+function applyDeclarationResolutions(declarations, declarationResolutions, inventories) {
+    if (!declarationResolutions?.length) {
+        return;
+    }
+
+    const byKey = new Map();
+
+    for (const resolution of declarationResolutions) {
+        const side = String(resolution.side || '').toUpperCase();
+
+        if (
+            side !== DECLARATION_RESOLUTION_SIDE.SOURCE &&
+            side !== DECLARATION_RESOLUTION_SIDE.DESTINATION
+        ) {
+            throw new ApexMergeError(
+                MERGE_ERROR.INVALID_RESOLUTION_STRATEGY,
+                `Unsupported declaration resolution side: ${resolution.side}`,
+                { resolution }
+            );
+        }
+
+        byKey.set(resolution.conflictKey, side);
+    }
+
+    for (const attribute of [
+        DECLARATION_ATTRIBUTE.ACCESS,
+        DECLARATION_ATTRIBUTE.SHARING
+    ]) {
+        const entry = declarations?.[attribute];
+
+        if (!entry) {
+            continue;
+        }
+
+        const side = byKey.get(entry.conflictKey);
+
+        if (!side) {
+            continue;
+        }
+
+        if (entry.status !== DECLARATION_STATUS.CONFLICT) {
+            continue;
+        }
+
+        entry.resolution = side;
+        entry.selectedValue = declarationValueForSide(inventories, attribute, side);
+        entry.status = DECLARATION_STATUS.RESOLVED;
+    }
+}
+
+function buildDeclarationComparison(baseParsed, sourceParsed, destinationParsed, baseAbsent) {
+    const sourceInventory = buildDeclarationInventory(sourceParsed);
+    const destinationInventory = buildDeclarationInventory(destinationParsed);
+    const baseInventory = baseAbsent ? null : buildDeclarationInventory(baseParsed);
+
+    const access = compareDeclarationAttribute({
+        attribute: DECLARATION_ATTRIBUTE.ACCESS,
+        baseValue: baseAbsent ? null : baseInventory.access,
+        sourceValue: sourceInventory.access,
+        destinationValue: destinationInventory.access,
+        baseAbsent
+    });
+
+    const sharing = compareDeclarationAttribute({
+        attribute: DECLARATION_ATTRIBUTE.SHARING,
+        baseValue: baseAbsent ? null : baseInventory.sharing,
+        sourceValue: sourceInventory.sharing,
+        destinationValue: destinationInventory.sharing,
+        baseAbsent
+    });
+
+    const declarations = {
+        access,
+        sharing
+    };
+    const declarationConflictCount = [access, sharing].filter(
+        (item) => item.status === DECLARATION_STATUS.CONFLICT
+    ).length;
+
+    return {
+        declarations,
+        declarationConflictCount,
+        inventories: {
+            base: baseInventory,
+            source: sourceInventory,
+            destination: destinationInventory
+        }
+    };
 }
 
 function collectStructuralSnapshot(parsed) {
@@ -79,7 +445,7 @@ function collectStructuralSnapshot(parsed) {
 
     return {
         className: parsed.primaryClassName,
-        classShellHeader: extractClassShellHeader(parsed),
+        nonMergeableHeaderFingerprint: extractNonMergeableHeaderFingerprint(parsed),
         fields: root.fields
             .map((field) => normalizeStructuralText(field.sourceText))
             .sort(),
@@ -104,7 +470,12 @@ function listStructuralMismatches(left, right) {
         mismatches.push('class name');
     }
 
-    const compareFields = ['classShellHeader', 'fields', 'properties', 'innerClasses'];
+    const compareFields = [
+        'nonMergeableHeaderFingerprint',
+        'fields',
+        'properties',
+        'innerClasses'
+    ];
 
     for (const field of compareFields) {
         const leftValue = JSON.stringify(left[field]);
@@ -129,7 +500,12 @@ function assertStructuralCompatibility(baseParsed, sourceParsed, destParsed) {
         mismatches.push('class name');
     }
 
-    const compareFields = ['classShellHeader', 'fields', 'properties', 'innerClasses'];
+    const compareFields = [
+        'nonMergeableHeaderFingerprint',
+        'fields',
+        'properties',
+        'innerClasses'
+    ];
 
     for (const field of compareFields) {
         const baseValue = JSON.stringify(base[field]);
@@ -422,12 +798,21 @@ function compareApexMethodMerge({
     const destMap = indexRootCallableMembers(destinationParsed);
     const methods = buildMethodInventory(baseMap, sourceMap, destMap);
     const conflictCount = countConflicts(methods);
+    const declarationComparison = buildDeclarationComparison(
+        baseParsed,
+        sourceParsed,
+        destinationParsed,
+        baseAbsent
+    );
 
     return {
         mergeMode: METHOD_MERGE_MODE,
         className: sourceParsed.primaryClassName,
         methods,
         conflictCount,
+        declarations: declarationComparison.declarations,
+        declarationConflictCount: declarationComparison.declarationConflictCount,
+        declarationInventories: declarationComparison.inventories,
         resolved: conflictCount === 0,
         composeSuccess: false,
         composedSource: null,
@@ -450,12 +835,24 @@ function compareApexMethodMerge({
  */
 function composeApexMethodMerge(comparison, sourceContent) {
     const unresolved = countConflicts(comparison.methods);
+    const unresolvedDeclarations = countDeclarationConflicts(comparison.declarations);
 
     if (unresolved > 0) {
         throw new ApexMergeError(
             MERGE_ERROR.METHOD_UNRESOLVED_CONFLICT,
-            `METHOD merge has ${unresolved} unresolved conflict(s).`,
+            `METHOD merge has ${unresolved} unresolved method conflict(s).`,
             { conflictCount: unresolved, methods: comparison.methods }
+        );
+    }
+
+    if (unresolvedDeclarations > 0) {
+        throw new ApexMergeError(
+            MERGE_ERROR.DECLARATION_UNRESOLVED_CONFLICT,
+            `METHOD merge has ${unresolvedDeclarations} unresolved declaration conflict(s).`,
+            {
+                declarationConflictCount: unresolvedDeclarations,
+                declarations: comparison.declarations
+            }
         );
     }
 
@@ -470,7 +867,7 @@ function composeApexMethodMerge(comparison, sourceContent) {
         comparison.maps.destination
     );
 
-    const composedSource = composeMethodMergedClass({
+    let composedSource = composeMethodMergedClass({
         sourceText: sourceContent,
         sourceParse: comparison.parses.source,
         selectedMethodTextByKey,
@@ -478,7 +875,23 @@ function composeApexMethodMerge(comparison, sourceContent) {
         appendMethodTexts
     });
 
-    validateComposedMethodMerge(composedSource, expectedKeys);
+    const selectedDeclaration = resolveSelectedDeclarationValues(
+        comparison.declarations
+    );
+
+    composedSource = applyOuterDeclarationToComposedClass(
+        composedSource,
+        selectedDeclaration
+    );
+
+    validateComposedDeclarationMerge({
+        composedSource,
+        sourceParse: comparison.parses.source,
+        expectedClassName: comparison.className,
+        selectedAccess: selectedDeclaration.access,
+        selectedSharing: selectedDeclaration.sharing,
+        expectedMethodKeys: expectedKeys
+    });
 
     comparison.composedSource = composedSource;
     comparison.composeSuccess = true;
@@ -516,7 +929,7 @@ function executeApexMethodMerge({
         comparison.resolved = remaining === 0;
     }
 
-    if (comparison.resolved) {
+    if (comparison.resolved && comparison.declarationConflictCount === 0) {
         composeApexMethodMerge(comparison, sourceContent);
     }
 
@@ -527,14 +940,26 @@ module.exports = {
     METHOD_MERGE_MODE,
     METHOD_STATUS,
     METHOD_RESOLUTION_STRATEGY,
+    DECLARATION_STATUS,
+    DECLARATION_ATTRIBUTE,
+    DECLARATION_RESOLUTION_SIDE,
     compareApexMethodMerge,
     applyMethodResolutions,
+    applyDeclarationResolutions,
+    resolveSelectedDeclarationValues,
+    mapDeclarationsForClient,
+    countDeclarationConflicts,
+    assertResolvableDeclarationKeys,
+    assertDeclarationResolutionTargetsAreConflicts,
     composeApexMethodMerge,
     executeApexMethodMerge,
     assertStructuralCompatibility,
     assertStructuralCompatibilityWithoutBase,
     isAbsentClassContent,
     buildMethodInventory,
+    buildDeclarationInventory,
+    buildDeclarationComparison,
+    compareDeclarationAttribute,
     indexRootCallableMembers,
     collectStructuralSnapshot
 };

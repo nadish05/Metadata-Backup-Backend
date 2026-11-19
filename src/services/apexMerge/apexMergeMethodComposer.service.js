@@ -1,6 +1,10 @@
 'use strict';
 
-const { parseApexClassSource } = require('./apexClassParser.service');
+const {
+    parseApexClassSource,
+    reconstructOuterClassDeclaration,
+    OUTER_ACCESS
+} = require('./apexClassParser.service');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
 
 function normalizeBodyText(text) {
@@ -174,9 +178,164 @@ function validateComposedMethodMerge(composedSource, expectedMethodKeys) {
     return parsed;
 }
 
+function normalizeStructuralText(text) {
+    return String(text || '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
+}
+
+function collectRootStructuralBodySnapshot(parsed) {
+    const root = parsed.classes.find((entry) => entry.isRoot);
+    const qn = parsed.primaryClassName;
+
+    if (!root || !parsed.outerDeclaration) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            'Composed class structural snapshot is incomplete.'
+        );
+    }
+
+    return {
+        className: parsed.primaryClassName,
+        nonMergeableHeaderFingerprint: normalizeStructuralText(
+            parsed.outerDeclaration.nonMergeableHeaderText
+        ),
+        fields: root.fields
+            .map((field) => normalizeStructuralText(field.sourceText))
+            .sort(),
+        properties: root.properties
+            .map((property) => normalizeStructuralText(property.sourceText))
+            .sort(),
+        innerClasses: parsed.classes
+            .filter((entry) => entry.parentQualifiedName === qn)
+            .map((entry) => normalizeStructuralText(entry.classDeclaration.text))
+            .sort()
+    };
+}
+
+/**
+ * Apply selected outer declaration values after method composition.
+ *
+ * @param {string} composedSource
+ * @param {{ access: string, sharing: string }} selection
+ * @returns {string}
+ */
+function applyOuterDeclarationToComposedClass(composedSource, selection) {
+    const allowedAccess = new Set([
+        OUTER_ACCESS.PUBLIC,
+        OUTER_ACCESS.GLOBAL,
+        OUTER_ACCESS.UNSPECIFIED
+    ]);
+
+    if (!allowedAccess.has(selection.access)) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            `Unsupported outer access for METHOD composition: ${selection.access}`,
+            { access: selection.access, sharing: selection.sharing }
+        );
+    }
+
+    try {
+        return reconstructOuterClassDeclaration(composedSource, {
+            access: selection.access,
+            sharing: selection.sharing
+        });
+    } catch (error) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            `Declaration reconstruction failed: ${error.message}`,
+            {
+                access: selection.access,
+                sharing: selection.sharing,
+                cause: error
+            }
+        );
+    }
+}
+
+/**
+ * Validate final composed class declaration and preserved structure.
+ *
+ * @param {object} params
+ * @param {string} params.composedSource
+ * @param {object} params.sourceParse
+ * @param {string} params.expectedClassName
+ * @param {string} params.selectedAccess
+ * @param {string} params.selectedSharing
+ * @param {Set<string>} params.expectedMethodKeys
+ * @returns {object}
+ */
+function validateComposedDeclarationMerge({
+    composedSource,
+    sourceParse,
+    expectedClassName,
+    selectedAccess,
+    selectedSharing,
+    expectedMethodKeys
+}) {
+    const parsed = validateComposedMethodMerge(composedSource, expectedMethodKeys);
+
+    if (parsed.primaryClassName !== expectedClassName) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            `Composed class name "${parsed.primaryClassName}" does not match expected "${expectedClassName}".`,
+            { expectedClassName, composedClassName: parsed.primaryClassName }
+        );
+    }
+
+    if (parsed.outerDeclaration.access !== selectedAccess) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            `Composed access "${parsed.outerDeclaration.access}" does not match selected "${selectedAccess}".`,
+            {
+                attribute: 'access',
+                selectedAccess,
+                composedAccess: parsed.outerDeclaration.access
+            }
+        );
+    }
+
+    if (parsed.outerDeclaration.sharing !== selectedSharing) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            `Composed sharing "${parsed.outerDeclaration.sharing}" does not match selected "${selectedSharing}".`,
+            {
+                attribute: 'sharing',
+                selectedSharing,
+                composedSharing: parsed.outerDeclaration.sharing
+            }
+        );
+    }
+
+    const sourceSnapshot = collectRootStructuralBodySnapshot(sourceParse);
+    const composedSnapshot = collectRootStructuralBodySnapshot(parsed);
+
+    const fields = ['nonMergeableHeaderFingerprint', 'fields', 'properties', 'innerClasses'];
+
+    for (const field of fields) {
+        if (
+            JSON.stringify(sourceSnapshot[field]) !==
+            JSON.stringify(composedSnapshot[field])
+        ) {
+            throw new ApexMergeError(
+                MERGE_ERROR.METHOD_COMPOSE_FAILED,
+                `Composed class structural field "${field}" changed during declaration reconstruction.`,
+                {
+                    field,
+                    source: sourceSnapshot[field],
+                    composed: composedSnapshot[field]
+                }
+            );
+        }
+    }
+
+    return parsed;
+}
+
 module.exports = {
     composeMethodMergedClass,
     validateComposedMethodMerge,
+    validateComposedDeclarationMerge,
+    applyOuterDeclarationToComposedClass,
+    collectRootStructuralBodySnapshot,
     normalizeBodyText,
     rootCallableMembers
 };

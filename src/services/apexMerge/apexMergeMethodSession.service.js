@@ -19,8 +19,15 @@ const {
     METHOD_MERGE_MODE,
     METHOD_STATUS,
     METHOD_RESOLUTION_STRATEGY,
+    DECLARATION_STATUS,
+    DECLARATION_RESOLUTION_SIDE,
     compareApexMethodMerge,
     applyMethodResolutions,
+    applyDeclarationResolutions,
+    mapDeclarationsForClient,
+    countDeclarationConflicts,
+    assertResolvableDeclarationKeys,
+    assertDeclarationResolutionTargetsAreConflicts,
     composeApexMethodMerge,
     executeApexMethodMerge
 } = require('./apexMergeMethodMerge.service');
@@ -112,16 +119,48 @@ function buildMethodConflictSummaries(metadataName, methodMerge) {
         }));
 }
 
+function buildDeclarationConflictSummaries(metadataName, methodMerge) {
+    const declarations = methodMerge?.declarations;
+
+    if (!declarations) {
+        return [];
+    }
+
+    return [declarations.access, declarations.sharing]
+        .filter((entry) => entry?.status === DECLARATION_STATUS.CONFLICT)
+        .map((entry) => ({
+            id: `${metadataName}:${entry.conflictKey}`,
+            artifact: 'declaration',
+            conflictKey: entry.conflictKey,
+            attribute: entry.attribute,
+            message: `Class declaration ${entry.attribute} has conflicting values across branches.`
+        }));
+}
+
+function buildMethodConflictSummariesAll(metadataName, methodMerge) {
+    return [
+        ...buildMethodConflictSummaries(metadataName, methodMerge),
+        ...buildDeclarationConflictSummaries(metadataName, methodMerge)
+    ];
+}
+
 function buildMethodMergeState(mergeResult) {
+    const declarationConflictCount = mergeResult.declarationConflictCount ?? 0;
+
     return {
         methods: mapMethodInventoryForClient(
             mergeResult.methods,
             mergeResult.maps
         ),
+        declarations: mapDeclarationsForClient(mergeResult.declarations),
+        declarationConflictCount,
+        declarationInventories: mergeResult.declarationInventories,
+        declarationsResolved: declarationConflictCount === 0,
         conflictCount: mergeResult.conflictCount,
         resolved: mergeResult.resolved === true,
         composeSuccess: mergeResult.composeSuccess === true,
-        methodResolutions: []
+        methodResolutions: [],
+        declarationResolutions: []
     };
 }
 
@@ -138,6 +177,27 @@ function runMethodMergeComparison(clsThreeWay) {
         sourceContent: clsThreeWay.source,
         destinationContent: clsThreeWay.destination ?? ''
     });
+}
+
+function mergeStoredDeclarationResolutions(
+    existingResolutions = [],
+    incomingResolutions = []
+) {
+    const byKey = new Map();
+
+    for (const entry of existingResolutions || []) {
+        if (entry?.conflictKey) {
+            byKey.set(entry.conflictKey, entry);
+        }
+    }
+
+    for (const entry of incomingResolutions || []) {
+        if (entry?.conflictKey) {
+            byKey.set(entry.conflictKey, entry);
+        }
+    }
+
+    return [...byKey.values()];
 }
 
 function mergeStoredMethodResolutions(existingResolutions = [], incomingResolutions = []) {
@@ -216,7 +276,9 @@ function buildMethodPreviewUnit({
         mergeMode: METHOD_MERGE_MODE,
         mergeBaseSha,
         conflictState:
-            mergeResult.conflictCount > 0 ? 'UNRESOLVED' : 'NONE',
+            mergeResult.conflictCount > 0 || mergeResult.declarationConflictCount > 0
+                ? 'UNRESOLVED'
+                : 'NONE',
         drift: null,
         threeWay: {
             cls: clsThreeWay,
@@ -231,7 +293,9 @@ function buildMethodPreviewUnit({
         artifacts: {
             cls: {
                 content: composedCls,
-                conflict: mergeResult.conflictCount > 0,
+                conflict:
+                    mergeResult.conflictCount > 0 ||
+                    mergeResult.declarationConflictCount > 0,
                 sha256: composedCls ? sha256Utf8(composedCls) : null
             },
             metaXml: {
@@ -300,12 +364,13 @@ async function previewApexClassMethod({
 }
 
 function resolveMethodMergeUnit(unit, resolution = {}) {
-    const incoming = resolution.methodResolutions || [];
+    const incomingMethods = resolution.methodResolutions || [];
+    const incomingDeclarations = resolution.declarationResolutions || [];
 
-    if (!incoming.length) {
+    if (!incomingMethods.length && !incomingDeclarations.length) {
         throw new ApexMergeError(
             MERGE_ERROR.INVALID_REQUEST,
-            `METHOD resolution for ${unit.metadataName} requires methodResolutions.`,
+            `METHOD resolution for ${unit.metadataName} requires methodResolutions and/or declarationResolutions.`,
             { metadataName: unit.metadataName }
         );
     }
@@ -319,9 +384,13 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
         );
     }
 
-    const combinedResolutions = mergeStoredMethodResolutions(
+    const combinedMethodResolutions = mergeStoredMethodResolutions(
         unit.methodMerge?.methodResolutions,
-        incoming
+        incomingMethods
+    );
+    const combinedDeclarationResolutions = mergeStoredDeclarationResolutions(
+        unit.methodMerge?.declarationResolutions,
+        incomingDeclarations
     );
 
     const comparison = compareApexMethodMerge({
@@ -330,12 +399,31 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
         destinationContent: clsThreeWay.destination ?? ''
     });
 
-    assertResolvableMethodKeys(comparison.methods, incoming);
-    assertResolutionTargetsAreConflicts(comparison.methods, incoming);
+    if (incomingMethods.length) {
+        assertResolvableMethodKeys(comparison.methods, incomingMethods);
+        assertResolutionTargetsAreConflicts(comparison.methods, incomingMethods);
+    }
+
+    if (incomingDeclarations.length) {
+        assertResolvableDeclarationKeys(
+            comparison.declarations,
+            incomingDeclarations
+        );
+        assertDeclarationResolutionTargetsAreConflicts(
+            comparison.declarations,
+            incomingDeclarations
+        );
+    }
+
+    applyDeclarationResolutions(
+        comparison.declarations,
+        combinedDeclarationResolutions,
+        comparison.declarationInventories
+    );
 
     applyMethodResolutions(
         comparison.methods,
-        combinedResolutions,
+        combinedMethodResolutions,
         comparison.maps.source,
         comparison.maps.destination
     );
@@ -343,26 +431,35 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
     const conflictCount = comparison.methods.filter(
         (entry) => entry.status === METHOD_STATUS.CONFLICT
     ).length;
+    const declarationConflictCount = countDeclarationConflicts(comparison.declarations);
 
     const methodMerge = {
         methods: mapMethodInventoryForClient(
             comparison.methods,
             comparison.maps
         ),
+        declarations: mapDeclarationsForClient(comparison.declarations),
+        declarationConflictCount,
+        declarationInventories: comparison.declarationInventories,
+        declarationsResolved: declarationConflictCount === 0,
         conflictCount,
         resolved: conflictCount === 0,
         composeSuccess: false,
-        methodResolutions: combinedResolutions
+        methodResolutions: combinedMethodResolutions,
+        declarationResolutions: combinedDeclarationResolutions
     };
 
-  let nextUnit = {
+    let nextUnit = {
         ...unit,
         mergeMode: METHOD_MERGE_MODE,
         methodMerge,
-        conflictState: conflictCount > 0 ? 'UNRESOLVED' : 'RESOLVED'
+        conflictState:
+            conflictCount > 0 || declarationConflictCount > 0
+                ? 'UNRESOLVED'
+                : 'RESOLVED'
     };
 
-    if (conflictCount === 0) {
+    if (conflictCount === 0 && declarationConflictCount === 0) {
         composeApexMethodMerge(comparison, clsThreeWay.source);
         const composedCls = comparison.composedSource;
 
@@ -391,7 +488,7 @@ function validateMethodUnitForSeal(unit) {
         return;
     }
 
-    if (unit.methodMerge?.conflictCount > 0 || unit.conflictState === 'UNRESOLVED') {
+    if (unit.methodMerge?.conflictCount > 0) {
         throw new ApexMergeError(
             MERGE_ERROR.METHOD_UNRESOLVED_CONFLICT,
             `Class ${unit.metadataName} has unresolved method conflicts.`,
@@ -399,6 +496,26 @@ function validateMethodUnitForSeal(unit) {
                 metadataName: unit.metadataName,
                 conflictCount: unit.methodMerge?.conflictCount
             }
+        );
+    }
+
+    if (unit.methodMerge?.declarationConflictCount > 0) {
+        throw new ApexMergeError(
+            MERGE_ERROR.DECLARATION_UNRESOLVED_CONFLICT,
+            `Class ${unit.metadataName} has unresolved declaration conflicts.`,
+            {
+                metadataName: unit.metadataName,
+                declarationConflictCount: unit.methodMerge?.declarationConflictCount,
+                declarations: unit.methodMerge?.declarations
+            }
+        );
+    }
+
+    if (unit.conflictState === 'UNRESOLVED') {
+        throw new ApexMergeError(
+            MERGE_ERROR.UNRESOLVED_CONFLICT,
+            `Class ${unit.metadataName} has unresolved merge conflicts.`,
+            { metadataName: unit.metadataName, conflictState: unit.conflictState }
         );
     }
 
@@ -442,6 +559,8 @@ module.exports = {
     mapMethodInventoryForClient,
     implementationTextFromMap,
     buildMethodConflictSummaries,
+    buildDeclarationConflictSummaries,
+    buildMethodConflictSummariesAll,
     buildMethodMergeState,
     runMethodMergeComparison,
     buildMethodPreviewUnit,
@@ -449,5 +568,7 @@ module.exports = {
     resolveMethodMergeUnit,
     validateMethodUnitForSeal,
     mergeStoredMethodResolutions,
-    METHOD_RESOLUTION_STRATEGY
+    mergeStoredDeclarationResolutions,
+    METHOD_RESOLUTION_STRATEGY,
+    DECLARATION_RESOLUTION_SIDE
 };

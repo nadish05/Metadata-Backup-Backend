@@ -9,13 +9,15 @@ const {
     buildMethodPreviewUnit,
     resolveMethodMergeUnit,
     validateMethodUnitForSeal,
-    METHOD_RESOLUTION_STRATEGY
+    METHOD_RESOLUTION_STRATEGY,
+    DECLARATION_RESOLUTION_SIDE
 } = require('./apexMergeMethodSession.service');
 const {
     METHOD_STATUS,
+    DECLARATION_STATUS,
     indexRootCallableMembers
 } = require('./apexMergeMethodMerge.service');
-const { parseApexClassSource } = require('./apexClassParser.service');
+const { parseApexClassSource, OUTER_SHARING } = require('./apexClassParser.service');
 const {
     resolveUnitArtifacts,
     RESOLUTION_STRATEGIES
@@ -58,6 +60,26 @@ function rootMethodSlice(classSource, methodKey) {
     const parsed = parseApexClassSource(classSource);
     const members = indexRootCallableMembers(parsed);
     return members.get(methodKey)?.sourceText ?? null;
+}
+
+function buildSharingDeclarationConflictThreeWay() {
+    const method = methodBody('getWeather()', 'same');
+    const shell = `    private static Integer cacheVersion = 1;\n`;
+    const base = `public with sharing class WeatherService {\n${shell}${method}\n}`;
+    const source = `public without sharing class WeatherService {\n${shell}${method}\n}`;
+    const destination = `public inherited sharing class WeatherService {\n${shell}${method}\n}`;
+
+    return { base, source, destination };
+}
+
+function buildDualDeclarationConflictThreeWay() {
+    const method = methodBody('getWeather()', 'same');
+    const shell = `    private static Integer cacheVersion = 1;\n`;
+    const base = `public with sharing class WeatherService {\n${shell}${method}\n}`;
+    const source = `global without sharing class WeatherService {\n${shell}${method}\n}`;
+    const destination = `inherited sharing class WeatherService {\n${shell}${method}\n}`;
+
+    return { base, source, destination };
 }
 
 function buildWeatherThreeWay() {
@@ -751,6 +773,344 @@ async function main() {
         assert.strictEqual(weather.status, METHOD_STATUS.RESOLVED);
         assert.strictEqual(weather.sourceImplementation, undefined);
         assert.strictEqual(resolved.conflictState, 'RESOLVED');
+    });
+
+    await runTest('declaration preview auto-resolved attributes need no resolution', () => {
+        const { base, source, destination } = buildWeatherThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        assert.strictEqual(preview.methodMerge.declarationConflictCount, 0);
+        assert.strictEqual(
+            preview.methodMerge.declarations.sharing.status,
+            DECLARATION_STATUS.AUTO_RESOLVED
+        );
+        const mapped = mapClassPreviewResponse(preview);
+        assert.strictEqual(mapped.declarationConflictCount, 0);
+        assert.ok(
+            mapped.conflicts.every((entry) => entry.artifact === 'method')
+        );
+    });
+
+    await runTest('sharing declaration conflict resolves to SOURCE', () => {
+        const { base, source, destination } = buildSharingDeclarationConflictThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+        preview.artifacts.metaXml = { content: metaXml, conflict: false };
+
+        assert.strictEqual(preview.methodMerge.declarationConflictCount, 1);
+
+        const resolved = resolveMethodMergeUnit(preview, {
+            declarationResolutions: [
+                {
+                    conflictKey: 'declaration:sharing',
+                    side: DECLARATION_RESOLUTION_SIDE.SOURCE
+                }
+            ]
+        });
+
+        assert.strictEqual(
+            resolved.methodMerge.declarations.sharing.status,
+            DECLARATION_STATUS.RESOLVED
+        );
+        assert.strictEqual(
+            resolved.methodMerge.declarations.sharing.selectedValue,
+            OUTER_SHARING.WITHOUT
+        );
+        assert.strictEqual(resolved.methodMerge.declarationConflictCount, 0);
+        assert.strictEqual(resolved.conflictState, 'RESOLVED');
+        assert.ok(resolved.methodMerge.composeSuccess);
+        assert.ok(
+            resolved.artifacts.cls.content.includes('public without sharing class WeatherService')
+        );
+        assert.strictEqual(
+            parseApexClassSource(resolved.artifacts.cls.content).outerDeclaration.sharing,
+            OUTER_SHARING.WITHOUT
+        );
+    });
+
+    await runTest('sharing declaration conflict resolves to DESTINATION', () => {
+        const { base, source, destination } = buildSharingDeclarationConflictThreeWay();
+        let preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+        preview.artifacts.metaXml = { content: metaXml, conflict: false };
+
+        preview = resolveMethodMergeUnit(preview, {
+            declarationResolutions: [
+                {
+                    conflictKey: 'declaration:sharing',
+                    side: DECLARATION_RESOLUTION_SIDE.DESTINATION
+                }
+            ]
+        });
+
+        assert.strictEqual(
+            preview.methodMerge.declarations.sharing.selectedValue,
+            OUTER_SHARING.INHERITED
+        );
+    });
+
+    await runTest('access and sharing declaration conflicts resolve independently', () => {
+        const { base, source, destination } = buildDualDeclarationConflictThreeWay();
+        let preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+        preview.artifacts.metaXml = { content: metaXml, conflict: false };
+
+        assert.strictEqual(preview.methodMerge.declarationConflictCount, 2);
+
+        preview = resolveMethodMergeUnit(preview, {
+            declarationResolutions: [
+                {
+                    conflictKey: 'declaration:access',
+                    side: DECLARATION_RESOLUTION_SIDE.SOURCE
+                }
+            ]
+        });
+
+        assert.strictEqual(preview.methodMerge.declarationConflictCount, 1);
+        assert.strictEqual(
+            preview.methodMerge.declarations.access.status,
+            DECLARATION_STATUS.RESOLVED
+        );
+        assert.strictEqual(
+            preview.methodMerge.declarations.sharing.status,
+            DECLARATION_STATUS.CONFLICT
+        );
+
+        preview = resolveMethodMergeUnit(preview, {
+            declarationResolutions: [
+                {
+                    conflictKey: 'declaration:sharing',
+                    side: DECLARATION_RESOLUTION_SIDE.DESTINATION
+                }
+            ]
+        });
+
+        assert.strictEqual(preview.methodMerge.declarationConflictCount, 0);
+        assert.strictEqual(preview.conflictState, 'RESOLVED');
+    });
+
+    await runTest('invalid declaration conflict keys are rejected', () => {
+        const { base, source, destination } = buildSharingDeclarationConflictThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        assert.throws(
+            () =>
+                resolveMethodMergeUnit(preview, {
+                    declarationResolutions: [
+                        {
+                            conflictKey: 'declaration:extends',
+                            side: DECLARATION_RESOLUTION_SIDE.SOURCE
+                        }
+                    ]
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.UNKNOWN_DECLARATION_CONFLICT_KEY
+        );
+    });
+
+    await runTest('invalid declaration resolution sides are rejected', () => {
+        const { base, source, destination } = buildSharingDeclarationConflictThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        assert.throws(
+            () =>
+                resolveMethodMergeUnit(preview, {
+                    declarationResolutions: [
+                        { conflictKey: 'declaration:sharing', side: 'ACCEPT_SOURCE' }
+                    ]
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.INVALID_RESOLUTION_STRATEGY
+        );
+    });
+
+    await runTest('resolution for auto-resolved declaration attribute is rejected', () => {
+        const { base, source, destination } = buildSharingDeclarationConflictThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        assert.throws(
+            () =>
+                resolveMethodMergeUnit(preview, {
+                    declarationResolutions: [
+                        {
+                            conflictKey: 'declaration:access',
+                            side: DECLARATION_RESOLUTION_SIDE.SOURCE
+                        }
+                    ]
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.INVALID_REQUEST
+        );
+    });
+
+    await runTest('re-preview clears declaration resolutions and stale keys are rejected', () => {
+        const sharingConflict = buildSharingDeclarationConflictThreeWay();
+        const methodOnly = buildWeatherThreeWay();
+        let unit = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: sharingConflict,
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        unit = resolveMethodMergeUnit(unit, {
+            declarationResolutions: [
+                {
+                    conflictKey: 'declaration:sharing',
+                    side: DECLARATION_RESOLUTION_SIDE.SOURCE
+                }
+            ]
+        });
+
+        unit = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: methodOnly,
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        assert.deepStrictEqual(unit.methodMerge.declarationResolutions, []);
+        assert.strictEqual(unit.methodMerge.declarationConflictCount, 0);
+
+        assert.throws(
+            () =>
+                resolveMethodMergeUnit(unit, {
+                    declarationResolutions: [
+                        {
+                            conflictKey: 'declaration:sharing',
+                            side: DECLARATION_RESOLUTION_SIDE.SOURCE
+                        }
+                    ]
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.INVALID_REQUEST
+        );
+    });
+
+    await runTest('unresolved declaration conflicts block sealing', () => {
+        const { base, source, destination } = buildSharingDeclarationConflictThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+        preview.artifacts.metaXml = { content: metaXml, conflict: false };
+
+        const session = createMethodSessionUnit(preview);
+
+        assert.throws(
+            () => sealMergeSession(session.mergeSessionId),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.DECLARATION_UNRESOLVED_CONFLICT
+        );
+    });
+
+    await runTest('unresolved declaration conflicts block composition', () => {
+        const { base, source, destination } = buildSharingDeclarationConflictThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        assert.strictEqual(preview.methodMerge.conflictCount, 0);
+        assert.strictEqual(preview.methodMerge.declarationConflictCount, 1);
+        assert.strictEqual(preview.methodMerge.composeSuccess, false);
+        assert.strictEqual(preview.artifacts.cls.content, null);
+    });
+
+    await runTest('mapClassPreviewResponse exposes declaration conflicts distinctly', () => {
+        const { base, source, destination } = buildSharingDeclarationConflictThreeWay();
+        const preview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: { base, source, destination },
+            metaMerge: { content: metaXml, conflict: false }
+        });
+
+        const mapped = mapClassPreviewResponse(preview);
+        assert.strictEqual(mapped.declarationConflictCount, 1);
+        assert.strictEqual(mapped.declarations.sharing.status, DECLARATION_STATUS.CONFLICT);
+        const declarationConflict = mapped.conflicts.find(
+            (entry) => entry.artifact === 'declaration'
+        );
+        assert.ok(declarationConflict);
+        assert.strictEqual(declarationConflict.conflictKey, 'declaration:sharing');
     });
 
     await runTest('existing FULL and METHOD regression tests pass', () => {
