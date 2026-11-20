@@ -49,6 +49,40 @@ function normalizeStructuralText(text) {
     return String(text || '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Parser-backed fingerprint for a direct nested class (structural guard only).
+ *
+ * @param {object} classInfo Parsed class entry
+ * @returns {string}
+ */
+function buildDirectNestedClassStructuralFingerprint(classInfo) {
+    const meta = classInfo.nestedMemberDeclaration;
+
+    if (!meta) {
+        throw new ApexMergeError(
+            MERGE_ERROR.PARSE_FAILED,
+            `Missing nested class declaration metadata for ${classInfo.qualifiedName}.`
+        );
+    }
+
+    const annotations = [...(meta.annotations || [])]
+        .map((entry) => normalizeStructuralText(entry))
+        .sort()
+        .join(',');
+
+    const parts = [
+        `qn:${classInfo.qualifiedName}`,
+        `access:${meta.accessModifier}`,
+        `static:${meta.isStatic ? 1 : 0}`,
+        `virtual:${meta.isVirtual ? 1 : 0}`,
+        `abstract:${meta.isAbstract ? 1 : 0}`,
+        `annotations:${annotations}`,
+        `decl:${normalizeStructuralText(classInfo.classDeclaration.text)}`
+    ];
+
+    return normalizeStructuralText(parts.join('|'));
+}
+
 function parseSide(label, source) {
     try {
         return parseApexClassSource(source);
@@ -454,7 +488,7 @@ function collectStructuralSnapshot(parsed) {
             .sort(),
         innerClasses: parsed.classes
             .filter((entry) => entry.parentQualifiedName === qn)
-            .map((entry) => normalizeStructuralText(entry.classDeclaration.text))
+            .map((entry) => buildDirectNestedClassStructuralFingerprint(entry))
             .sort()
     };
 }
@@ -961,5 +995,6 @@ module.exports = {
     buildDeclarationComparison,
     compareDeclarationAttribute,
     indexRootCallableMembers,
-    collectStructuralSnapshot
+    collectStructuralSnapshot,
+    buildDirectNestedClassStructuralFingerprint
 };

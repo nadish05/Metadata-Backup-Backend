@@ -1267,6 +1267,222 @@ ${method}
         );
     });
 
+    await runTest('Phase 5A.2: nested class visibility-only difference fails structural guard', () => {
+        const mk = (visibility) => `public class ExampleService {
+    ${visibility} class Helper {
+        public String getValue() {
+            return 'Example';
+        }
+    }
+    public static void run() {}
+}`;
+
+        const assertInnerClassConflict = (base, source, destination) => {
+            assert.throws(
+                () =>
+                    compareApexMethodMerge({
+                        baseContent: base,
+                        sourceContent: source,
+                        destinationContent: destination
+                    }),
+                (error) =>
+                    error instanceof ApexMergeError &&
+                    error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT &&
+                    error.details.mismatches.includes('innerClasses')
+            );
+        };
+
+        assertInnerClassConflict(mk('private'), mk('public'), mk('private'));
+        assertInnerClassConflict(mk('public'), mk('private'), mk('public'));
+        assertInnerClassConflict(mk('protected'), mk('public'), mk('protected'));
+        assertInnerClassConflict(mk('public'), mk('protected'), mk('public'));
+    });
+
+    await runTest('Phase 5A.2: nested class static and abstract modifier drift fails', () => {
+        const method = methodBlock('run()', "System.debug('x');");
+        const header = 'public class ModifierLab {\n';
+        const footer = `\n${method}\n}`;
+        const base = `${header}    private static class Inner { }\n${footer}`;
+        const source = `${header}    private class Inner { }\n${footer}`;
+        const destination = `${header}    private static class Inner { }\n${footer}`;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT &&
+                error.details.mismatches.includes('innerClasses')
+        );
+
+        const abstractBase = `${header}    private abstract class Inner { }\n${footer}`;
+        const abstractSource = `${header}    private abstract class Inner { }\n${footer}`;
+        const abstractDestination = `${header}    private class Inner { }\n${footer}`;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: abstractBase,
+                    sourceContent: abstractSource,
+                    destinationContent: abstractDestination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT &&
+                error.details.mismatches.includes('innerClasses')
+        );
+
+        const virtualBase = `${header}    private virtual class Inner { }\n${footer}`;
+        const virtualSource = `${header}    private virtual class Inner { }\n${footer}`;
+        const virtualDestination = `${header}    private class Inner { }\n${footer}`;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: virtualBase,
+                    sourceContent: virtualSource,
+                    destinationContent: virtualDestination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT &&
+                error.details.mismatches.includes('innerClasses')
+        );
+    });
+
+    await runTest('Phase 5A.2: identical nested annotations pass structural guard', () => {
+        const ann = '    @TestVisible\n';
+        const method = methodBlock('run()', "System.debug('x');");
+        const nested = (body) =>
+            `public class AnnLab {\n${ann}    private class Inner { ${body} }\n${method}\n}`;
+        const base = nested('Integer a = 1;');
+        const source = nested('Integer a = 1;');
+        const destination = nested('Integer a = 1;');
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.declarationConflictCount, 0);
+    });
+
+    await runTest('Phase 5A.2: nested class annotation drift fails structural guard', () => {
+        const method = methodBlock('run()', "System.debug('x');");
+        const make = (ann, body) =>
+            `public class AnnLab {\n${ann}    private class Inner { ${body} }\n${method}\n}`;
+        const base = make('    @TestVisible\n', 'Integer a = 1;');
+        const source = make('    @TestVisible\n', 'Integer a = 1;');
+        const destination = make('', 'Integer a = 1;');
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT &&
+                error.details.mismatches.includes('innerClasses')
+        );
+    });
+
+    await runTest('Phase 5A.2: nested hierarchy L1 visibility-only fails', () => {
+        const method = methodBlock('run()', "System.debug('x');");
+        const mk = (l1Vis) => `public class Root {
+    ${l1Vis} class L1 {
+        public class L2 { Integer x = 1; }
+    }
+${method}
+}`;
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: mk('private'),
+                    sourceContent: mk('public'),
+                    destinationContent: mk('private')
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT &&
+                error.details.mismatches.includes('innerClasses')
+        );
+    });
+
+    await runTest('Phase 5A.2: nested hierarchy L2 visibility-only fails', () => {
+        const method = methodBlock('run()', "System.debug('x');");
+        const mk = (l2Vis) => `public class Root {
+    private class L1 {
+        ${l2Vis} class L2 { Integer x = 1; }
+    }
+${method}
+}`;
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: mk('public'),
+                    sourceContent: mk('private'),
+                    destinationContent: mk('public')
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT &&
+                error.details.mismatches.includes('innerClasses')
+        );
+    });
+
+    await runTest('Phase 5A.2: nested class whitespace and order normalization preserved', () => {
+        const method = methodBlock('run()', "System.debug('x');");
+        const one = `public class OrderLab {\n    private class A { }\n    private class B { }\n${method}\n}`;
+        const two = `public class OrderLab {\n    private   class   B   {   }\n    private class A { }\n${method}\n}`;
+        const result = compareApexMethodMerge({
+            baseContent: one,
+            sourceContent: one,
+            destinationContent: two
+        });
+
+        assert.ok(result.methods);
+    });
+
+    await runTest('Phase 5A.2: WeatherService divergent nested-class sets still fail', () => {
+        const base = `public with sharing class WeatherService {
+    public static void getWeather() {}
+    public class WeatherWrapper {
+        @AuraEnabled public String temperature;
+    }
+}`;
+        const source = `public class WeatherService {
+    public static void getResortWeather(Datetime dateToCheck) {}
+    private class WeatherApiResponse { public List<TemperatureWrapper> weather; }
+    private class TemperatureWrapper { public Decimal temperature; }
+    public class Weather { public Decimal minTemperatureC; }
+}`;
+        const destination = `public class WeatherService {
+    public static void getResortWeather(Datetime dateToCheck) {}
+    public class Weather { public Decimal minTemperatureC; }
+}`;
+
+        assert.throws(
+            () =>
+                compareApexMethodMerge({
+                    baseContent: base,
+                    sourceContent: source,
+                    destinationContent: destination
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_STRUCTURAL_CONFLICT &&
+                error.details.mismatches.includes('innerClasses')
+        );
+    });
+
     await runTest('omitted access: sharing-only drift reaches declaration comparison', () => {
         const method = methodBlock('getWeather()', "System.debug('shared');");
         const bodyShell = `    private static Integer cacheVersion = 1;

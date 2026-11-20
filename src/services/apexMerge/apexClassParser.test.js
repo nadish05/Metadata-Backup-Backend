@@ -327,6 +327,35 @@ async function main() {
         assertBodiesPreserved(source, rebuilt, parsed);
     });
 
+    await runTest('nested class classInfo captures member declaration modifiers', () => {
+        const source = `public class ExampleService {
+    @TestVisible
+    private static virtual class Helper {
+        public String getValue() {
+            return 'x';
+        }
+    }
+}`;
+
+        const parsed = parseApexClassSource(source);
+        const helper = parsed.classes.find(
+            (entry) => entry.qualifiedName === 'ExampleService.Helper'
+        );
+
+        assert.ok(helper?.nestedMemberDeclaration);
+        assert.strictEqual(helper.nestedMemberDeclaration.accessModifier, 'private');
+        assert.strictEqual(helper.nestedMemberDeclaration.isStatic, true);
+        assert.strictEqual(helper.nestedMemberDeclaration.isVirtual, true);
+        assert.strictEqual(helper.nestedMemberDeclaration.isAbstract, false);
+        assert.strictEqual(helper.nestedMemberDeclaration.annotations.length, 1);
+        assert.ok(helper.nestedMemberDeclaration.annotations[0].includes('TestVisible'));
+        assert.ok(
+            helper.nestedMemberDeclaration.memberDeclarationRange.text.includes(
+                'private static virtual class Helper'
+            )
+        );
+    });
+
     await runTest('reconstructOuterClassDeclaration keeps method and field bytes stable', () => {
         const source = readFixture('WeatherService.cls');
         const parsed = parseApexClassSource(source);

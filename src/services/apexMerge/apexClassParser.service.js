@@ -820,6 +820,69 @@ function collectModifierInfo(modifierContexts, source) {
     };
 }
 
+/**
+ * Nested class declaration modifiers from classBodyDeclaration modifier_list().
+ *
+ * @param {Array<object>} modifierContexts
+ * @param {string} source
+ * @returns {object}
+ */
+function collectNestedClassModifierInfo(modifierContexts, source) {
+    const accessModifiers = [];
+    let isStatic = false;
+    let isVirtual = false;
+    let isAbstract = false;
+    const annotations = [];
+
+    for (const modifierCtx of modifierContexts || []) {
+        if (modifierCtx.STATIC && modifierCtx.STATIC()) {
+            isStatic = true;
+        }
+        if (modifierCtx.VIRTUAL && modifierCtx.VIRTUAL()) {
+            isVirtual = true;
+        }
+        if (modifierCtx.ABSTRACT && modifierCtx.ABSTRACT()) {
+            isAbstract = true;
+        }
+
+        if (modifierCtx.GLOBAL && modifierCtx.GLOBAL()) {
+            accessModifiers.push('global');
+        }
+        if (modifierCtx.PUBLIC && modifierCtx.PUBLIC()) {
+            accessModifiers.push('public');
+        }
+        if (modifierCtx.PROTECTED && modifierCtx.PROTECTED()) {
+            accessModifiers.push('protected');
+        }
+        if (modifierCtx.PRIVATE && modifierCtx.PRIVATE()) {
+            accessModifiers.push('private');
+        }
+
+        const annotationCtx = modifierCtx.annotation
+            ? modifierCtx.annotation()
+            : null;
+
+        if (annotationCtx) {
+            annotations.push(sliceNodeText(annotationCtx, source));
+        }
+    }
+
+    if (accessModifiers.length > 1) {
+        throw new ApexMergeError(
+            MERGE_ERROR.PARSE_FAILED,
+            'Ambiguous nested class access modifiers in modifier_list.'
+        );
+    }
+
+    return {
+        accessModifier: accessModifiers[0] || 'unspecified',
+        isStatic,
+        isVirtual,
+        isAbstract,
+        annotations
+    };
+}
+
 function extractParameterTypes(formalParametersCtx, source) {
     if (!formalParametersCtx) {
         return [];
@@ -864,7 +927,36 @@ function createListener(
         return classStack.join('.');
     }
 
+    let pendingNestedMemberDeclaration = null;
+
     return new (class extends ApexParserBaseListener {
+        enterClassBodyDeclaration(ctx) {
+            const memberDecl = ctx.memberDeclaration
+                ? ctx.memberDeclaration()
+                : null;
+
+            if (!memberDecl) {
+                return;
+            }
+
+            const nestedClassCtx = memberDecl.classDeclaration
+                ? memberDecl.classDeclaration()
+                : null;
+
+            if (!nestedClassCtx) {
+                return;
+            }
+
+            pendingNestedMemberDeclaration = {
+                classDeclarationCtx: nestedClassCtx,
+                modifierInfo: collectNestedClassModifierInfo(
+                    ctx.modifier_list ? ctx.modifier_list() : [],
+                    source
+                ),
+                memberDeclarationRange: extractSourceRange(ctx, source)
+            };
+        }
+
         enterClassDeclaration(ctx) {
             const className = ctx.id ? ctx.id().getText() : null;
 
@@ -888,6 +980,28 @@ function createListener(
 
             classStack.push(className);
 
+            let nestedMemberDeclaration = null;
+
+            if (!isRoot) {
+                const pending = pendingNestedMemberDeclaration;
+
+                if (
+                    !pending ||
+                    pending.classDeclarationCtx !== ctx
+                ) {
+                    throw new ApexMergeError(
+                        MERGE_ERROR.PARSE_FAILED,
+                        `Could not resolve enclosing classBodyDeclaration for nested class ${className}.`
+                    );
+                }
+
+                nestedMemberDeclaration = {
+                    ...pending.modifierInfo,
+                    memberDeclarationRange: pending.memberDeclarationRange
+                };
+                pendingNestedMemberDeclaration = null;
+            }
+
             const classInfo = {
                 className,
                 qualifiedName: currentQualifiedClassName(),
@@ -896,6 +1010,7 @@ function createListener(
                 typeDeclaration: typeDeclarationRange,
                 classDeclaration: extractSourceRange(ctx, source),
                 classBodyOpenBraceIndex,
+                nestedMemberDeclaration,
                 methods: [],
                 constructors: [],
                 fields: [],
