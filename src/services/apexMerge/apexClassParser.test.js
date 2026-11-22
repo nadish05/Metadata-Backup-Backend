@@ -808,6 +808,373 @@ global with sharing class Example {
         assertMethodSlicesPreserved(source, rebuilt, parsed);
     });
 
+    await runTest('Phase 5B.1: direct nested class member and body ranges', () => {
+        const source = `public class Parent {
+    private class Helper {
+        public String value;
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+        const helper = parsed.classes.find(
+            (entry) => entry.qualifiedName === 'Parent.Helper'
+        );
+
+        assert.ok(helper.memberDeclarationRange);
+        assert.strictEqual(
+            helper.memberDeclarationRange.text,
+            source.slice(
+                helper.memberDeclarationRange.start,
+                helper.memberDeclarationRange.end
+            )
+        );
+        assert.ok(helper.memberDeclarationRange.text.includes('private class Helper'));
+        assert.strictEqual(helper.classBodyOpenBraceIndex, source.indexOf('{', source.indexOf('Helper')));
+        assert.ok(helper.classBodyCloseBraceIndex > helper.classBodyOpenBraceIndex);
+        assert.ok(helper.classBodyRange.text.includes('public String value'));
+        assert.ok(!helper.classBodyRange.text.trimStart().startsWith('{'));
+    });
+
+    await runTest('Phase 5B.1: sibling nested class ordering', () => {
+        const source = `public class Parent {
+    private class Beta { Integer b; }
+    public class Alpha { Integer a; }
+}`;
+        const parsed = parseApexClassSource(source);
+
+        assert.deepStrictEqual(parsed.orderedDirectNestedClassNames, [
+            'Parent.Beta',
+            'Parent.Alpha'
+        ]);
+        const beta = parsed.classes.find((entry) => entry.className === 'Beta');
+        const alpha = parsed.classes.find((entry) => entry.className === 'Alpha');
+
+        assert.strictEqual(beta.siblingOrder, 0);
+        assert.strictEqual(alpha.siblingOrder, 1);
+    });
+
+    await runTest('Phase 5B.1: two-level nested hierarchy metadata', () => {
+        const source = `public class Root {
+    private class L1 {
+        public class L2 {
+            public Integer x;
+        }
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+        const l2 = parsed.classes.find((entry) => entry.qualifiedName === 'Root.L1.L2');
+
+        assert.strictEqual(l2.parentQualifiedName, 'Root.L1');
+        assert.ok(l2.memberDeclarationRange.text.includes('public class L2'));
+        assert.ok(l2.classBodyRange.text.includes('Integer x'));
+    });
+
+    await runTest('Phase 5B.1: three-level nested hierarchy', () => {
+        const source = `public class Root {
+    public class L1 {
+        public class L2 {
+            private class L3 { Integer z = 1; }
+        }
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+
+        assert.ok(
+            parsed.classes.some(
+                (entry) => entry.qualifiedName === 'Root.L1.L2.L3'
+            )
+        );
+        const l3 = parsed.classes.find(
+            (entry) => entry.qualifiedName === 'Root.L1.L2.L3'
+        );
+
+        assert.strictEqual(l3.parentQualifiedName, 'Root.L1.L2');
+        assert.strictEqual(l3.siblingOrder, 0);
+    });
+
+    await runTest('Phase 5B.1: nested methods and overloads', () => {
+        const source = `public class Parent {
+    public class Inner {
+        public Decimal run() { return 1; }
+        public Decimal run(String mode) { return 2; }
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+        const innerMethods = parsed.methods.filter(
+            (method) => method.declaringClassQualifiedName === 'Parent.Inner'
+        );
+
+        assert.strictEqual(innerMethods.length, 2);
+        assert.deepStrictEqual(
+            innerMethods.map((method) => method.identityKey).sort(),
+            ['run()', 'run(String)']
+        );
+        assert.ok(innerMethods[0].sourceRange.end > innerMethods[0].sourceRange.start);
+    });
+
+    await runTest('Phase 5B.1: nested constructor ownership', () => {
+        const source = `public class Parent {
+    public class Inner {
+        public Inner() {}
+        public Inner(String seed) {}
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+        const ctors = parsed.methods.filter(
+            (method) =>
+                method.declaringClassQualifiedName === 'Parent.Inner' &&
+                method.kind === 'constructor'
+        );
+
+        assert.strictEqual(ctors.length, 2);
+        assert.deepStrictEqual(
+            ctors.map((method) => method.identityKey).sort(),
+            ['Inner()', 'Inner(String)']
+        );
+    });
+
+    await runTest('Phase 5B.1: nested annotations and modifiers on member declaration', () => {
+        const source = `public class Parent {
+    @TestVisible
+    private static virtual class Inner {
+        public Integer x;
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+        const inner = parsed.classes.find(
+            (entry) => entry.qualifiedName === 'Parent.Inner'
+        );
+
+        assert.ok(
+            inner.memberDeclarationRange.text.includes('private static virtual class Inner')
+        );
+        assert.strictEqual(inner.nestedMemberDeclaration.annotations.length, 1);
+    });
+
+    await runTest('Phase 5B.1: nested parent and child body braces do not collide', () => {
+        const source = `public class Root {
+    public class L1 {
+        public Integer a = 1;
+    }
+    public class L2 {
+        public Integer b = 2;
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+        const l1 = parsed.classes.find((entry) => entry.qualifiedName === 'Root.L1');
+        const l2 = parsed.classes.find((entry) => entry.qualifiedName === 'Root.L2');
+        const root = parsed.classes.find((entry) => entry.isRoot);
+
+        assert.notStrictEqual(l1.classBodyCloseBraceIndex, root.classBodyCloseBraceIndex);
+        assert.notStrictEqual(l2.classBodyCloseBraceIndex, l1.classBodyCloseBraceIndex);
+        assert.ok(l1.classBodyRange.text.includes('a = 1'));
+        assert.ok(l2.classBodyRange.text.includes('b = 2'));
+    });
+
+    await runTest('Phase 5B.1: structural shell ignores method body differences', () => {
+        const sourceA = `public class Parent {
+    private class Inner {
+        public Integer a = 1;
+        public Decimal run() { return 1; }
+    }
+}`;
+        const sourceB = `public class Parent {
+    private class Inner {
+        public Integer a = 1;
+        public Decimal run() { return 999; }
+    }
+}`;
+        const parsedA = parseApexClassSource(sourceA);
+        const parsedB = parseApexClassSource(sourceB);
+        const innerA = parsedA.classes.find(
+            (entry) => entry.qualifiedName === 'Parent.Inner'
+        );
+        const innerB = parsedB.classes.find(
+            (entry) => entry.qualifiedName === 'Parent.Inner'
+        );
+
+        assert.strictEqual(
+            innerA.structuralShellFingerprint,
+            innerB.structuralShellFingerprint
+        );
+        assert.notStrictEqual(
+            parsedA.methods.find((method) => method.name === 'run').sourceText,
+            parsedB.methods.find((method) => method.name === 'run').sourceText
+        );
+    });
+
+    await runTest('Phase 5B.1: comments and whitespace on nested declarations', () => {
+        const source = `public class Parent {
+    // wrapper
+    private   class   Inner   {
+        // field
+        public Integer x;
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+        const inner = parsed.classes.find(
+            (entry) => entry.qualifiedName === 'Parent.Inner'
+        );
+
+        assert.ok(inner.memberDeclarationRange.text.includes('private'));
+        assert.ok(inner.classBodyRange.text.includes('Integer x'));
+        assert.ok(inner.structuralShellFingerprint.includes('fields:'));
+    });
+
+    await runTest('Phase 5B.4.1: root method before nested class', () => {
+        const source = `public class OrderLab {
+    public static void rootFirst() {
+        return;
+    }
+    private class Inner {
+        public static void inner() {
+            return;
+        }
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+
+        assert.strictEqual(
+            parsed.methods.find((m) => m.identityKey === 'rootFirst()')
+                ?.declaringClassQualifiedName,
+            'OrderLab'
+        );
+        assert.strictEqual(
+            parsed.methods.find((m) => m.identityKey === 'inner()')
+                ?.declaringClassQualifiedName,
+            'OrderLab.Inner'
+        );
+    });
+
+    await runTest('Phase 5B.4.1: root method between sibling nested classes', () => {
+        const source = `public class OrderLab {
+    private class A { }
+    public static void between() { }
+    private class B { }
+}`;
+        const parsed = parseApexClassSource(source);
+
+        assert.strictEqual(
+            parsed.methods.find((m) => m.identityKey === 'between()')
+                ?.declaringClassQualifiedName,
+            'OrderLab'
+        );
+    });
+
+    await runTest('Phase 5B.4.1: root method after nested classes', () => {
+        const source = `public class OrderLab {
+    private class Inner {
+        public static void inner() { }
+    }
+    public static void rootLast() { }
+}`;
+        const parsed = parseApexClassSource(source);
+
+        assert.strictEqual(
+            parsed.methods.find((m) => m.identityKey === 'rootLast()')
+                ?.declaringClassQualifiedName,
+            'OrderLab'
+        );
+        assert.strictEqual(
+            parsed.methods.find((m) => m.identityKey === 'inner()')
+                ?.declaringClassQualifiedName,
+            'OrderLab.Inner'
+        );
+    });
+
+    await runTest('Phase 5B.4.1: multiple sibling nested classes ownership', () => {
+        const source = `public class OrderLab {
+    private class A {
+        public static void a() { }
+    }
+    private class B {
+        public static void b() { }
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+
+        assert.strictEqual(
+            parsed.methods.find((m) => m.identityKey === 'a()')
+                ?.declaringClassQualifiedName,
+            'OrderLab.A'
+        );
+        assert.strictEqual(
+            parsed.methods.find((m) => m.identityKey === 'b()')
+                ?.declaringClassQualifiedName,
+            'OrderLab.B'
+        );
+    });
+
+    await runTest('Phase 5B.4.1: constructor and overloaded method ownership', () => {
+        const source = `public class OrderLab {
+    public OrderLab() { }
+    public static void work() { }
+    public static void work(Integer x) { }
+    private class Inner {
+        public Inner() { }
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+
+        const rootCtor = parsed.methods.find(
+            (m) =>
+                m.kind === 'constructor' &&
+                m.declaringClassQualifiedName === 'OrderLab'
+        );
+        const innerCtor = parsed.methods.find(
+            (m) =>
+                m.kind === 'constructor' &&
+                m.declaringClassQualifiedName === 'OrderLab.Inner'
+        );
+
+        assert.ok(rootCtor);
+        assert.ok(innerCtor);
+
+        const rootWork = parsed.methods.filter(
+            (m) =>
+                m.declaringClassQualifiedName === 'OrderLab' &&
+                m.name === 'work'
+        );
+
+        assert.strictEqual(rootWork.length, 2);
+        assert.ok(
+            rootWork.some((m) => m.identityKey === 'work()'),
+            'expected no-arg work overload'
+        );
+        assert.ok(
+            rootWork.some((m) => m.identityKey.includes('Integer')),
+            'expected Integer overload'
+        );
+    });
+
+    await runTest('Phase 5B.4.1: deep nesting method ownership', () => {
+        const source = `public class Deep {
+    private class L1 {
+        public class L2 {
+            public static void deep() { }
+        }
+    }
+}`;
+        const parsed = parseApexClassSource(source);
+
+        assert.strictEqual(
+            parsed.methods[0].declaringClassQualifiedName,
+            'Deep.L1.L2'
+        );
+    });
+
+    await runTest('Phase 5B.1: root parser regression slice remains intact', () => {
+        const source = readFixture('WeatherService.cls');
+        const parsed = parseApexClassSource(source);
+        const weather = parsed.methods.find((method) => method.name === 'getWeather');
+
+        assert.strictEqual(parsed.primaryClassName, 'WeatherService');
+        assert.strictEqual(weather.identityKey, 'getWeather()');
+        assert.strictEqual(
+            source.slice(weather.sourceRange.start, weather.sourceRange.end),
+            weather.sourceText
+        );
+    });
+
     console.log('All apexClassParser tests passed.');
 }
 

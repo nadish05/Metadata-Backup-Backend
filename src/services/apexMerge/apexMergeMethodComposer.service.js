@@ -6,10 +6,10 @@ const {
     OUTER_ACCESS
 } = require('./apexClassParser.service');
 const { MERGE_ERROR, ApexMergeError } = require('./apexMerge.errors');
-
-function normalizeBodyText(text) {
-    return String(text || '').replace(/\r\n/g, '\n').trim();
-}
+const {
+    normalizeBodyText,
+    rootCallableMembers
+} = require('./apexMergeMethodComposer.shared');
 
 function findRootClassClosingBraceIndex(sourceText, classDeclarationStart) {
     let depth = 0;
@@ -36,15 +36,6 @@ function findRootClassClosingBraceIndex(sourceText, classDeclarationStart) {
 
 function rootQualifiedName(parsed) {
     return parsed.primaryClassName;
-}
-
-function rootCallableMembers(parsed) {
-    const qn = rootQualifiedName(parsed);
-    return parsed.methods.filter(
-        (member) =>
-            member.declaringClassQualifiedName === qn &&
-            (member.kind === 'method' || member.kind === 'constructor')
-    );
 }
 
 /**
@@ -269,7 +260,8 @@ function validateComposedDeclarationMerge({
     expectedClassName,
     selectedAccess,
     selectedSharing,
-    expectedMethodKeys
+    expectedMethodKeys,
+    skipInnerClassStructuralSnapshot = false
 }) {
     const parsed = validateComposedMethodMerge(composedSource, expectedMethodKeys);
 
@@ -305,34 +297,68 @@ function validateComposedDeclarationMerge({
         );
     }
 
-    const sourceSnapshot = collectRootStructuralBodySnapshot(sourceParse);
-    const composedSnapshot = collectRootStructuralBodySnapshot(parsed);
+    if (!skipInnerClassStructuralSnapshot) {
+        const sourceSnapshot = collectRootStructuralBodySnapshot(sourceParse);
+        const composedSnapshot = collectRootStructuralBodySnapshot(parsed);
 
-    const fields = ['nonMergeableHeaderFingerprint', 'fields', 'properties', 'innerClasses'];
+        const fields = [
+            'nonMergeableHeaderFingerprint',
+            'fields',
+            'properties',
+            'innerClasses'
+        ];
 
-    for (const field of fields) {
-        if (
-            JSON.stringify(sourceSnapshot[field]) !==
-            JSON.stringify(composedSnapshot[field])
-        ) {
-            throw new ApexMergeError(
-                MERGE_ERROR.METHOD_COMPOSE_FAILED,
-                `Composed class structural field "${field}" changed during declaration reconstruction.`,
-                {
-                    field,
-                    source: sourceSnapshot[field],
-                    composed: composedSnapshot[field]
-                }
-            );
+        for (const field of fields) {
+            if (
+                JSON.stringify(sourceSnapshot[field]) !==
+                JSON.stringify(composedSnapshot[field])
+            ) {
+                throw new ApexMergeError(
+                    MERGE_ERROR.METHOD_COMPOSE_FAILED,
+                    `Composed class structural field "${field}" changed during declaration reconstruction.`,
+                    {
+                        field,
+                        source: sourceSnapshot[field],
+                        composed: composedSnapshot[field]
+                    }
+                );
+            }
+        }
+    } else {
+        const composedSnapshot = collectRootStructuralBodySnapshot(parsed);
+        const sourceSnapshot = collectRootStructuralBodySnapshot(sourceParse);
+
+        for (const field of ['nonMergeableHeaderFingerprint', 'fields', 'properties']) {
+            if (
+                JSON.stringify(sourceSnapshot[field]) !==
+                JSON.stringify(composedSnapshot[field])
+            ) {
+                throw new ApexMergeError(
+                    MERGE_ERROR.METHOD_COMPOSE_FAILED,
+                    `Composed class structural field "${field}" changed during declaration reconstruction.`,
+                    {
+                        field,
+                        source: sourceSnapshot[field],
+                        composed: composedSnapshot[field]
+                    }
+                );
+            }
         }
     }
 
     return parsed;
 }
 
+const {
+    composeMethodMergedClassRecursive,
+    validateComposedRecursiveMethodMerge
+} = require('./apexMergeMethodComposer.nested');
+
 module.exports = {
     composeMethodMergedClass,
+    composeMethodMergedClassRecursive,
     validateComposedMethodMerge,
+    validateComposedRecursiveMethodMerge,
     validateComposedDeclarationMerge,
     applyOuterDeclarationToComposedClass,
     collectRootStructuralBodySnapshot,

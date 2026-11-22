@@ -32,6 +32,8 @@ function mapMergeError(error) {
             METHOD_COMPOSE_FAILED: 422,
             METHOD_DUPLICATE_IDENTITY: 400,
             UNKNOWN_METHOD_KEY: 400,
+            UNKNOWN_DECLARATION_CONFLICT_KEY: 400,
+            DECLARATION_UNRESOLVED_CONFLICT: 422,
             PUBLISH_NOT_ELIGIBLE: 422,
             PUBLISH_SOURCE_BRANCH_CHANGED: 409,
             PUBLISH_DESTINATION_BRANCH_CHANGED: 409,
@@ -144,6 +146,8 @@ exports.authorizeArtifactHandoff = async (req, res) => {
         return res.status(mapped.httpStatus).json(mapped.body);
     }
 };
+
+exports.mapMergeError = mapMergeError;
 
 exports.getMergeSessionArtifact = async (req, res) => {
     try {

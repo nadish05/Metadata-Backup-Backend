@@ -95,23 +95,54 @@ const OUTER_SHARING = Object.freeze({
  * @returns {number|null}
  */
 function resolveRootClassBodyOpenBraceIndex(classDeclarationCtx) {
+    const braces = resolveClassBodyBraceIndices(classDeclarationCtx);
+
+    return braces.openBraceIndex;
+}
+
+/**
+ * Opening and closing body brace token indices from classBody() LBRACE/RBRACE.
+ *
+ * @param {object} classDeclarationCtx
+ * @returns {{ openBraceIndex: number|null, closeBraceIndex: number|null, closeBraceEnd: number|null }}
+ */
+function resolveClassBodyBraceIndices(classDeclarationCtx) {
     if (!classDeclarationCtx?.classBody) {
-        return null;
+        return {
+            openBraceIndex: null,
+            closeBraceIndex: null,
+            closeBraceEnd: null
+        };
     }
 
     const bodyCtx = classDeclarationCtx.classBody();
 
     if (!bodyCtx?.LBRACE) {
-        return null;
+        return {
+            openBraceIndex: null,
+            closeBraceIndex: null,
+            closeBraceEnd: null
+        };
     }
 
-    const braceNode = bodyCtx.LBRACE();
+    const openNode = bodyCtx.LBRACE();
+    const closeNode = bodyCtx.RBRACE ? bodyCtx.RBRACE() : null;
+    const openBraceIndex =
+        openNode?.symbol?.start == null ? null : openNode.symbol.start;
+    const closeBraceIndex =
+        closeNode?.symbol?.start == null ? null : closeNode.symbol.start;
+    const closeBraceEnd =
+        closeNode?.symbol?.stop == null ? null : closeNode.symbol.stop + 1;
 
-    if (braceNode?.symbol?.start == null) {
-        return null;
-    }
+    return {
+        openBraceIndex,
+        closeBraceIndex,
+        closeBraceEnd
+    };
+}
 
-    return braceNode.symbol.start;
+function normalizeStructuralShellText(text) {
+    return String(text || '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
 }
 
 function findRootClassBodyBraceIndex(sourceText, classDeclarationStart) {
@@ -827,6 +858,81 @@ function collectModifierInfo(modifierContexts, source) {
  * @param {string} source
  * @returns {object}
  */
+/**
+ * Build a method-excluding structural shell fingerprint for nested-class comparison (Phase 5B.1).
+ * Does not alter merge-layer structural fingerprints.
+ *
+ * @param {object} classInfo
+ * @param {Map<string, object>} classByQualifiedName
+ * @returns {string}
+ */
+function buildClassStructuralShellFingerprint(classInfo, classByQualifiedName) {
+    const parts = [`qn:${classInfo.qualifiedName}`];
+
+    if (!classInfo.isRoot && classInfo.nestedMemberDeclaration) {
+        const meta = classInfo.nestedMemberDeclaration;
+
+        parts.push(`access:${meta.accessModifier}`);
+        parts.push(`static:${meta.isStatic ? 1 : 0}`);
+        parts.push(`virtual:${meta.isVirtual ? 1 : 0}`);
+        parts.push(`abstract:${meta.isAbstract ? 1 : 0}`);
+        parts.push(
+            `annotations:${[...(meta.annotations || [])]
+                .map((entry) => normalizeStructuralShellText(entry))
+                .sort()
+                .join(',')}`
+        );
+    }
+
+    const fields = classInfo.fields
+        .map((field) => normalizeStructuralShellText(field.sourceText))
+        .sort();
+    const properties = classInfo.properties
+        .map((property) => normalizeStructuralShellText(property.sourceText))
+        .sort();
+
+    parts.push(`fields:${fields.join('||')}`);
+    parts.push(`properties:${properties.join('||')}`);
+
+    const childShells = (classInfo.innerClasses || [])
+        .map((child) => {
+            const childInfo = classByQualifiedName.get(child.qualifiedName);
+
+            return childInfo?.structuralShellFingerprint || null;
+        })
+        .filter(Boolean)
+        .sort();
+
+    parts.push(`children:${childShells.join('||')}`);
+
+    return normalizeStructuralShellText(parts.join('|'));
+}
+
+function finalizeClassParserMetadata(parseResult) {
+    const classByQualifiedName = new Map(
+        parseResult.classes.map((entry) => [entry.qualifiedName, entry])
+    );
+    const depth = (qualifiedName) =>
+        qualifiedName ? qualifiedName.split('.').length : 0;
+    const deepestFirst = [...parseResult.classes].sort(
+        (left, right) => depth(right.qualifiedName) - depth(left.qualifiedName)
+    );
+
+    for (const classInfo of deepestFirst) {
+        classInfo.structuralShellFingerprint = buildClassStructuralShellFingerprint(
+            classInfo,
+            classByQualifiedName
+        );
+    }
+
+    const rootName = parseResult.primaryClassName;
+
+    parseResult.orderedDirectNestedClassNames = parseResult.classes
+        .filter((entry) => entry.parentQualifiedName === rootName)
+        .sort((left, right) => left.siblingOrder - right.siblingOrder)
+        .map((entry) => entry.qualifiedName);
+}
+
 function collectNestedClassModifierInfo(modifierContexts, source) {
     const accessModifiers = [];
     let isStatic = false;
@@ -928,6 +1034,7 @@ function createListener(
     }
 
     let pendingNestedMemberDeclaration = null;
+    const nestedSiblingOrderByParent = new Map();
 
     return new (class extends ApexParserBaseListener {
         enterClassBodyDeclaration(ctx) {
@@ -973,14 +1080,14 @@ function createListener(
                     ? rootTypeDeclarationRange
                     : extractSourceRange(ctx, source);
 
-            const classBodyOpenBraceIndex =
-                isRoot && ctx === rootClassDeclarationCtx
-                    ? resolveRootClassBodyOpenBraceIndex(ctx)
-                    : null;
+            const bodyBraces = resolveClassBodyBraceIndices(ctx);
+            const classBodyOpenBraceIndex = bodyBraces.openBraceIndex;
 
             classStack.push(className);
 
             let nestedMemberDeclaration = null;
+            let memberDeclarationRange = isRoot ? rootTypeDeclarationRange : null;
+            let siblingOrder = 0;
 
             if (!isRoot) {
                 const pending = pendingNestedMemberDeclaration;
@@ -999,7 +1106,17 @@ function createListener(
                     ...pending.modifierInfo,
                     memberDeclarationRange: pending.memberDeclarationRange
                 };
+                memberDeclarationRange = pending.memberDeclarationRange;
                 pendingNestedMemberDeclaration = null;
+
+                const parentOrder =
+                    nestedSiblingOrderByParent.get(parentQualifiedName) || 0;
+
+                siblingOrder = parentOrder;
+                nestedSiblingOrderByParent.set(
+                    parentQualifiedName,
+                    parentOrder + 1
+                );
             }
 
             const classInfo = {
@@ -1007,10 +1124,16 @@ function createListener(
                 qualifiedName: currentQualifiedClassName(),
                 parentQualifiedName,
                 isRoot,
+                siblingOrder,
                 typeDeclaration: typeDeclarationRange,
                 classDeclaration: extractSourceRange(ctx, source),
+                memberDeclarationRange,
                 classBodyOpenBraceIndex,
+                classBodyCloseBraceIndex: null,
+                classBodyCloseBraceEnd: null,
+                classBodyRange: null,
                 nestedMemberDeclaration,
+                structuralShellFingerprint: null,
                 methods: [],
                 constructors: [],
                 fields: [],
@@ -1040,7 +1163,41 @@ function createListener(
             }
         }
 
-        exitClassDeclaration() {
+        exitClassDeclaration(ctx) {
+            const className = ctx.id ? ctx.id().getText() : null;
+
+            if (className) {
+                const qualifiedName = classStack.join('.');
+                const classInfo = parseResult.classes.find(
+                    (entry) =>
+                        entry.qualifiedName === qualifiedName &&
+                        entry.classDeclaration.start === ctx.start.start
+                );
+
+                if (classInfo) {
+                    const bodyBraces = resolveClassBodyBraceIndices(ctx);
+
+                    classInfo.classBodyOpenBraceIndex = bodyBraces.openBraceIndex;
+                    classInfo.classBodyCloseBraceIndex =
+                        bodyBraces.closeBraceIndex;
+                    classInfo.classBodyCloseBraceEnd = bodyBraces.closeBraceEnd;
+
+                    if (
+                        bodyBraces.openBraceIndex != null &&
+                        bodyBraces.closeBraceIndex != null
+                    ) {
+                        classInfo.classBodyRange = {
+                            start: bodyBraces.openBraceIndex + 1,
+                            end: bodyBraces.closeBraceIndex,
+                            text: source.slice(
+                                bodyBraces.openBraceIndex + 1,
+                                bodyBraces.closeBraceIndex
+                            )
+                        };
+                    }
+                }
+            }
+
             classStack.pop();
         }
 
@@ -1053,7 +1210,15 @@ function createListener(
                 return;
             }
 
-            const declaringClass = parseResult.classes[parseResult.classes.length - 1];
+            const declaringQualifiedName = currentQualifiedClassName();
+
+            if (!declaringQualifiedName) {
+                return;
+            }
+
+            const declaringClass = parseResult.classes.find(
+                (entry) => entry.qualifiedName === declaringQualifiedName
+            );
 
             if (!declaringClass) {
                 return;
@@ -1280,6 +1445,10 @@ function parseApexClassSource(source) {
 
     result.outerDeclaration = extractRootOuterDeclaration(result, sourceText);
 
+    finalizeClassParserMetadata(parseResult);
+    result.orderedDirectNestedClassNames =
+        parseResult.orderedDirectNestedClassNames || [];
+
     return result;
 }
 
@@ -1294,6 +1463,8 @@ module.exports = {
     reconstructOuterClassDeclaration,
     collectRootOuterDeclarationModifiers,
     resolveRootClassBodyOpenBraceIndex,
+    resolveClassBodyBraceIndices,
+    buildClassStructuralShellFingerprint,
     findRootClassBodyBraceIndex,
     applyTextOperations,
     terminalTokenSpan

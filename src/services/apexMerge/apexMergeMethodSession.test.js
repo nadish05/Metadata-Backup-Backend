@@ -15,7 +15,8 @@ const {
 const {
     METHOD_STATUS,
     DECLARATION_STATUS,
-    indexRootCallableMembers
+    indexRootCallableMembers,
+    buildScopedMethodKey
 } = require('./apexMergeMethodMerge.service');
 const { parseApexClassSource, OUTER_SHARING } = require('./apexClassParser.service');
 const {
@@ -52,14 +53,27 @@ function methodBody(name, debugValue) {
     }`;
 }
 
-function inventoryByKey(methodMerge, key) {
-    return methodMerge.methods.find((entry) => entry.methodKey === key);
+function inventoryByKey(
+    methodMerge,
+    key,
+    declaringClassQualifiedName = 'WeatherService'
+) {
+    return methodMerge.methods.find(
+        (entry) =>
+            entry.methodKey === key &&
+            entry.declaringClassQualifiedName === declaringClassQualifiedName
+    );
 }
 
 function rootMethodSlice(classSource, methodKey) {
     const parsed = parseApexClassSource(classSource);
     const members = indexRootCallableMembers(parsed);
-    return members.get(methodKey)?.sourceText ?? null;
+    const scopedMethodKey = buildScopedMethodKey(
+        parsed.primaryClassName,
+        methodKey
+    );
+
+    return members.get(scopedMethodKey)?.sourceText ?? null;
 }
 
 function buildSharingDeclarationConflictThreeWay() {
@@ -80,6 +94,51 @@ function buildDualDeclarationConflictThreeWay() {
     const destination = `inherited sharing class WeatherService {\n${shell}${method}\n}`;
 
     return { base, source, destination };
+}
+
+function buildNestedClassShellConflictThreeWay() {
+    const method = methodBody('run()', 'run');
+    const base = `public class WeatherService {\n${method}\n    private class Inner { }\n}`;
+    const source = `public class WeatherService {\n${method}\n    private static class Inner { }\n}`;
+    const destination = `public class WeatherService {\n${method}\n    public class Inner { }\n}`;
+
+    return { base, source, destination };
+}
+
+function buildHeaderOnlyNestedAutoIncludedThreeWay() {
+    const method = methodBody('run()', 'run');
+    const base = `public class WeatherService {\n${method}\n    private class Inner { Integer x = 1; }\n}`;
+    const source = base;
+    const destination = `public class WeatherService {\n${method}\n    private static class Inner { Integer x = 1; }\n}`;
+
+    return { base, source, destination };
+}
+
+function nestedClassByQName(methodMerge, qualifiedName) {
+    return (methodMerge?.nestedClasses || []).find(
+        (entry) => entry.qualifiedName === qualifiedName
+    );
+}
+
+function createPreviewSession(clsThreeWay, metaXmlContent) {
+    const preview = buildMethodPreviewUnit({
+        metadataName: 'WeatherService',
+        filePath: 'force-app/main/default/classes/WeatherService.cls',
+        metaXmlPath:
+            'force-app/main/default/classes/WeatherService.cls-meta.xml',
+        mergeBaseSha: 'base-sha',
+        clsThreeWay,
+        metaMerge: { content: metaXmlContent, conflict: false }
+    });
+    preview.artifacts.metaXml = { content: metaXmlContent, conflict: false };
+
+    const session = createMethodSessionUnit(preview);
+    updateSessionForTests(session.mergeSessionId, {
+        status: SESSION_STATUS.PREVIEWED,
+        classes: [preview]
+    });
+
+    return { preview, session };
 }
 
 function buildWeatherThreeWay() {
@@ -1111,6 +1170,274 @@ async function main() {
         );
         assert.ok(declarationConflict);
         assert.strictEqual(declarationConflict.conflictKey, 'declaration:sharing');
+    });
+
+    await runTest('Phase 5B.5.1 A: resolve session forwards nested ACCEPT_SOURCE', () => {
+        const clsThreeWay = buildNestedClassShellConflictThreeWay();
+        const { session } = createPreviewSession(clsThreeWay, metaXml);
+
+        const response = resolveMergeSession(session.mergeSessionId, {
+            metadataName: 'WeatherService',
+            nestedClassResolutions: [
+                {
+                    qualifiedName: 'WeatherService.Inner',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                }
+            ]
+        });
+
+        const inner = nestedClassByQName(
+            { nestedClasses: response.nestedClasses },
+            'WeatherService.Inner'
+        );
+        assert.strictEqual(inner.status, METHOD_STATUS.RESOLVED);
+        assert.strictEqual(inner.resolution, METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE);
+        assert.strictEqual(response.nestedClassConflictCount, 0);
+        assert.strictEqual(response.compositionReady, true);
+        assert.ok(response.mergedContent.includes('static class Inner'));
+    });
+
+    await runTest('Phase 5B.5.1 B: resolve session forwards nested ACCEPT_TARGET', () => {
+        const clsThreeWay = buildNestedClassShellConflictThreeWay();
+        const { session } = createPreviewSession(clsThreeWay, metaXml);
+
+        const response = resolveMergeSession(session.mergeSessionId, {
+            metadataName: 'WeatherService',
+            nestedClassResolutions: [
+                {
+                    qualifiedName: 'WeatherService.Inner',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_TARGET
+                }
+            ]
+        });
+
+        const inner = nestedClassByQName(
+            { nestedClasses: response.nestedClasses },
+            'WeatherService.Inner'
+        );
+        assert.strictEqual(inner.status, METHOD_STATUS.RESOLVED);
+        assert.strictEqual(inner.resolution, METHOD_RESOLUTION_STRATEGY.ACCEPT_TARGET);
+        assert.ok(response.mergedContent.includes('public class Inner'));
+        assert.ok(!response.mergedContent.includes('static class Inner'));
+    });
+
+    await runTest('Phase 5B.5.1 C: reject resolution for AUTO_INCLUDED nested class', () => {
+        const clsThreeWay = buildHeaderOnlyNestedAutoIncludedThreeWay();
+        const { session } = createPreviewSession(clsThreeWay, metaXml);
+        const inner = nestedClassByQName(
+            getSession(session.mergeSessionId).classes[0].methodMerge,
+            'WeatherService.Inner'
+        );
+        assert.strictEqual(inner.status, METHOD_STATUS.AUTO_INCLUDED);
+
+        assert.throws(
+            () =>
+                resolveMergeSession(session.mergeSessionId, {
+                    metadataName: 'WeatherService',
+                    nestedClassResolutions: [
+                        {
+                            qualifiedName: 'WeatherService.Inner',
+                            strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                        }
+                    ]
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.INVALID_REQUEST
+        );
+    });
+
+    await runTest('Phase 5B.5.1 D: reject unknown nested qualified name via session resolve', () => {
+        const clsThreeWay = buildNestedClassShellConflictThreeWay();
+        const { session } = createPreviewSession(clsThreeWay, metaXml);
+
+        assert.throws(
+            () =>
+                resolveMergeSession(session.mergeSessionId, {
+                    metadataName: 'WeatherService',
+                    nestedClassResolutions: [
+                        {
+                            qualifiedName: 'WeatherService.Missing',
+                            strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                        }
+                    ]
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.INVALID_REQUEST
+        );
+    });
+
+    await runTest('Phase 5B.5.1 E: method, declaration, and nested resolutions coexist', () => {
+        const forecast = methodBody('getForecast()', 'forecast');
+        const base = `public with sharing class WeatherService {\n${methodBody('getWeather()', 'base')}\n${forecast}\n    private class Inner { }\n}`;
+        const source = `public without sharing class WeatherService {\n${methodBody('getWeather()', 'source')}\n${forecast}\n    private static class Inner { }\n}`;
+        const destination = `public inherited sharing class WeatherService {\n${methodBody('getWeather()', 'destination')}\n${forecast}\n    public class Inner { }\n}`;
+        const { session } = createPreviewSession(
+            {
+                base,
+                source,
+                destination
+            },
+            metaXml
+        );
+
+        const response = resolveMergeSession(session.mergeSessionId, {
+            metadataName: 'WeatherService',
+            methodResolutions: [
+                {
+                    methodKey: 'getWeather()',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                }
+            ],
+            declarationResolutions: [
+                {
+                    conflictKey: 'declaration:sharing',
+                    side: DECLARATION_RESOLUTION_SIDE.SOURCE
+                }
+            ],
+            nestedClassResolutions: [
+                {
+                    qualifiedName: 'WeatherService.Inner',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_TARGET
+                }
+            ]
+        });
+
+        assert.strictEqual(response.conflictCount, 0);
+        assert.strictEqual(response.declarationConflictCount, 0);
+        assert.strictEqual(response.nestedClassConflictCount, 0);
+        assert.strictEqual(response.compositionReady, true);
+        assert.ok(response.mergedContent.includes('public class Inner'));
+    });
+
+    await runTest('Phase 5B.5.1 F: re-preview stale nested resolution is rejected', () => {
+        const nestedConflict = buildNestedClassShellConflictThreeWay();
+        let { session } = createPreviewSession(nestedConflict, metaXml);
+
+        resolveMergeSession(session.mergeSessionId, {
+            metadataName: 'WeatherService',
+            nestedClassResolutions: [
+                {
+                    qualifiedName: 'WeatherService.Inner',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                }
+            ]
+        });
+
+        const methodOnly = buildWeatherThreeWay();
+        const replPreview = buildMethodPreviewUnit({
+            metadataName: 'WeatherService',
+            filePath: 'force-app/main/default/classes/WeatherService.cls',
+            metaXmlPath:
+                'force-app/main/default/classes/WeatherService.cls-meta.xml',
+            mergeBaseSha: 'base-sha',
+            clsThreeWay: methodOnly,
+            metaMerge: { content: metaXml, conflict: false }
+        });
+        replPreview.artifacts.metaXml = { content: metaXml, conflict: false };
+
+        updateSessionForTests(session.mergeSessionId, {
+            status: SESSION_STATUS.PREVIEWED,
+            classes: [replPreview]
+        });
+
+        assert.deepStrictEqual(
+            getSession(session.mergeSessionId).classes[0].methodMerge
+                .nestedClassResolutions,
+            []
+        );
+
+        assert.throws(
+            () =>
+                resolveMergeSession(session.mergeSessionId, {
+                    metadataName: 'WeatherService',
+                    nestedClassResolutions: [
+                        {
+                            qualifiedName: 'WeatherService.Inner',
+                            strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                        }
+                    ]
+                }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.INVALID_REQUEST
+        );
+    });
+
+    await runTest('Phase 5B.5.1: resolve response exposes nested readiness fields', () => {
+        const clsThreeWay = buildNestedClassShellConflictThreeWay();
+        const { session } = createPreviewSession(clsThreeWay, metaXml);
+
+        const response = resolveMergeSession(session.mergeSessionId, {
+            metadataName: 'WeatherService',
+            nestedClassResolutions: [
+                {
+                    qualifiedName: 'WeatherService.Inner',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                }
+            ]
+        });
+
+        assert.strictEqual(response.nestedClassComposeReady, true);
+        assert.ok(Array.isArray(response.nestedClasses));
+        assert.strictEqual(typeof response.compositionReady, 'boolean');
+    });
+
+    await runTest('Phase 5B.5.1: HTTP error mapping for declaration conflicts', () => {
+        const { mapMergeError } = require('../../controllers/merge.controller');
+
+        const declarationUnresolved = mapMergeError(
+            new ApexMergeError(
+                MERGE_ERROR.DECLARATION_UNRESOLVED_CONFLICT,
+                'declaration unresolved'
+            )
+        );
+        assert.strictEqual(declarationUnresolved.httpStatus, 422);
+
+        const unknownDeclarationKey = mapMergeError(
+            new ApexMergeError(
+                MERGE_ERROR.UNKNOWN_DECLARATION_CONFLICT_KEY,
+                'unknown declaration key'
+            )
+        );
+        assert.strictEqual(unknownDeclarationKey.httpStatus, 400);
+
+        const nestedConflict = mapMergeError(
+            new ApexMergeError(
+                MERGE_ERROR.METHOD_UNRESOLVED_CONFLICT,
+                'nested conflict'
+            )
+        );
+        assert.strictEqual(nestedConflict.httpStatus, 422);
+    });
+
+    await runTest('Phase 5B.4.3: methodMerge exposes compositionReady distinct from resolved', () => {
+        const {
+            compareApexMethodMerge,
+            deriveMethodMergeReadinessFields
+        } = require('./apexMergeMethodMerge.service');
+
+        const root = `    public static void run() { System.debug('run'); }`;
+        const base = `public class SessReady {\n${root}\n    private class Inner { Integer x = 1; }\n}`;
+        const destination = `public class SessReady {\n${root}\n    private class Inner { Integer x = 1; Integer y = 2; }\n}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: base,
+            destinationContent: destination
+        });
+
+        const readiness = deriveMethodMergeReadinessFields({
+            conflictCount: result.conflictCount,
+            nestedClassConflictCount: result.nestedClassConflictCount,
+            declarationConflictCount: result.declarationConflictCount,
+            nestedClassComposeReady: result.nestedClassComposeReady
+        });
+
+        assert.strictEqual(result.conflictCount, 0);
+        assert.strictEqual(readiness.conflictsResolved, false);
+        assert.strictEqual(result.compositionReady, false);
     });
 
     await runTest('existing FULL and METHOD regression tests pass', () => {

@@ -80,6 +80,7 @@ function mapClassPreviewResponse(unit) {
         : buildConflictSummaries(unit);
     const hasConflicts = isMethodMode
         ? (unit.methodMerge?.conflictCount ?? 0) > 0 ||
+          (unit.methodMerge?.nestedClassConflictCount ?? 0) > 0 ||
           (unit.methodMerge?.declarationConflictCount ?? 0) > 0
         : conflicts.length > 0;
     const mergedContent = isMethodMode
@@ -123,6 +124,13 @@ function mapClassPreviewResponse(unit) {
     if (isMethodMode) {
         mapped.methods = unit.methodMerge?.methods ?? [];
         mapped.conflictCount = unit.methodMerge?.conflictCount ?? 0;
+        mapped.nestedClasses = unit.methodMerge?.nestedClasses ?? [];
+        mapped.nestedClassConflictCount =
+            unit.methodMerge?.nestedClassConflictCount ?? 0;
+        mapped.nestedClassComposeReady =
+            unit.methodMerge?.nestedClassComposeReady === true;
+        mapped.compositionReady =
+            unit.methodMerge?.compositionReady === true;
         mapped.resolved = unit.methodMerge?.resolved === true;
         mapped.declarations = unit.methodMerge?.declarations ?? null;
         mapped.declarationConflictCount =
@@ -167,6 +175,10 @@ function buildPerClassFocusResponse(classes, focusMetadataName) {
         focus.methods = mapped.methods;
         focus.conflictCount = mapped.conflictCount;
         focus.resolved = mapped.resolved;
+        focus.compositionReady = mapped.compositionReady;
+        focus.nestedClasses = mapped.nestedClasses;
+        focus.nestedClassConflictCount = mapped.nestedClassConflictCount;
+        focus.nestedClassComposeReady = mapped.nestedClassComposeReady;
         focus.declarations = mapped.declarations;
         focus.declarationConflictCount = mapped.declarationConflictCount;
         focus.declarationsResolved = mapped.declarationsResolved;
@@ -183,13 +195,15 @@ function normalizeResolutionRequests(body = {}) {
     if (
         body.metadataName &&
         (Array.isArray(body.methodResolutions) ||
-            Array.isArray(body.declarationResolutions))
+            Array.isArray(body.declarationResolutions) ||
+            Array.isArray(body.nestedClassResolutions))
     ) {
         return [
             {
                 metadataName: body.metadataName,
                 methodResolutions: body.methodResolutions || [],
-                declarationResolutions: body.declarationResolutions || []
+                declarationResolutions: body.declarationResolutions || [],
+                nestedClassResolutions: body.nestedClassResolutions || []
             }
         ];
     }
@@ -201,6 +215,7 @@ function normalizeResolutionRequests(body = {}) {
                 resolutionStrategy: body.resolutionStrategy,
                 methodResolutions: body.methodResolutions,
                 declarationResolutions: body.declarationResolutions,
+                nestedClassResolutions: body.nestedClassResolutions,
                 resolutions: body.resolutions
             }
         ];
@@ -501,6 +516,7 @@ function resolveMergeSession(mergeSessionId, body = {}) {
             mergeMode: focusUnit.mergeMode || 'FULL',
             hasConflicts: isMethodMode
                 ? (focusUnit.methodMerge?.conflictCount ?? 0) > 0 ||
+                  (focusUnit.methodMerge?.nestedClassConflictCount ?? 0) > 0 ||
                   (focusUnit.methodMerge?.declarationConflictCount ?? 0) > 0
                 : conflicts.length > 0,
             conflicts,
@@ -517,6 +533,13 @@ function resolveMergeSession(mergeSessionId, body = {}) {
             resolveBody.conflictCount =
                 focusUnit.methodMerge?.conflictCount ?? 0;
             resolveBody.resolved = focusUnit.methodMerge?.resolved === true;
+            resolveBody.compositionReady =
+                focusUnit.methodMerge?.compositionReady === true;
+            resolveBody.nestedClasses = focusUnit.methodMerge?.nestedClasses ?? [];
+            resolveBody.nestedClassConflictCount =
+                focusUnit.methodMerge?.nestedClassConflictCount ?? 0;
+            resolveBody.nestedClassComposeReady =
+                focusUnit.methodMerge?.nestedClassComposeReady === true;
             resolveBody.declarations = focusUnit.methodMerge?.declarations ?? null;
             resolveBody.declarationConflictCount =
                 focusUnit.methodMerge?.declarationConflictCount ?? 0;

@@ -23,11 +23,21 @@ const {
     DECLARATION_RESOLUTION_SIDE,
     compareApexMethodMerge,
     applyMethodResolutions,
+    assertResolvableMethodResolutionKeys,
+    assertMethodResolutionTargetsAreConflicts,
+    methodResolutionStorageKey,
     applyDeclarationResolutions,
     mapDeclarationsForClient,
     countDeclarationConflicts,
     assertResolvableDeclarationKeys,
     assertDeclarationResolutionTargetsAreConflicts,
+    applyNestedClassResolutions,
+    assertResolvableNestedClassKeys,
+    assertNestedClassResolutionTargetsAreConflicts,
+    mapNestedClassesForClient,
+    countNestedClassConflicts,
+    isNestedClassComposeReady,
+    deriveMethodMergeReadinessFields,
     composeApexMethodMerge,
     executeApexMethodMerge
 } = require('./apexMergeMethodMerge.service');
@@ -63,12 +73,12 @@ function shouldUseMethodMode(requestMode, focusMetadataName, unitMetadataName) {
     return focusMetadataName === unitMetadataName;
 }
 
-function implementationTextFromMap(memberMap, methodKey) {
-    if (!memberMap || !memberMap.has(methodKey)) {
+function implementationTextFromMap(memberMap, scopedMethodKey) {
+    if (!memberMap || !memberMap.has(scopedMethodKey)) {
         return null;
     }
 
-    const member = memberMap.get(methodKey);
+    const member = memberMap.get(scopedMethodKey);
     return member?.sourceText ?? null;
 }
 
@@ -80,6 +90,8 @@ function mapMethodInventoryForClient(methods = [], implementationMaps = null) {
     return methods.map((entry) => {
         const item = {
             methodKey: entry.methodKey,
+            scopedMethodKey: entry.scopedMethodKey,
+            declaringClassQualifiedName: entry.declaringClassQualifiedName,
             basePresent: entry.basePresent,
             sourcePresent: entry.sourcePresent,
             destinationPresent: entry.destinationPresent,
@@ -90,18 +102,33 @@ function mapMethodInventoryForClient(methods = [], implementationMaps = null) {
 
         if (entry.status === METHOD_STATUS.CONFLICT && implementationMaps) {
             item.baseImplementation = entry.basePresent
-                ? implementationTextFromMap(baseMap, entry.methodKey)
+                ? implementationTextFromMap(baseMap, entry.scopedMethodKey)
                 : null;
             item.sourceImplementation = entry.sourcePresent
-                ? implementationTextFromMap(sourceMap, entry.methodKey)
+                ? implementationTextFromMap(sourceMap, entry.scopedMethodKey)
                 : null;
             item.destinationImplementation = entry.destinationPresent
-                ? implementationTextFromMap(destinationMap, entry.methodKey)
+                ? implementationTextFromMap(destinationMap, entry.scopedMethodKey)
                 : null;
         }
 
         return item;
     });
+}
+
+function buildNestedClassConflictSummaries(metadataName, methodMerge) {
+  if (!methodMerge?.nestedClasses?.length) {
+        return [];
+    }
+
+    return methodMerge.nestedClasses
+        .filter((entry) => entry.status === METHOD_STATUS.CONFLICT)
+        .map((entry) => ({
+            id: `${metadataName}:nested:${entry.qualifiedName}`,
+            artifact: 'nested-class',
+            qualifiedName: entry.qualifiedName,
+            message: `Nested class ${entry.qualifiedName} has conflicting structural shells.`
+        }));
 }
 
 function buildMethodConflictSummaries(metadataName, methodMerge) {
@@ -111,12 +138,24 @@ function buildMethodConflictSummaries(metadataName, methodMerge) {
 
     return methodMerge.methods
         .filter((entry) => entry.status === METHOD_STATUS.CONFLICT)
-        .map((entry) => ({
-            id: `${metadataName}:method:${entry.methodKey}`,
-            artifact: 'method',
-            methodKey: entry.methodKey,
-            message: `Method ${entry.methodKey} has conflicting implementations.`
-        }));
+        .map((entry) => {
+            const conflictId = entry.scopedMethodKey
+                ? `${metadataName}:method:${entry.scopedMethodKey}`
+                : `${metadataName}:method:${entry.methodKey}`;
+            const label = entry.declaringClassQualifiedName
+                ? `${entry.declaringClassQualifiedName}#${entry.methodKey}`
+                : entry.methodKey;
+
+            return {
+                id: conflictId,
+                artifact: 'method',
+                methodKey: entry.methodKey,
+                scopedMethodKey: entry.scopedMethodKey,
+                declaringClassQualifiedName: entry.declaringClassQualifiedName,
+                resolutionStatus: entry.status,
+                message: `Method ${label} has conflicting implementations.`
+            };
+        });
 }
 
 function buildDeclarationConflictSummaries(metadataName, methodMerge) {
@@ -140,27 +179,69 @@ function buildDeclarationConflictSummaries(metadataName, methodMerge) {
 function buildMethodConflictSummariesAll(metadataName, methodMerge) {
     return [
         ...buildMethodConflictSummaries(metadataName, methodMerge),
+        ...buildNestedClassConflictSummaries(metadataName, methodMerge),
         ...buildDeclarationConflictSummaries(metadataName, methodMerge)
     ];
 }
 
+function methodMergeHasUnresolvedDeclarationConflicts(methodMerge) {
+    if (!methodMerge) {
+        return false;
+    }
+
+    if ((methodMerge.declarationConflictCount ?? 0) > 0) {
+        return true;
+    }
+
+    if (countDeclarationConflicts(methodMerge.declarations ?? {}) > 0) {
+        return true;
+    }
+
+    if (methodMerge.declarationsResolved === false) {
+        const noCallableConflicts =
+            (methodMerge.conflictCount ?? 0) === 0 &&
+            (methodMerge.nestedClassConflictCount ?? 0) === 0;
+
+        if (noCallableConflicts) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function buildMethodMergeState(mergeResult) {
-    const declarationConflictCount = mergeResult.declarationConflictCount ?? 0;
+    const declarationConflictCount = Math.max(
+        mergeResult.declarationConflictCount ?? 0,
+        countDeclarationConflicts(mergeResult.declarations ?? {})
+    );
+    const nestedClassConflictCount = mergeResult.nestedClassConflictCount ?? 0;
+    const readiness = deriveMethodMergeReadinessFields({
+        conflictCount: mergeResult.conflictCount ?? 0,
+        nestedClassConflictCount,
+        declarationConflictCount,
+        nestedClassComposeReady: mergeResult.nestedClassComposeReady === true
+    });
 
     return {
         methods: mapMethodInventoryForClient(
             mergeResult.methods,
             mergeResult.maps
         ),
+        nestedClasses: mapNestedClassesForClient(mergeResult.nestedClasses),
+        nestedClassConflictCount,
+        nestedClassComposeReady: mergeResult.nestedClassComposeReady === true,
         declarations: mapDeclarationsForClient(mergeResult.declarations),
         declarationConflictCount,
         declarationInventories: mergeResult.declarationInventories,
         declarationsResolved: declarationConflictCount === 0,
         conflictCount: mergeResult.conflictCount,
-        resolved: mergeResult.resolved === true,
+        resolved: readiness.conflictsResolved,
+        compositionReady: readiness.compositionReady,
         composeSuccess: mergeResult.composeSuccess === true,
         methodResolutions: [],
-        declarationResolutions: []
+        declarationResolutions: [],
+        nestedClassResolutions: []
     };
 }
 
@@ -200,59 +281,51 @@ function mergeStoredDeclarationResolutions(
     return [...byKey.values()];
 }
 
-function mergeStoredMethodResolutions(existingResolutions = [], incomingResolutions = []) {
+function mergeStoredNestedClassResolutions(
+    existingResolutions = [],
+    incomingResolutions = []
+) {
     const byKey = new Map();
 
     for (const entry of existingResolutions || []) {
-        if (entry?.methodKey) {
-            byKey.set(entry.methodKey, entry);
+        if (entry?.qualifiedName) {
+            byKey.set(entry.qualifiedName, entry);
         }
     }
 
     for (const entry of incomingResolutions || []) {
-        if (entry?.methodKey) {
-            byKey.set(entry.methodKey, entry);
+        if (entry?.qualifiedName) {
+            byKey.set(entry.qualifiedName, entry);
         }
     }
 
     return [...byKey.values()];
 }
 
-function assertResolvableMethodKeys(comparisonMethods, methodResolutions) {
-    const knownKeys = new Set(
-        comparisonMethods.map((entry) => entry.methodKey)
-    );
+function mergeStoredMethodResolutions(
+    existingResolutions = [],
+    incomingResolutions = [],
+    rootQualifiedName
+) {
+    const byKey = new Map();
 
-    for (const resolution of methodResolutions) {
-        if (!knownKeys.has(resolution.methodKey)) {
-            throw new ApexMergeError(
-                MERGE_ERROR.UNKNOWN_METHOD_KEY,
-                `Unknown methodKey: ${resolution.methodKey}.`,
-                { methodKey: resolution.methodKey }
-            );
+    for (const entry of existingResolutions || []) {
+        const storageKey = methodResolutionStorageKey(entry, rootQualifiedName);
+
+        if (storageKey) {
+            byKey.set(storageKey, entry);
         }
     }
-}
 
-function assertResolutionTargetsAreConflicts(comparisonMethods, methodResolutions) {
-    const byKey = new Map(
-        comparisonMethods.map((entry) => [entry.methodKey, entry])
-    );
+    for (const entry of incomingResolutions || []) {
+        const storageKey = methodResolutionStorageKey(entry, rootQualifiedName);
 
-    for (const resolution of methodResolutions) {
-        const item = byKey.get(resolution.methodKey);
-
-        if (
-            item.status !== METHOD_STATUS.CONFLICT &&
-            item.status !== METHOD_STATUS.RESOLVED
-        ) {
-            throw new ApexMergeError(
-                MERGE_ERROR.INVALID_REQUEST,
-                `Method ${resolution.methodKey} is not in conflict and cannot be resolved.`,
-                { methodKey: resolution.methodKey, status: item.status }
-            );
+        if (storageKey) {
+            byKey.set(storageKey, entry);
         }
     }
+
+    return [...byKey.values()];
 }
 
 function buildMethodPreviewUnit({
@@ -275,10 +348,14 @@ function buildMethodPreviewUnit({
         metaXmlPath,
         mergeMode: METHOD_MERGE_MODE,
         mergeBaseSha,
-        conflictState:
-            mergeResult.conflictCount > 0 || mergeResult.declarationConflictCount > 0
-                ? 'UNRESOLVED'
-                : 'NONE',
+        conflictState: deriveMethodMergeReadinessFields({
+            conflictCount: mergeResult.conflictCount ?? 0,
+            nestedClassConflictCount: mergeResult.nestedClassConflictCount ?? 0,
+            declarationConflictCount: mergeResult.declarationConflictCount ?? 0,
+            nestedClassComposeReady: mergeResult.nestedClassComposeReady === true
+        }).compositionReady
+            ? 'NONE'
+            : 'UNRESOLVED',
         drift: null,
         threeWay: {
             cls: clsThreeWay,
@@ -294,8 +371,15 @@ function buildMethodPreviewUnit({
             cls: {
                 content: composedCls,
                 conflict:
-                    mergeResult.conflictCount > 0 ||
-                    mergeResult.declarationConflictCount > 0,
+                    deriveMethodMergeReadinessFields({
+                        conflictCount: mergeResult.conflictCount ?? 0,
+                        nestedClassConflictCount:
+                            mergeResult.nestedClassConflictCount ?? 0,
+                        declarationConflictCount:
+                            mergeResult.declarationConflictCount ?? 0,
+                        nestedClassComposeReady:
+                            mergeResult.nestedClassComposeReady === true
+                    }).compositionReady !== true,
                 sha256: composedCls ? sha256Utf8(composedCls) : null
             },
             metaXml: {
@@ -366,11 +450,16 @@ async function previewApexClassMethod({
 function resolveMethodMergeUnit(unit, resolution = {}) {
     const incomingMethods = resolution.methodResolutions || [];
     const incomingDeclarations = resolution.declarationResolutions || [];
+    const incomingNested = resolution.nestedClassResolutions || [];
 
-    if (!incomingMethods.length && !incomingDeclarations.length) {
+    if (
+        !incomingMethods.length &&
+        !incomingDeclarations.length &&
+        !incomingNested.length
+    ) {
         throw new ApexMergeError(
             MERGE_ERROR.INVALID_REQUEST,
-            `METHOD resolution for ${unit.metadataName} requires methodResolutions and/or declarationResolutions.`,
+            `METHOD resolution for ${unit.metadataName} requires methodResolutions, declarationResolutions, and/or nestedClassResolutions.`,
             { metadataName: unit.metadataName }
         );
     }
@@ -384,24 +473,38 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
         );
     }
 
-    const combinedMethodResolutions = mergeStoredMethodResolutions(
-        unit.methodMerge?.methodResolutions,
-        incomingMethods
-    );
-    const combinedDeclarationResolutions = mergeStoredDeclarationResolutions(
-        unit.methodMerge?.declarationResolutions,
-        incomingDeclarations
-    );
-
     const comparison = compareApexMethodMerge({
         baseContent: clsThreeWay.base ?? '',
         sourceContent: clsThreeWay.source,
         destinationContent: clsThreeWay.destination ?? ''
     });
+    const rootQualifiedName = comparison.className;
+
+    const combinedMethodResolutions = mergeStoredMethodResolutions(
+        unit.methodMerge?.methodResolutions,
+        incomingMethods,
+        rootQualifiedName
+    );
+    const combinedDeclarationResolutions = mergeStoredDeclarationResolutions(
+        unit.methodMerge?.declarationResolutions,
+        incomingDeclarations
+    );
+    const combinedNestedClassResolutions = mergeStoredNestedClassResolutions(
+        unit.methodMerge?.nestedClassResolutions,
+        incomingNested
+    );
 
     if (incomingMethods.length) {
-        assertResolvableMethodKeys(comparison.methods, incomingMethods);
-        assertResolutionTargetsAreConflicts(comparison.methods, incomingMethods);
+        assertResolvableMethodResolutionKeys(
+            comparison.methods,
+            incomingMethods,
+            rootQualifiedName
+        );
+        assertMethodResolutionTargetsAreConflicts(
+            comparison.methods,
+            incomingMethods,
+            rootQualifiedName
+        );
     }
 
     if (incomingDeclarations.length) {
@@ -415,6 +518,17 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
         );
     }
 
+    if (incomingNested.length) {
+        assertResolvableNestedClassKeys(
+            comparison.nestedClasses,
+            incomingNested
+        );
+        assertNestedClassResolutionTargetsAreConflicts(
+            comparison.nestedClasses,
+            incomingNested
+        );
+    }
+
     applyDeclarationResolutions(
         comparison.declarations,
         combinedDeclarationResolutions,
@@ -425,42 +539,72 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
         comparison.methods,
         combinedMethodResolutions,
         comparison.maps.source,
-        comparison.maps.destination
+        comparison.maps.destination,
+        rootQualifiedName
+    );
+
+    applyNestedClassResolutions(
+        comparison.nestedClasses,
+        combinedNestedClassResolutions
     );
 
     const conflictCount = comparison.methods.filter(
         (entry) => entry.status === METHOD_STATUS.CONFLICT
     ).length;
+    const nestedClassConflictCount = countNestedClassConflicts(
+        comparison.nestedClasses
+    );
+    comparison.nestedClassComposeReady = isNestedClassComposeReady(
+        comparison.nestedClasses,
+        comparison.parses.source,
+        comparison.parses.destination,
+        comparison.methods,
+        comparison.maps.source,
+        comparison.maps.destination
+    );
     const declarationConflictCount = countDeclarationConflicts(comparison.declarations);
+
+    const readiness = deriveMethodMergeReadinessFields({
+        conflictCount,
+        nestedClassConflictCount,
+        declarationConflictCount,
+        nestedClassComposeReady: comparison.nestedClassComposeReady === true
+    });
 
     const methodMerge = {
         methods: mapMethodInventoryForClient(
             comparison.methods,
             comparison.maps
         ),
+        nestedClasses: mapNestedClassesForClient(comparison.nestedClasses),
+        nestedClassConflictCount,
+        nestedClassComposeReady: comparison.nestedClassComposeReady === true,
         declarations: mapDeclarationsForClient(comparison.declarations),
         declarationConflictCount,
         declarationInventories: comparison.declarationInventories,
         declarationsResolved: declarationConflictCount === 0,
         conflictCount,
-        resolved: conflictCount === 0,
+        resolved: readiness.conflictsResolved,
+        compositionReady: readiness.compositionReady,
         composeSuccess: false,
         methodResolutions: combinedMethodResolutions,
-        declarationResolutions: combinedDeclarationResolutions
+        declarationResolutions: combinedDeclarationResolutions,
+        nestedClassResolutions: combinedNestedClassResolutions
     };
 
     let nextUnit = {
         ...unit,
         mergeMode: METHOD_MERGE_MODE,
         methodMerge,
-        conflictState:
-            conflictCount > 0 || declarationConflictCount > 0
-                ? 'UNRESOLVED'
-                : 'RESOLVED'
+        conflictState: readiness.compositionReady ? 'RESOLVED' : 'UNRESOLVED'
     };
 
-    if (conflictCount === 0 && declarationConflictCount === 0) {
-        composeApexMethodMerge(comparison, clsThreeWay.source);
+    if (readiness.compositionReady) {
+        composeApexMethodMerge(
+            comparison,
+            clsThreeWay.source,
+            clsThreeWay.destination ?? ''
+        );
         const composedCls = comparison.composedSource;
 
         nextUnit = applyResolvedArtifacts(nextUnit, {
@@ -499,7 +643,18 @@ function validateMethodUnitForSeal(unit) {
         );
     }
 
-    if (unit.methodMerge?.declarationConflictCount > 0) {
+    if (unit.methodMerge?.nestedClassConflictCount > 0) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_UNRESOLVED_CONFLICT,
+            `Class ${unit.metadataName} has unresolved nested class conflicts.`,
+            {
+                metadataName: unit.metadataName,
+                nestedClassConflictCount: unit.methodMerge?.nestedClassConflictCount
+            }
+        );
+    }
+
+    if (methodMergeHasUnresolvedDeclarationConflicts(unit.methodMerge)) {
         throw new ApexMergeError(
             MERGE_ERROR.DECLARATION_UNRESOLVED_CONFLICT,
             `Class ${unit.metadataName} has unresolved declaration conflicts.`,
@@ -507,6 +662,18 @@ function validateMethodUnitForSeal(unit) {
                 metadataName: unit.metadataName,
                 declarationConflictCount: unit.methodMerge?.declarationConflictCount,
                 declarations: unit.methodMerge?.declarations
+            }
+        );
+    }
+
+    if (unit.methodMerge?.compositionReady !== true) {
+        throw new ApexMergeError(
+            MERGE_ERROR.METHOD_COMPOSE_FAILED,
+            `Class ${unit.metadataName} cannot be sealed until METHOD merge is composition-ready.`,
+            {
+                metadataName: unit.metadataName,
+                nestedClassComposeReady: unit.methodMerge?.nestedClassComposeReady,
+                compositionReady: unit.methodMerge?.compositionReady
             }
         );
     }
@@ -545,7 +712,11 @@ function validateMethodUnitForSeal(unit) {
 
     const expectedKeys = new Set(
         (unit.methodMerge?.methods || [])
-            .filter((entry) => entry.included !== false)
+            .filter(
+                (entry) =>
+                    entry.included !== false &&
+                    entry.declaringClassQualifiedName === unit.metadataName
+            )
             .map((entry) => entry.methodKey)
     );
 
@@ -559,6 +730,7 @@ module.exports = {
     mapMethodInventoryForClient,
     implementationTextFromMap,
     buildMethodConflictSummaries,
+    buildNestedClassConflictSummaries,
     buildDeclarationConflictSummaries,
     buildMethodConflictSummariesAll,
     buildMethodMergeState,
@@ -567,6 +739,7 @@ module.exports = {
     previewApexClassMethod,
     resolveMethodMergeUnit,
     validateMethodUnitForSeal,
+    methodMergeHasUnresolvedDeclarationConflicts,
     mergeStoredMethodResolutions,
     mergeStoredDeclarationResolutions,
     METHOD_RESOLUTION_STRATEGY,

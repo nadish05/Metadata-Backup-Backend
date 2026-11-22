@@ -175,16 +175,24 @@ function buildResolvedMethodUnit(composedCls, metadataName = 'WeatherService') {
                 {
                     methodKey: 'getWeather()',
                     status: 'RESOLVED',
-                    included: true
+                    included: true,
+                    declaringClassQualifiedName: metadataName
                 },
                 {
                     methodKey: 'getHumidity()',
                     status: 'AUTO_INCLUDED',
-                    included: true
+                    included: true,
+                    declaringClassQualifiedName: metadataName
                 }
             ],
+            nestedClasses: [],
             conflictCount: 0,
+            nestedClassConflictCount: 0,
+            nestedClassComposeReady: true,
+            declarationConflictCount: 0,
+            declarationsResolved: true,
             resolved: true,
+            compositionReady: true,
             composeSuccess: true,
             methodResolutions: []
         },
