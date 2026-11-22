@@ -36,8 +36,8 @@ const {
     assertNestedClassResolutionTargetsAreConflicts,
     mapNestedClassesForClient,
     countNestedClassConflicts,
-    isNestedClassComposeReady,
-    deriveMethodMergeReadinessFields,
+    computeMethodMergeReadiness,
+    syncMethodMergeReadinessToComparison,
     composeApexMethodMerge,
     executeApexMethodMerge
 } = require('./apexMergeMethodMerge.service');
@@ -211,17 +211,17 @@ function methodMergeHasUnresolvedDeclarationConflicts(methodMerge) {
 }
 
 function buildMethodMergeState(mergeResult) {
-    const declarationConflictCount = Math.max(
-        mergeResult.declarationConflictCount ?? 0,
-        countDeclarationConflicts(mergeResult.declarations ?? {})
-    );
-    const nestedClassConflictCount = mergeResult.nestedClassConflictCount ?? 0;
-    const readiness = deriveMethodMergeReadinessFields({
-        conflictCount: mergeResult.conflictCount ?? 0,
-        nestedClassConflictCount,
-        declarationConflictCount,
-        nestedClassComposeReady: mergeResult.nestedClassComposeReady === true
+    const readiness = computeMethodMergeReadiness({
+        nestedClasses: mergeResult.nestedClasses,
+        methods: mergeResult.methods,
+        sourceParsed: mergeResult.parses?.source,
+        destinationParsed: mergeResult.parses?.destination,
+        sourceMap: mergeResult.maps?.source,
+        destMap: mergeResult.maps?.destination,
+        declarations: mergeResult.declarations
     });
+    const nestedClassConflictCount = readiness.nestedClassConflictCount;
+    const declarationConflictCount = readiness.declarationConflictCount;
 
     return {
         methods: mapMethodInventoryForClient(
@@ -230,12 +230,12 @@ function buildMethodMergeState(mergeResult) {
         ),
         nestedClasses: mapNestedClassesForClient(mergeResult.nestedClasses),
         nestedClassConflictCount,
-        nestedClassComposeReady: mergeResult.nestedClassComposeReady === true,
+        nestedClassComposeReady: readiness.nestedClassComposeReady,
         declarations: mapDeclarationsForClient(mergeResult.declarations),
         declarationConflictCount,
         declarationInventories: mergeResult.declarationInventories,
         declarationsResolved: declarationConflictCount === 0,
-        conflictCount: mergeResult.conflictCount,
+        conflictCount: readiness.conflictCount,
         resolved: readiness.conflictsResolved,
         compositionReady: readiness.compositionReady,
         composeSuccess: mergeResult.composeSuccess === true,
@@ -348,14 +348,18 @@ function buildMethodPreviewUnit({
         metaXmlPath,
         mergeMode: METHOD_MERGE_MODE,
         mergeBaseSha,
-        conflictState: deriveMethodMergeReadinessFields({
-            conflictCount: mergeResult.conflictCount ?? 0,
-            nestedClassConflictCount: mergeResult.nestedClassConflictCount ?? 0,
-            declarationConflictCount: mergeResult.declarationConflictCount ?? 0,
-            nestedClassComposeReady: mergeResult.nestedClassComposeReady === true
-        }).compositionReady
-            ? 'NONE'
-            : 'UNRESOLVED',
+        conflictState: (() => {
+            const previewReadiness = computeMethodMergeReadiness({
+                nestedClasses: mergeResult.nestedClasses,
+                methods: mergeResult.methods,
+                sourceParsed: mergeResult.parses?.source,
+                destinationParsed: mergeResult.parses?.destination,
+                sourceMap: mergeResult.maps?.source,
+                destMap: mergeResult.maps?.destination,
+                declarations: mergeResult.declarations
+            });
+            return previewReadiness.compositionReady ? 'NONE' : 'UNRESOLVED';
+        })(),
         drift: null,
         threeWay: {
             cls: clsThreeWay,
@@ -371,14 +375,14 @@ function buildMethodPreviewUnit({
             cls: {
                 content: composedCls,
                 conflict:
-                    deriveMethodMergeReadinessFields({
-                        conflictCount: mergeResult.conflictCount ?? 0,
-                        nestedClassConflictCount:
-                            mergeResult.nestedClassConflictCount ?? 0,
-                        declarationConflictCount:
-                            mergeResult.declarationConflictCount ?? 0,
-                        nestedClassComposeReady:
-                            mergeResult.nestedClassComposeReady === true
+                    computeMethodMergeReadiness({
+                        nestedClasses: mergeResult.nestedClasses,
+                        methods: mergeResult.methods,
+                        sourceParsed: mergeResult.parses?.source,
+                        destinationParsed: mergeResult.parses?.destination,
+                        sourceMap: mergeResult.maps?.source,
+                        destMap: mergeResult.maps?.destination,
+                        declarations: mergeResult.declarations
                     }).compositionReady !== true,
                 sha256: composedCls ? sha256Utf8(composedCls) : null
             },
@@ -548,28 +552,10 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
         combinedNestedClassResolutions
     );
 
-    const conflictCount = comparison.methods.filter(
-        (entry) => entry.status === METHOD_STATUS.CONFLICT
-    ).length;
-    const nestedClassConflictCount = countNestedClassConflicts(
-        comparison.nestedClasses
-    );
-    comparison.nestedClassComposeReady = isNestedClassComposeReady(
-        comparison.nestedClasses,
-        comparison.parses.source,
-        comparison.parses.destination,
-        comparison.methods,
-        comparison.maps.source,
-        comparison.maps.destination
-    );
-    const declarationConflictCount = countDeclarationConflicts(comparison.declarations);
-
-    const readiness = deriveMethodMergeReadinessFields({
-        conflictCount,
-        nestedClassConflictCount,
-        declarationConflictCount,
-        nestedClassComposeReady: comparison.nestedClassComposeReady === true
-    });
+    const readiness = syncMethodMergeReadinessToComparison(comparison);
+    const conflictCount = readiness.conflictCount;
+    const nestedClassConflictCount = readiness.nestedClassConflictCount;
+    const declarationConflictCount = readiness.declarationConflictCount;
 
     const methodMerge = {
         methods: mapMethodInventoryForClient(
@@ -578,7 +564,7 @@ function resolveMethodMergeUnit(unit, resolution = {}) {
         ),
         nestedClasses: mapNestedClassesForClient(comparison.nestedClasses),
         nestedClassConflictCount,
-        nestedClassComposeReady: comparison.nestedClassComposeReady === true,
+        nestedClassComposeReady: readiness.nestedClassComposeReady,
         declarations: mapDeclarationsForClient(comparison.declarations),
         declarationConflictCount,
         declarationInventories: comparison.declarationInventories,

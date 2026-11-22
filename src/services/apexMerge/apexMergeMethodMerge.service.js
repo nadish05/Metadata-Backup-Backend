@@ -390,14 +390,17 @@ function deriveMethodMergeReadinessFields({
     conflictCount = 0,
     nestedClassConflictCount = 0,
     declarationConflictCount = 0,
-    nestedClassComposeReady = false
+    nestedClassComposeReady = false,
+    methodInventoryComposeReady = false
 } = {}) {
     const conflictsResolved =
         conflictCount === 0 &&
         nestedClassConflictCount === 0 &&
         declarationConflictCount === 0;
     const compositionReady =
-        conflictsResolved && nestedClassComposeReady === true;
+        conflictsResolved &&
+        nestedClassComposeReady === true &&
+        methodInventoryComposeReady === true;
 
     return { conflictsResolved, compositionReady };
 }
@@ -1512,16 +1515,9 @@ function isMethodInventoryItemComposable(item, sourceMap, destMap) {
 function isNestedClassComposeReady(
     nestedClasses = [],
     sourceParsed = null,
-    destinationParsed = null,
-    methods = [],
-    sourceMap = null,
-    destMap = null
+    destinationParsed = null
 ) {
     if (countNestedClassConflicts(nestedClasses) > 0) {
-        return false;
-    }
-
-    if (countConflicts(methods) > 0) {
         return false;
     }
 
@@ -1531,15 +1527,96 @@ function isNestedClassComposeReady(
         }
     }
 
-    if (sourceMap && destMap) {
-        for (const item of methods || []) {
-            if (!isMethodInventoryItemComposable(item, sourceMap, destMap)) {
-                return false;
-            }
+    return true;
+}
+
+function countConflicts(inventory) {
+    return inventory.filter((item) => item.status === METHOD_STATUS.CONFLICT)
+        .length;
+}
+
+function isMethodInventoryComposeReady(methods = [], sourceMap = null, destMap = null) {
+    if (!sourceMap || !destMap) {
+        return false;
+    }
+
+    for (const item of methods || []) {
+        if (!isMethodInventoryItemComposable(item, sourceMap, destMap)) {
+            return false;
         }
     }
 
     return true;
+}
+
+/**
+ * Derive readiness from current inventories (not stale snapshot counters on comparison objects).
+ */
+function computeMethodMergeReadiness({
+    nestedClasses = [],
+    methods = [],
+    sourceParsed = null,
+    destinationParsed = null,
+    sourceMap = null,
+    destMap = null,
+    declarations = null,
+    declarationConflictCount = null
+} = {}) {
+    const conflictCount = countConflicts(methods);
+    const nestedClassConflictCount = countNestedClassConflicts(nestedClasses);
+    const resolvedDeclarationConflictCount =
+        declarations != null
+            ? countDeclarationConflicts(declarations)
+            : declarationConflictCount ?? 0;
+    const nestedClassComposeReady = isNestedClassComposeReady(
+        nestedClasses,
+        sourceParsed,
+        destinationParsed
+    );
+    const methodInventoryComposeReady = isMethodInventoryComposeReady(
+        methods,
+        sourceMap,
+        destMap
+    );
+    const derived = deriveMethodMergeReadinessFields({
+        conflictCount,
+        nestedClassConflictCount,
+        declarationConflictCount: resolvedDeclarationConflictCount,
+        nestedClassComposeReady,
+        methodInventoryComposeReady
+    });
+
+    return {
+        conflictCount,
+        nestedClassConflictCount,
+        declarationConflictCount: resolvedDeclarationConflictCount,
+        nestedClassComposeReady,
+        methodInventoryComposeReady,
+        ...derived,
+        resolved: derived.conflictsResolved
+    };
+}
+
+function syncMethodMergeReadinessToComparison(comparison) {
+    const readiness = computeMethodMergeReadiness({
+        nestedClasses: comparison.nestedClasses || [],
+        methods: comparison.methods || [],
+        sourceParsed: comparison.parses?.source,
+        destinationParsed:
+            comparison.parses?.destination ?? comparison.parses?.source,
+        sourceMap: comparison.maps?.source,
+        destMap: comparison.maps?.destination,
+        declarations: comparison.declarations
+    });
+
+    comparison.conflictCount = readiness.conflictCount;
+    comparison.nestedClassConflictCount = readiness.nestedClassConflictCount;
+    comparison.declarationConflictCount = readiness.declarationConflictCount;
+    comparison.nestedClassComposeReady = readiness.nestedClassComposeReady;
+    comparison.compositionReady = readiness.compositionReady;
+    comparison.resolved = readiness.conflictsResolved;
+
+    return readiness;
 }
 
 function applyNestedClassResolutions(nestedClasses, resolutions = []) {
@@ -1805,10 +1882,6 @@ function buildMethodInventory(
     return inventory;
 }
 
-function countConflicts(inventory) {
-    return inventory.filter((item) => item.status === METHOD_STATUS.CONFLICT).length;
-}
-
 function applyMethodResolutions(
     inventory,
     resolutions,
@@ -2010,28 +2083,20 @@ function compareApexMethodMerge({
         destMap,
         rootQualifiedName
     );
-    const nestedClassComposeReady = isNestedClassComposeReady(
-        nestedClasses,
-        sourceParsed,
-        destinationParsed,
-        methods,
-        sourceMap,
-        destMap
-    );
-    const conflictCount = countConflicts(methods);
     const declarationComparison = buildDeclarationComparison(
         baseParsed,
         sourceParsed,
         destinationParsed,
         baseAbsent
     );
-    const declarationConflictCount =
-        declarationComparison.declarationConflictCount;
-    const readiness = deriveMethodMergeReadinessFields({
-        conflictCount,
-        nestedClassConflictCount,
-        declarationConflictCount,
-        nestedClassComposeReady
+    const readiness = computeMethodMergeReadiness({
+        nestedClasses,
+        methods,
+        sourceParsed,
+        destinationParsed,
+        sourceMap,
+        destMap,
+        declarations: declarationComparison.declarations
     });
 
     return {
@@ -2039,11 +2104,11 @@ function compareApexMethodMerge({
         className: sourceParsed.primaryClassName,
         methods,
         nestedClasses,
-        nestedClassConflictCount,
-        nestedClassComposeReady,
-        conflictCount,
+        nestedClassConflictCount: readiness.nestedClassConflictCount,
+        nestedClassComposeReady: readiness.nestedClassComposeReady,
+        conflictCount: readiness.conflictCount,
         declarations: declarationComparison.declarations,
-        declarationConflictCount,
+        declarationConflictCount: readiness.declarationConflictCount,
         declarationInventories: declarationComparison.inventories,
         resolved: readiness.conflictsResolved,
         compositionReady: readiness.compositionReady,
@@ -2111,21 +2176,27 @@ function composeApexMethodMerge(
         );
     }
 
-    comparison.nestedClassComposeReady = isNestedClassComposeReady(
-        comparison.nestedClasses,
-        comparison.parses?.source,
-        comparison.parses?.destination,
-        comparison.methods,
-        comparison.maps?.source,
-        comparison.maps?.destination
-    );
+    const composeReadiness = computeMethodMergeReadiness({
+        nestedClasses: comparison.nestedClasses,
+        methods: comparison.methods,
+        sourceParsed: comparison.parses?.source,
+        destinationParsed:
+            comparison.parses?.destination ?? comparison.parses?.source,
+        sourceMap: comparison.maps?.source,
+        destMap: comparison.maps?.destination,
+        declarations: comparison.declarations
+    });
 
-    if (comparison.nestedClassComposeReady !== true) {
+    comparison.nestedClassComposeReady = composeReadiness.nestedClassComposeReady;
+    comparison.compositionReady = composeReadiness.compositionReady;
+
+    if (composeReadiness.compositionReady !== true) {
         throw new ApexMergeError(
             MERGE_ERROR.METHOD_UNRESOLVED_CONFLICT,
-            `METHOD merge is not ready to compose: unresolved nested class or method conflicts remain.`,
+            `METHOD merge is not ready to compose: unresolved conflicts or inventory readiness checks failed.`,
             {
-                nestedClassComposeReady: comparison.nestedClassComposeReady,
+                nestedClassComposeReady: composeReadiness.nestedClassComposeReady,
+                compositionReady: composeReadiness.compositionReady,
                 nestedClasses: comparison.nestedClasses,
                 conflictCount: unresolved
             }
@@ -2229,35 +2300,11 @@ function executeApexMethodMerge({
             comparison.className
         );
 
-        const remaining = countConflicts(comparison.methods);
-
-        comparison.conflictCount = remaining;
-        comparison.nestedClassComposeReady = isNestedClassComposeReady(
-            comparison.nestedClasses,
-            comparison.parses.source,
-            comparison.parses.destination,
-            comparison.methods,
-            comparison.maps.source,
-            comparison.maps.destination
-        );
-        const readiness = deriveMethodMergeReadinessFields({
-            conflictCount: remaining,
-            nestedClassConflictCount: comparison.nestedClassConflictCount,
-            declarationConflictCount: comparison.declarationConflictCount,
-            nestedClassComposeReady: comparison.nestedClassComposeReady
-        });
-        comparison.resolved = readiness.conflictsResolved;
-        comparison.compositionReady = readiness.compositionReady;
+        syncMethodMergeReadinessToComparison(comparison);
     }
 
-    const compositionReady =
-        comparison.compositionReady === true ||
-        deriveMethodMergeReadinessFields({
-            conflictCount: comparison.conflictCount,
-            nestedClassConflictCount: comparison.nestedClassConflictCount,
-            declarationConflictCount: comparison.declarationConflictCount,
-            nestedClassComposeReady: comparison.nestedClassComposeReady
-        }).compositionReady;
+    const finalReadiness = syncMethodMergeReadinessToComparison(comparison);
+    const compositionReady = finalReadiness.compositionReady === true;
 
     if (compositionReady) {
         composeApexMethodMerge(
@@ -2304,6 +2351,9 @@ module.exports = {
     mapNestedClassesForClient,
     countNestedClassConflicts,
     isNestedClassComposeReady,
+    isMethodInventoryComposeReady,
+    computeMethodMergeReadiness,
+    syncMethodMergeReadinessToComparison,
     deriveMethodMergeReadinessFields,
     buildNestedClassBodyStructuralFingerprint,
     buildNestedClassHeaderStructuralFingerprint,

@@ -28,6 +28,8 @@ const {
     assertMethodResolutionTargetsAreConflicts,
     buildScopedMethodKey,
     isNestedClassComposeReady,
+    computeMethodMergeReadiness,
+    syncMethodMergeReadinessToComparison,
     validateComposedNestedStructuralExpectations,
     countDeclarationConflicts
 } = require('./apexMergeMethodMerge.service');
@@ -119,7 +121,7 @@ function assertNestedComposeBlocked(
     sourceContent,
     destinationContent = sourceContent
 ) {
-    assert.strictEqual(comparison.nestedClassComposeReady, false);
+    assert.strictEqual(comparison.compositionReady, false);
     assert.throws(
         () =>
             composeApexMethodMerge(
@@ -139,15 +141,9 @@ function assertNestedComposeSuccess(
     sourceContent,
     destinationContent = sourceContent
 ) {
-    comparison.nestedClassComposeReady = isNestedClassComposeReady(
-        comparison.nestedClasses,
-        comparison.parses?.source,
-        comparison.parses?.destination,
-        comparison.methods,
-        comparison.maps?.source,
-        comparison.maps?.destination
-    );
-    assert.strictEqual(comparison.nestedClassComposeReady, true);
+    const readiness = syncMethodMergeReadinessToComparison(comparison);
+    assert.strictEqual(readiness.nestedClassComposeReady, true);
+    assert.strictEqual(readiness.compositionReady, true);
     const composed = composeApexMethodMerge(
         comparison,
         sourceContent,
@@ -1525,21 +1521,20 @@ ${method}
         assert.ok(result.methods);
     });
 
-    await runTest('Phase 5A.2: WeatherService divergent nested-class sets still fail', () => {
-        const base = `public with sharing class WeatherService {
-    public static void getWeather() {}
+    await runTest('Phase 5B.5.2: WeatherService root method conflict with composable nested inventory', () => {
+        const base = `public class WeatherService {
     public class WeatherWrapper {
         @AuraEnabled public String temperature;
     }
 }`;
         const source = `public class WeatherService {
-    public static void getResortWeather(Datetime dateToCheck) {}
+    public static void getResortWeather(Datetime dateToCheck) { System.debug('src'); }
     private class WeatherApiResponse { public List<TemperatureWrapper> weather; }
     private class TemperatureWrapper { public Decimal temperature; }
     public class Weather { public Decimal minTemperatureC; }
 }`;
         const destination = `public class WeatherService {
-    public static void getResortWeather(Datetime dateToCheck) {}
+    public static void getResortWeather(Datetime dateToCheck) { System.debug('dest'); }
     public class Weather { public Decimal minTemperatureC; }
 }`;
 
@@ -1549,15 +1544,62 @@ ${method}
             destinationContent: destination
         });
 
+        assert.strictEqual(result.conflictCount, 1);
+        assert.strictEqual(result.nestedClassConflictCount, 0);
+        assert.strictEqual(result.declarationConflictCount, 0);
+        assert.strictEqual(result.resolved, false);
+        assert.strictEqual(result.nestedClassComposeReady, true);
+        assert.strictEqual(result.compositionReady, false);
         assert.strictEqual(
             nestedByQName(result, 'WeatherService.TemperatureWrapper').status,
+            METHOD_STATUS.AUTO_INCLUDED
+        );
+        assert.strictEqual(
+            nestedByQName(result, 'WeatherService.Weather').status,
+            METHOD_STATUS.AUTO_INCLUDED
+        );
+        assert.strictEqual(
+            nestedByQName(result, 'WeatherService.WeatherApiResponse').status,
             METHOD_STATUS.AUTO_INCLUDED
         );
         assert.strictEqual(
             nestedByQName(result, 'WeatherService.WeatherWrapper').status,
             METHOD_STATUS.AUTO_EXCLUDED
         );
-        assertNestedComposeSuccess(result, source, destination);
+        assertNestedComposeBlocked(result, source, destination);
+
+        const conflict = result.methods.find(
+            (entry) => entry.methodKey === 'getResortWeather(Datetime)'
+        );
+        assert.ok(conflict);
+        assert.strictEqual(conflict.status, METHOD_STATUS.CONFLICT);
+
+        applyMethodResolutions(
+            result.methods,
+            [
+                {
+                    methodKey: 'getResortWeather(Datetime)',
+                    strategy: METHOD_RESOLUTION_STRATEGY.ACCEPT_SOURCE
+                }
+            ],
+            result.maps.source,
+            result.maps.destination,
+            result.className
+        );
+
+        result.conflictCount = result.methods.filter(
+            (entry) => entry.status === METHOD_STATUS.CONFLICT
+        ).length;
+        assert.strictEqual(result.conflictCount, 0);
+
+        const after = syncMethodMergeReadinessToComparison(result);
+        assert.strictEqual(after.resolved, true);
+        assert.strictEqual(after.nestedClassComposeReady, true);
+        assert.strictEqual(after.compositionReady, true);
+
+        const composed = assertNestedComposeSuccess(result, source, destination);
+        assert.ok(composed.includes('getResortWeather'));
+        assert.ok(composed.includes("System.debug('src');"));
     });
 
     await runTest('omitted access: sharing-only drift reaches declaration comparison', () => {
@@ -3224,12 +3266,6 @@ ${method}
             comparison.className
         );
 
-        comparison.nestedClassComposeReady = isNestedClassComposeReady(
-            comparison.nestedClasses,
-            comparison.parses.source,
-            comparison.parses.destination,
-            comparison.methods
-        );
         const composed = assertNestedComposeSuccess(
             comparison,
             mk("System.debug('source');"),
@@ -4144,6 +4180,119 @@ ${method}
             OUTER_ACCESS.PUBLIC,
             OUTER_SHARING.WITHOUT
         );
+    });
+
+    await runTest('Phase 5B.5.2: root method conflict leaves nestedClassComposeReady true', () => {
+        const root = methodBlock('run()', "System.debug('run');");
+        const base = `public class RootOnly {\n${root}\n}`;
+        const source = `public class RootOnly {\n${root}\n    public void extra() { System.debug('s'); }\n}`;
+        const destination = `public class RootOnly {\n${root}\n    public void extra() { System.debug('d'); }\n}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.conflictCount, 1);
+        assert.strictEqual(result.nestedClassConflictCount, 0);
+        assert.strictEqual(result.nestedClassComposeReady, true);
+        assert.strictEqual(result.compositionReady, false);
+    });
+
+    await runTest('Phase 5B.5.2: nested structural conflict keeps nestedClassComposeReady false', () => {
+        const root = methodBlock('run()', "System.debug('run');");
+        const base = `public class NestOnly {\n${root}\n    private class Inner { Integer x = 1; }\n}`;
+        const source = base;
+        const destination = `public class NestOnly {\n${root}\n    private class Inner { Integer x = 1; Integer y = 2; }\n}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.strictEqual(result.conflictCount, 0);
+        assert.strictEqual(result.nestedClassConflictCount, 1);
+        assert.strictEqual(result.nestedClassComposeReady, false);
+        assert.strictEqual(result.compositionReady, false);
+    });
+
+    await runTest('Phase 5B.5.2: simultaneous method and nested conflicts block composition', () => {
+        const root = methodBlock('run()', "System.debug('run');");
+        const base = `public class BothKinds {\n${root}\n    private class Shell { }\n}`;
+        const source = `public class BothKinds {\n${root}\n    public void extra() { System.debug('s'); }\n    private static class Shell { }\n}`;
+        const destination = `public class BothKinds {\n${root}\n    public void extra() { System.debug('d'); }\n    public class Shell { }\n}`;
+
+        const result = compareApexMethodMerge({
+            baseContent: base,
+            sourceContent: source,
+            destinationContent: destination
+        });
+
+        assert.ok(result.conflictCount >= 1);
+        assert.ok(result.nestedClassConflictCount >= 1);
+        assert.strictEqual(result.nestedClassComposeReady, false);
+        assert.strictEqual(result.compositionReady, false);
+    });
+
+    await runTest('Phase 5B.5.2: missing method implementation blocks composition not nested readiness', () => {
+        const root = methodBlock('run()', "System.debug('run');");
+        const shell = `public class PhantomSvc {\n${root}\n}`;
+        const comparison = compareApexMethodMerge({
+            baseContent: shell,
+            sourceContent: shell,
+            destinationContent: shell
+        });
+
+        assert.strictEqual(comparison.nestedClassComposeReady, true);
+
+        comparison.methods.push({
+            scopedMethodKey: buildScopedMethodKey('PhantomSvc', 'phantom()'),
+            methodKey: 'phantom()',
+            declaringClassQualifiedName: 'PhantomSvc',
+            status: METHOD_STATUS.AUTO_INCLUDED,
+            included: true,
+            sourcePresent: true,
+            destinationPresent: true,
+            chosenFrom: 'source'
+        });
+
+        const readiness = syncMethodMergeReadinessToComparison(comparison);
+
+        assert.strictEqual(readiness.nestedClassComposeReady, true);
+        assert.strictEqual(readiness.compositionReady, false);
+
+        assert.throws(
+            () => composeApexMethodMerge(comparison, shell, shell),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.METHOD_UNRESOLVED_CONFLICT
+        );
+    });
+
+    await runTest('Phase 5B.5.2: invalid nested member declaration range fails nested readiness', () => {
+        const root = methodBlock('run()', "System.debug('run');");
+        const shell = `public class GhostNest {\n${root}\n}`;
+        const comparison = compareApexMethodMerge({
+            baseContent: shell,
+            sourceContent: shell,
+            destinationContent: shell
+        });
+
+        comparison.nestedClasses.push({
+            qualifiedName: 'GhostNest.Nonexistent',
+            simpleName: 'Nonexistent',
+            status: METHOD_STATUS.AUTO_INCLUDED,
+            included: true,
+            sourcePresent: true,
+            destinationPresent: true
+        });
+
+        const readiness = syncMethodMergeReadinessToComparison(comparison);
+
+        assert.strictEqual(readiness.nestedClassComposeReady, false);
+        assert.strictEqual(readiness.compositionReady, false);
     });
 
     await runTest('existing FULL merge regression tests continue passing', () => {

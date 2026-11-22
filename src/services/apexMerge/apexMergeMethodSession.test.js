@@ -1413,10 +1413,7 @@ async function main() {
     });
 
     await runTest('Phase 5B.4.3: methodMerge exposes compositionReady distinct from resolved', () => {
-        const {
-            compareApexMethodMerge,
-            deriveMethodMergeReadinessFields
-        } = require('./apexMergeMethodMerge.service');
+        const { compareApexMethodMerge } = require('./apexMergeMethodMerge.service');
 
         const root = `    public static void run() { System.debug('run'); }`;
         const base = `public class SessReady {\n${root}\n    private class Inner { Integer x = 1; }\n}`;
@@ -1428,15 +1425,9 @@ async function main() {
             destinationContent: destination
         });
 
-        const readiness = deriveMethodMergeReadinessFields({
-            conflictCount: result.conflictCount,
-            nestedClassConflictCount: result.nestedClassConflictCount,
-            declarationConflictCount: result.declarationConflictCount,
-            nestedClassComposeReady: result.nestedClassComposeReady
-        });
-
         assert.strictEqual(result.conflictCount, 0);
-        assert.strictEqual(readiness.conflictsResolved, false);
+        assert.strictEqual(result.nestedClassConflictCount, 1);
+        assert.strictEqual(result.nestedClassComposeReady, false);
         assert.strictEqual(result.compositionReady, false);
     });
 
