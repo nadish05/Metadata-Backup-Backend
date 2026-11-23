@@ -6,7 +6,8 @@ const SESSION_STATUS = Object.freeze({
     OPEN: 'OPEN',
     PREVIEWED: 'PREVIEWED',
     RESOLVED: 'RESOLVED',
-    SEALED: 'SEALED'
+    SEALED: 'SEALED',
+    REVERTED: 'REVERTED'
 });
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000;

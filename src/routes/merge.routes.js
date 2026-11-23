@@ -13,6 +13,10 @@ router.post('/apex/sessions/:id/resolve', mergeController.resolveMergeSession);
 router.post('/apex/sessions/:id/seal', mergeController.sealMergeSession);
 router.post('/apex/sessions/:id/publish', mergeController.publishMergeSession);
 router.post(
+    '/apex/sessions/:id/revert-publish',
+    mergeController.revertPublishedMerge
+);
+router.post(
     '/apex/sessions/:id/artifact-handoff/authorize',
     mergeController.authorizeArtifactHandoff
 );

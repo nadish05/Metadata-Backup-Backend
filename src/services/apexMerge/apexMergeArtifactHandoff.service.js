@@ -98,6 +98,14 @@ function loadSealedSessionForHandoff(mergeSessionId) {
         );
     }
 
+    if (raw.status === SESSION_STATUS.REVERTED) {
+        throw new ApexMergeError(
+            MERGE_ERROR.SESSION_REVERTED,
+            'Merge session has been reverted; artifacts are not available for deployment.',
+            { status: raw.status }
+        );
+    }
+
     if (raw.status !== SESSION_STATUS.SEALED || !raw.manifest) {
         throw new ApexMergeError(
             MERGE_ERROR.SESSION_NOT_SEALED,
@@ -210,6 +218,15 @@ function requireOAuthCredentials(body = {}) {
 }
 
 async function authorizeArtifactHandoff(mergeSessionId, body = {}) {
+    const raw = readSessionRaw(mergeSessionId);
+
+    if (raw?.status === SESSION_STATUS.REVERTED) {
+        throw new ApexMergeError(
+            MERGE_ERROR.SESSION_REVERTED,
+            'Merge session has been reverted; artifacts are not available for deployment.'
+        );
+    }
+
     const session = loadSealedSessionForHandoff(mergeSessionId);
     const correlation = requireHandoffCorrelation(body);
     const credentials = requireOAuthCredentials(body);

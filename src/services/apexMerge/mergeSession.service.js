@@ -33,8 +33,14 @@ const {
 } = require('./apexMergeMethodSession.service');
 const {
     publishMethodMergeSession,
-    resolveInputMergePins
+    resolveInputMergePins,
+    PUBLISH_STATE
 } = require('./apexMergePublish.service');
+const {
+    revertMethodMergeSession,
+    assertPublishNotAlreadyCompleted,
+    REVERT_STATE
+} = require('./apexMergeRevertPublish.service');
 
 function assertCorrelation(session, { comparisonId, deploymentPlanId }) {
     if (comparisonId && session.comparisonId !== comparisonId) {
@@ -66,6 +72,52 @@ function requireOpenSession(mergeSessionId, { comparisonId, deploymentPlanId } =
         throw new ApexMergeError(
             MERGE_ERROR.SESSION_SEALED,
             'Merge session is already sealed.'
+        );
+    }
+
+    if (session.status === SESSION_STATUS.REVERTED) {
+        throw new ApexMergeError(
+            MERGE_ERROR.SESSION_REVERTED,
+            'Merge session has been reverted and is no longer mutable.',
+            { revert: session.revert || null }
+        );
+    }
+
+    assertCorrelation(session, { comparisonId, deploymentPlanId });
+    return session;
+}
+
+function requireRevertEligibleSession(mergeSessionId, { comparisonId, deploymentPlanId } = {}) {
+    const session = getSession(mergeSessionId);
+
+    if (!session) {
+        throw new ApexMergeError(
+            MERGE_ERROR.SESSION_NOT_FOUND,
+            'Merge session was not found or has expired.'
+        );
+    }
+
+    if (session.status === SESSION_STATUS.SEALED) {
+        throw new ApexMergeError(
+            MERGE_ERROR.SESSION_SEALED,
+            'Cannot revert a sealed merge session.'
+        );
+    }
+
+    if (session.revertInProgress) {
+        throw new ApexMergeError(
+            MERGE_ERROR.REVERT_IN_PROGRESS,
+            'A revert operation is already in progress for this merge session.'
+        );
+    }
+
+    if (
+        !session.publish ||
+        session.publish.publishState !== PUBLISH_STATE.PUBLISHED
+    ) {
+        throw new ApexMergeError(
+            MERGE_ERROR.REVERT_NOT_ELIGIBLE,
+            'Merge session has not been successfully published.'
         );
     }
 
@@ -572,6 +624,8 @@ async function publishMergeSession(mergeSessionId, body = {}) {
     const session = requireOpenSession(mergeSessionId, body);
     const metadataNames = normalizePublishMetadataNames(body);
 
+    assertPublishNotAlreadyCompleted(session, metadataNames);
+
     const publishResult = await publishMethodMergeSession(
         session,
         metadataNames
@@ -597,6 +651,72 @@ async function publishMergeSession(mergeSessionId, body = {}) {
         publishedAt: publishResult.publishedAt,
         publishedClasses: publishResult.publishedClasses,
         inputMergePins
+    };
+}
+
+async function revertPublishedMerge(mergeSessionId, body = {}) {
+    let session = getSession(mergeSessionId);
+
+    if (!session) {
+        throw new ApexMergeError(
+            MERGE_ERROR.SESSION_NOT_FOUND,
+            'Merge session was not found or has expired.'
+        );
+    }
+
+    assertCorrelation(session, {
+        comparisonId: body.comparisonId,
+        deploymentPlanId: body.deploymentPlanId
+    });
+
+    if (
+        session.status === SESSION_STATUS.REVERTED ||
+        session.revert?.revertState === REVERT_STATE.REVERTED
+    ) {
+        const existing = session.revert || {};
+        return {
+            success: true,
+            mergeSessionId,
+            revertState: existing.revertState || REVERT_STATE.REVERTED,
+            revertCommitSha: existing.revertCommitSha ?? null,
+            revertedAt: existing.revertedAt,
+            revertedClasses: existing.revertedClasses || []
+        };
+    }
+
+    requireRevertEligibleSession(mergeSessionId, body);
+
+    updateSession(mergeSessionId, { revertInProgress: true });
+
+    let revertResult;
+
+    try {
+        session = getSession(mergeSessionId);
+        revertResult = await revertMethodMergeSession(session);
+    } catch (error) {
+        updateSession(mergeSessionId, { revertInProgress: false });
+        throw error;
+    }
+
+    const updated = updateSession(mergeSessionId, {
+        status: SESSION_STATUS.REVERTED,
+        revertInProgress: false,
+        revert: {
+            revertState: revertResult.revertState,
+            revertCommitSha: revertResult.revertCommitSha ?? null,
+            revertedAt: revertResult.revertedAt,
+            revertedClasses: revertResult.revertedClasses,
+            noGitCommit: revertResult.noGitCommit === true
+        }
+    });
+
+    return {
+        success: true,
+        mergeSessionId,
+        revertState: updated.revert.revertState,
+        revertCommitSha: updated.revert.revertCommitSha,
+        revertedAt: updated.revert.revertedAt,
+        revertedClasses: updated.revert.revertedClasses
     };
 }
 
@@ -637,6 +757,7 @@ function getMergeSession(mergeSessionId) {
         gitPins: session.gitPins,
         inputMergePins: session.inputMergePins || resolveInputMergePins(session),
         publish: session.publish || null,
+        revert: session.revert || null,
         sealedAt: session.sealedAt,
         classes: (session.classes || []).map((unit) => ({
             metadataName: unit.metadataName,
@@ -657,6 +778,7 @@ module.exports = {
     previewMergeSession,
     resolveMergeSession,
     publishMergeSession,
+    revertPublishedMerge,
     sealMergeSession,
     getMergeSession,
     authorizeArtifactHandoff,

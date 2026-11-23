@@ -811,6 +811,37 @@ async function main() {
         );
     });
 
+    await runTest('second publish with different metadataNames is rejected', async () => {
+        const unit = buildResolvedMethodUnit(composedCls);
+        const session = buildPublishSession(unit, {
+            sourceHeadSha: 'abc',
+            destinationHeadSha: 'def'
+        });
+
+        updateSession(session.mergeSessionId, {
+            publish: {
+                publishState: PUBLISH_STATE.PUBLISHED,
+                publishedCommitSha: 'sha1',
+                publishedAt: new Date().toISOString(),
+                publishedClasses: [
+                    {
+                        metadataName: 'WeatherService',
+                        filePath: unit.filePath
+                    }
+                ]
+            }
+        });
+
+        await assert.rejects(
+            publishMergeSession(session.mergeSessionId, {
+                metadataNames: ['OtherClass']
+            }),
+            (error) =>
+                error instanceof ApexMergeError &&
+                error.code === MERGE_ERROR.PUBLISH_ALREADY_COMPLETED
+        );
+    });
+
     await runTest('publishMergeSession rejects sealed sessions', async () => {
         const unit = buildResolvedMethodUnit(composedCls);
         const session = buildPublishSession(unit, {

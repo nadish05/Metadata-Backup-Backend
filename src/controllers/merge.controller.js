@@ -38,7 +38,15 @@ function mapMergeError(error) {
             PUBLISH_SOURCE_BRANCH_CHANGED: 409,
             PUBLISH_DESTINATION_BRANCH_CHANGED: 409,
             PUBLISH_PUSH_REJECTED: 409,
-            PUBLISH_ALREADY_SATISFIED: 200
+            PUBLISH_ALREADY_SATISFIED: 200,
+            PUBLISH_ALREADY_COMPLETED: 409,
+            SESSION_REVERTED: 409,
+            REVERT_NOT_ELIGIBLE: 422,
+            REVERT_SOURCE_FILE_DRIFT: 409,
+            REVERT_HISTORY_DIVERGED: 409,
+            REVERT_PUSH_REJECTED: 409,
+            REVERT_PUSH_UNCONFIRMED: 409,
+            REVERT_IN_PROGRESS: 409
         };
 
         return {
@@ -101,6 +109,19 @@ exports.resolveMergeSession = async (req, res) => {
 exports.publishMergeSession = async (req, res) => {
     try {
         const result = await mergeSessionService.publishMergeSession(
+            req.params.id,
+            req.body || {}
+        );
+        return res.json(result);
+    } catch (error) {
+        const mapped = mapMergeError(error);
+        return res.status(mapped.httpStatus).json(mapped.body);
+    }
+};
+
+exports.revertPublishedMerge = async (req, res) => {
+    try {
+        const result = await mergeSessionService.revertPublishedMerge(
             req.params.id,
             req.body || {}
         );

@@ -580,6 +580,7 @@ module.exports = {
     publishMethodMergeInRepo,
     publishMethodMergeSession,
     assertImmutableBranchPins,
+    assertCommandDoesNotForcePush,
     configureLocalGitIdentity,
     runGit,
     normalizeBranchRef,
