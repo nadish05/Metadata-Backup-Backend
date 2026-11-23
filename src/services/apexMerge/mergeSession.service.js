@@ -9,7 +9,7 @@ const {
     resolveUnitArtifacts,
     buildConflictSummaries
 } = require('./apexMergeFullClass.service');
-const { assertNoDestinationDrift } = require('./apexMergeDrift.service');
+const apexMergeDrift = require('./apexMergeDrift.service');
 const { buildApexMergeManifest } = require('./apexMergeManifest.service');
 const {
     normalizeApexClassSelections,
@@ -276,6 +276,29 @@ function normalizeResolutionRequests(body = {}) {
     return [];
 }
 
+function resolutionTargetMetadataNames(resolutionRequests = []) {
+    return new Set(
+        resolutionRequests
+            .map((entry) => String(entry.metadataName || '').trim())
+            .filter(Boolean)
+    );
+}
+
+function assertResolutionTargetsInSession(session, targetNames) {
+    for (const metadataName of targetNames) {
+        const exists = (session.classes || []).some(
+            (unit) => unit.metadataName === metadataName
+        );
+
+        if (!exists) {
+            throw new ApexMergeError(
+                MERGE_ERROR.INVALID_REQUEST,
+                `metadataName ${metadataName} is not part of this merge session.`
+            );
+        }
+    }
+}
+
 async function createMergeSession(body = {}) {
     const {
         repoUrl,
@@ -407,7 +430,7 @@ async function previewMergeSession(mergeSessionId, body = {}) {
         }
 
         for (const unit of session.classes) {
-            const drift = await assertNoDestinationDrift({
+            const drift = await apexMergeDrift.assertNoDestinationDrift({
                 repoPath,
                 destinationBranch: session.destinationBranch,
                 metadataName: unit.metadataName,
@@ -416,7 +439,11 @@ async function previewMergeSession(mergeSessionId, body = {}) {
                 instanceUrl,
                 destinationHeadSha: session.gitPins.destinationHeadSha
             });
-            unit.drift = drift;
+
+            if (trimmedFocus && unit.metadataName !== trimmedFocus) {
+                mergedClasses.push({ ...unit, drift });
+                continue;
+            }
 
             const useMethodMode = shouldUseMethodMode(
                 requestMode,
@@ -483,11 +510,26 @@ async function previewMergeSession(mergeSessionId, body = {}) {
 function resolveMergeSession(mergeSessionId, body = {}) {
     const session = requireOpenSession(mergeSessionId, body);
     const resolutionRequests = normalizeResolutionRequests(body);
+
+    if (!resolutionRequests.length) {
+        throw new ApexMergeError(
+            MERGE_ERROR.INVALID_REQUEST,
+            'Resolution request must identify at least one class.'
+        );
+    }
+
+    const resolutionTargets = resolutionTargetMetadataNames(resolutionRequests);
+    assertResolutionTargetsInSession(session, resolutionTargets);
+
     const resolutionByName = new Map(
         resolutionRequests.map((entry) => [entry.metadataName, entry])
     );
 
     const nextClasses = session.classes.map((unit) => {
+        if (!resolutionTargets.has(unit.metadataName)) {
+            return unit;
+        }
+
         const resolution = resolutionByName.get(unit.metadataName);
 
         if (unit.mergeMode === METHOD_MERGE_MODE) {

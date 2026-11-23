@@ -49,11 +49,14 @@ Duplicate `metadataName` with conflicting paths → `DUPLICATE_CLASS_IDENTITY`.
 |-------|----------|
 | `refreshToken` | yes |
 | `instanceUrl` | yes |
-| `metadataName` | optional | When set, adds per-class focus fields (below) |
+| `metadataName` | optional | When set, adds per-class focus fields (below) and **focused preview** (below) |
+| `mode` | optional | `METHOD` or `FULL` (default `FULL`) |
 | `comparisonId` | optional | Correlation |
 | `deploymentPlanId` | optional | Correlation |
 
 Drift check runs for **every** class in the session (mandatory).
+
+When `metadataName` is set, only that class’s merge unit is recomputed; other units retain their stored preview/resolution state (drift may still be refreshed). Omit `metadataName` to re-preview **all** session classes (legacy full-session preview).
 
 ### Response `200` (canonical)
 
@@ -113,6 +116,8 @@ When request includes `metadataName`, the same object is also mirrored at the **
   "resolutionStrategy": "ACCEPT_SOURCE"
 }
 ```
+
+Single-class requests (one `metadataName` and/or one batch entry) apply resolutions only to the named class(es). Other classes in the session are left unchanged and do not block the request with missing-resolution errors. **Seal** and **publish** still require every class to be fully resolved per unit rules.
 
 Strategies (backend-owned, uses stored three-way blobs from preview):
 
